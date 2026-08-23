@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use coducktor_contract::{
     ConversationGitMode, ConversationMessage, ConversationQuestionAnswer, ConversationRecord,
-    ConversationSkillAttachment, ConversationState, ConversationTurnSummary, ImageInput,
-    RecordKind, RunEvent, RunStatus, Runner, TurnState,
+    ConversationSessionRestart, ConversationSkillAttachment, ConversationState,
+    ConversationTurnSummary, ImageInput, RecordKind, RunEvent, RunStatus, Runner, TurnState,
 };
 use serde_json::{Map, Value};
 
@@ -16,6 +16,7 @@ use super::lifecycle::{
     TurnCancellation, TurnOutcome, TurnReport,
 };
 use super::persistence::{self, StoredRecord};
+use super::restart;
 use crate::runs::store;
 use crate::time::now_iso8601;
 
@@ -86,6 +87,14 @@ impl PendingConversationAnswer {
 /// without holding whichever mutex owns the manager.
 pub struct ConversationCancellation {
     pub cancelled: bool,
+    pub session_to_cancel: Option<Box<dyn ConversationSession + Send>>,
+}
+
+/// The outcome of an explicit provider-session restart. Any session still parked for this
+/// conversation is handed back for the caller to tear down outside the manager's mutex — the
+/// point of a restart is that nothing of the old session survives it.
+pub struct ConversationSessionRestarted {
+    pub record: ConversationRecord,
     pub session_to_cancel: Option<Box<dyn ConversationSession + Send>>,
 }
 
@@ -283,6 +292,8 @@ impl ConversationManager {
             output_tokens: None,
             cost_usd: None,
             last_error: None,
+            resume_failed: false,
+            session_restart: None,
             workflow: "conversation".to_owned(),
             task: input.text,
             steps: Vec::new(),
@@ -290,7 +301,7 @@ impl ConversationManager {
         };
         self.conversations
             .insert(conversation_id.clone(), record.clone());
-        let request = request_for(&record, &turn_id, &message);
+        let request = request_for(&record, &turn_id, &message, None);
         if let Err(error) = self.append_user_message(&conversation_id, &turn_id, &message) {
             self.conversations.remove(&conversation_id);
             return Err(error);
@@ -356,9 +367,11 @@ impl ConversationManager {
         next.updated_at = now;
         next.last_error = None;
         self.append_user_message(conversation_id, &turn_id, &message)?;
+        let handoff = self.pending_session_handoff(&next);
         self.conversations
             .insert(conversation_id.to_owned(), next.clone());
-        self.queue.push_back(request_for(&next, &turn_id, &message));
+        self.queue
+            .push_back(request_for(&next, &turn_id, &message, handoff));
         if let Err(error) = self.persist() {
             self.queue.retain(|queued| queued.turn_id != turn_id);
             self.conversations
@@ -438,6 +451,7 @@ impl ConversationManager {
             admitted.request.conversation_id,
             admitted.request.turn_id,
             admitted.request.cancellation,
+            admitted.request.resume,
             admitted.session,
             result,
         )
@@ -539,10 +553,13 @@ impl ConversationManager {
         pending: PendingConversationAnswer,
         result: Result<TurnOutcome, String>,
     ) -> io::Result<ConversationRecord> {
+        // Answering continues a session that is already open, so this can never be a resume
+        // failure however it ends.
         self.finish_provider_call(
             pending.conversation_id,
             pending.turn_id,
             pending.cancellation,
+            false,
             Some(pending.session),
             result,
         )
@@ -769,6 +786,90 @@ impl ConversationManager {
         self.commit_record(previous, next)
     }
 
+    /// Abandon a provider session the harness refused to resume, and prepare the bounded handoff
+    /// the user's next message will carry into a fresh one.
+    ///
+    /// Only reachable after a resumed turn actually failed, and only when the user asks. Nothing
+    /// is sent here: this clears the session affinity and records the boundary, and the next
+    /// ordinary submission is what opens the new session. That keeps the one-message/one-turn
+    /// invariant intact — a restart costs no provider turn of its own.
+    pub fn restart_session(
+        &mut self,
+        conversation_id: &str,
+    ) -> io::Result<ConversationSessionRestarted> {
+        self.ensure_writable()?;
+        let previous = self.require(conversation_id)?;
+        if previous.state.is_active() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "an active conversation cannot have its provider session restarted",
+            ));
+        }
+        if !previous.resume_failed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the provider session can only be restarted after a failed native resume",
+            ));
+        }
+        let history = self.read_history(conversation_id);
+        let boundary_seq = history.iter().map(|event| event.seq).fold(0.0, f64::max);
+        let handoff = restart::build_session_handoff(&history, boundary_seq);
+        let restart_record = ConversationSessionRestart {
+            restarted_at: now_iso8601(),
+            previous_session_id: previous.provider_session_id.clone(),
+            new_session_id: None,
+            handoff_boundary_seq: boundary_seq,
+            handoff_messages: handoff
+                .as_ref()
+                .map(|handoff| handoff.messages)
+                .unwrap_or(0),
+            handoff_bytes: handoff.as_ref().map(|handoff| handoff.bytes).unwrap_or(0),
+            handoff_truncated: handoff.as_ref().is_some_and(|handoff| handoff.truncated),
+            extra: Default::default(),
+        };
+        let turn_id = previous
+            .latest_turn
+            .as_ref()
+            .map(|turn| turn.id.clone())
+            .unwrap_or_default();
+        let mut next = previous.clone();
+        next.provider_session_id = None;
+        next.resume_failed = false;
+        next.session_restart = Some(restart_record.clone());
+        let committed = self.commit_record(previous, next)?;
+        let session_to_cancel = self
+            .parked
+            .remove(conversation_id)
+            .map(|parked| parked.session);
+        self.append_history_event(
+            conversation_id,
+            &turn_id,
+            ConversationEventInput::new("session.restarted")
+                .field("previousSessionId", &restart_record.previous_session_id)
+                .field("handoffBoundarySeq", restart_record.handoff_boundary_seq)
+                .field("handoffMessages", restart_record.handoff_messages)
+                .field("handoffBytes", restart_record.handoff_bytes)
+                .field("handoffTruncated", restart_record.handoff_truncated),
+        )?;
+        Ok(ConversationSessionRestarted {
+            record: committed,
+            session_to_cancel,
+        })
+    }
+
+    /// Rebuild the handoff a restarted conversation still owes its provider, or `None` when
+    /// there is no undelivered restart. Rebuilt from the recorded boundary rather than stored as
+    /// text, so what is replayed is always exactly what the boundary describes.
+    fn pending_session_handoff(&self, record: &ConversationRecord) -> Option<String> {
+        let restart_record = record.session_restart.as_ref()?;
+        if restart_record.new_session_id.is_some() {
+            return None;
+        }
+        let history = self.read_history(&record.id);
+        restart::build_session_handoff(&history, restart_record.handoff_boundary_seq)
+            .map(|handoff| handoff.text)
+    }
+
     /// Signal every in-flight turn's cancellation token without touching durable state. Used at
     /// shutdown: the records stay `running` on disk so startup recovery reports them as
     /// interrupted rather than silently repeating a message the user already paid for.
@@ -847,6 +948,7 @@ impl ConversationManager {
         conversation_id: String,
         turn_id: String,
         cancellation: TurnCancellation,
+        resumed: bool,
         mut session: Option<Box<dyn ConversationSession + Send>>,
         result: Result<TurnOutcome, String>,
     ) -> io::Result<ConversationRecord> {
@@ -901,6 +1003,14 @@ impl ConversationManager {
                 next.state = ConversationState::Idle;
                 next.active_turn = None;
                 next.last_error = None;
+                next.resume_failed = false;
+                // A normally ended turn is what proves the new session took: from here the
+                // handoff has been delivered and is never replayed again.
+                if let Some(restart_record) = next.session_restart.as_mut()
+                    && restart_record.new_session_id.is_none()
+                {
+                    restart_record.new_session_id = next.provider_session_id.clone();
+                }
                 (
                     ConversationEventInput::new("turn.completed"),
                     session_open.then_some(None),
@@ -933,6 +1043,9 @@ impl ConversationManager {
                 next.state = ConversationState::Failed;
                 next.active_turn = None;
                 next.last_error = Some(message.clone());
+                // The harness was asked to rejoin its own session and could not. That is the
+                // only thing that offers a session restart; an ordinary failure never does.
+                next.resume_failed = resumed;
                 (
                     ConversationEventInput::new("error").field("message", message),
                     session_open.then_some(None),
@@ -1115,7 +1228,12 @@ impl ConversationManager {
             .ok()?,
             extra: Map::new(),
         };
-        Some(request_for(record, &turn.id, &message))
+        Some(request_for(
+            record,
+            &turn.id,
+            &message,
+            self.pending_session_handoff(record),
+        ))
     }
 
     fn interrupt_record(&mut self, conversation_id: &str, message: &str) {
@@ -1164,6 +1282,7 @@ fn request_for(
     record: &ConversationRecord,
     turn_id: &str,
     message: &ConversationMessage,
+    session_handoff: Option<String>,
 ) -> ConversationTurnRequest {
     ConversationTurnRequest {
         conversation_id: record.id.clone(),
@@ -1178,6 +1297,7 @@ fn request_for(
         resume: record.provider_session_id.is_some(),
         cwd: PathBuf::from(&record.cwd),
         additional_directories: Vec::new(),
+        session_handoff,
         cancellation: TurnCancellation::default(),
     }
 }
@@ -1672,8 +1792,187 @@ mod tests {
         );
     }
 
+    fn message(text: &str) -> ConversationMessage {
+        ConversationMessage {
+            text: text.to_owned(),
+            images: Vec::new(),
+            skill_attachments: Vec::new(),
+            extra: Map::new(),
+        }
+    }
+
+    fn failed(session_open: bool) -> TurnOutcome {
+        TurnOutcome::Failed {
+            message: "the provider refused to resume session-1".to_owned(),
+            report: TurnReport::default(),
+            session_open,
+        }
+    }
+
+    /// The only path that offers a restart: a turn that asked the harness to rejoin its own
+    /// session and could not. Nothing else may set it.
     #[test]
-    fn restart_resumes_provider_affinity_without_replaying_transcript() {
+    fn only_a_failed_resume_offers_a_session_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![failed(false), failed(false)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager.create(new_conversation("first")).unwrap();
+
+        // The opening turn has no session to resume, so its failure is an ordinary one.
+        let first = drive_next(&mut manager, &factory);
+        assert_eq!(first.state, ConversationState::Failed);
+        assert!(!first.resume_failed);
+        assert!(
+            manager.restart_session(&created.id).map(|_| ()).is_err(),
+            "a restart must not be reachable without a failed resume"
+        );
+
+        // Give it a session to resume, then fail that.
+        manager
+            .conversations
+            .get_mut(&created.id)
+            .unwrap()
+            .provider_session_id = Some("session-1".to_owned());
+        manager
+            .submit_message(&created.id, message("try again"))
+            .unwrap();
+        let second = drive_next(&mut manager, &factory);
+
+        assert!(second.resume_failed);
+    }
+
+    #[test]
+    fn a_restart_clears_session_affinity_and_costs_no_provider_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true), failed(false), ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager
+            .create(new_conversation("fix the login redirect"))
+            .unwrap();
+        drive_next(&mut manager, &factory);
+        manager
+            .submit_message(&created.id, message("now the logout"))
+            .unwrap();
+        let failed_resume = drive_next(&mut manager, &factory);
+        assert!(failed_resume.resume_failed);
+        let turns_before = factory.counts.turns.load(Ordering::SeqCst);
+
+        let restarted = manager.restart_session(&created.id).unwrap().record;
+
+        // Nothing was sent, and the affinity that could not be resumed is gone.
+        assert_eq!(factory.counts.turns.load(Ordering::SeqCst), turns_before);
+        assert!(restarted.provider_session_id.is_none());
+        assert!(!restarted.resume_failed);
+        let restart = restarted.session_restart.as_ref().expect("recorded");
+        assert_eq!(restart.previous_session_id.as_deref(), Some("session-1"));
+        assert!(restart.new_session_id.is_none());
+        assert!(restart.handoff_messages > 0);
+        assert!(restart.handoff_boundary_seq > 0.0);
+
+        // The old and new session identities are both durable in the timeline.
+        let restart_event = manager
+            .read_history(&created.id)
+            .into_iter()
+            .find(|event| event.event_type == "session.restarted")
+            .expect("the restart is recorded in history");
+        assert_eq!(
+            restart_event
+                .extra
+                .get("previousSessionId")
+                .and_then(Value::as_str),
+            Some("session-1")
+        );
+
+        // The next ordinary message opens a fresh session carrying the bounded handoff.
+        manager
+            .submit_message(&created.id, message("try once more"))
+            .unwrap();
+        let admitted = manager.admit_next().unwrap().unwrap();
+        assert!(!admitted.request.resume);
+        assert!(admitted.request.provider_session_id.is_none());
+        let handoff = admitted
+            .request
+            .session_handoff
+            .as_deref()
+            .expect("the restarted turn carries the handoff");
+        assert!(handoff.contains("fix the login redirect"));
+        assert!(handoff.contains("provider text"));
+        // The transcript still shows only what the user actually wrote.
+        assert_eq!(admitted.request.user_text, "try once more");
+
+        let after = manager
+            .apply_turn_result(admitted, Ok(ended(true)))
+            .unwrap();
+        assert_eq!(
+            after
+                .session_restart
+                .as_ref()
+                .and_then(|restart| restart.new_session_id.as_deref()),
+            Some("session-1"),
+            "a normally ended turn records which session replaced the old one"
+        );
+    }
+
+    /// The handoff is a one-shot repair, not a policy: once the new session has taken, ordinary
+    /// resume is back in charge and nothing is replayed again.
+    #[test]
+    fn the_handoff_is_delivered_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(
+            vec![ended(true), failed(false), ended(true), ended(true)],
+            Vec::new(),
+        );
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager.create(new_conversation("first")).unwrap();
+        drive_next(&mut manager, &factory);
+        manager
+            .submit_message(&created.id, message("second"))
+            .unwrap();
+        drive_next(&mut manager, &factory);
+        manager.restart_session(&created.id).unwrap();
+
+        manager
+            .submit_message(&created.id, message("third"))
+            .unwrap();
+        let restarted_turn = manager.admit_next().unwrap().unwrap();
+        assert!(restarted_turn.request.session_handoff.is_some());
+        manager
+            .apply_turn_result(restarted_turn, Ok(ended(true)))
+            .unwrap();
+
+        manager
+            .submit_message(&created.id, message("fourth"))
+            .unwrap();
+        let ordinary_turn = manager.admit_next().unwrap().unwrap();
+
+        assert!(ordinary_turn.request.session_handoff.is_none());
+        assert!(ordinary_turn.request.resume);
+    }
+
+    #[test]
+    fn a_restart_is_refused_while_a_turn_is_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager.create(new_conversation("first")).unwrap();
+        manager
+            .conversations
+            .get_mut(&created.id)
+            .unwrap()
+            .resume_failed = true;
+
+        let Err(error) = manager.restart_session(&created.id) else {
+            panic!("a restart must be refused while a turn is active");
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        drive_next(&mut manager, &factory);
+    }
+
+    /// "Restart" here is Coducktor's own process restarting, not a session restart: ordinary
+    /// resume must still rejoin the provider's session with no transcript replay at all.
+    #[test]
+    fn a_process_restart_resumes_provider_affinity_without_replaying_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let factory = FakeFactory::new(vec![ended(true)], Vec::new());
         let conversation_id = {

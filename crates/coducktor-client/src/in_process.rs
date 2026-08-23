@@ -51,8 +51,9 @@ use coducktor_contract::{
     ConversationMessage, ConversationRecord, ConversationSkillAttachment,
     ConversationSkillSelection, ConversationState, ConversationsIndexResponse,
     CreateConversationInput, CreateConversationResponse, DeleteConversationResponse,
-    SubmitConversationMessageInput, SubmitConversationMessageResponse, TurnState,
-    UpdateConversationGitModeInput, UpdateConversationGitModeResponse,
+    RestartConversationSessionResponse, SubmitConversationMessageInput,
+    SubmitConversationMessageResponse, TurnState, UpdateConversationGitModeInput,
+    UpdateConversationGitModeResponse,
 };
 use coducktor_core::agent_session::EventInput;
 use coducktor_core::config::load_config;

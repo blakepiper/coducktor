@@ -1738,6 +1738,8 @@ mod tests {
             output_tokens: None,
             cost_usd: Some(0.01),
             last_error: None,
+            resume_failed: false,
+            session_restart: None,
             workflow: String::new(),
             task: String::new(),
             steps: Vec::new(),

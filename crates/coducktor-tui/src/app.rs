@@ -708,6 +708,12 @@ pub enum PendingAction {
         project: String,
         id: String,
     },
+    /// Abandon a provider session the harness would not resume. Reached only through the
+    /// header's confirmation — nothing in the runtime queues this on its own.
+    RestartConversationSession {
+        project: String,
+        id: String,
+    },
     /// Refresh a project's conversation rows for the chat browser.
     RefreshChats {
         project: String,

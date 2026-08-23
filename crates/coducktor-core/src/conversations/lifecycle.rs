@@ -24,6 +24,10 @@ pub struct ConversationTurnRequest {
     pub resume: bool,
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
+    /// A bounded excerpt of this chat's visible messages, replayed once into a provider session
+    /// that had to be restarted because the harness could not resume its own. Provider-only: it
+    /// never appears in the transcript, and only an explicit user-requested restart sets it.
+    pub session_handoff: Option<String>,
     pub cancellation: TurnCancellation,
 }
 

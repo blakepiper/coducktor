@@ -271,6 +271,16 @@ enum BackgroundResult {
         id: String,
         result: Result<(), coducktor_client::EngineError>,
     },
+    /// An explicit provider-session restart settled. Reported separately so the user is told
+    /// exactly what the next message will carry.
+    ConversationSessionRestarted {
+        project: String,
+        id: String,
+        result: Result<
+            coducktor_contract::RestartConversationSessionResponse,
+            coducktor_client::EngineError,
+        >,
+    },
     RefreshChatsIndex {
         result:
             Result<coducktor_contract::ConversationsIndexResponse, coducktor_client::EngineError>,
@@ -1036,6 +1046,25 @@ fn execute_pending(
                         project,
                         id,
                         result: result.map(|_| ()),
+                    },
+                );
+            }
+            PendingAction::RestartConversationSession { project, id } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .restart_conversation_session(&scope, &id_for_task)
+                            .await
+                    },
+                    move |result| BackgroundResult::ConversationSessionRestarted {
+                        project,
+                        id,
+                        result,
                     },
                 );
             }
@@ -2452,6 +2481,38 @@ fn drain_background_results(
                     project: project.clone(),
                 });
                 app.queue_pending(PendingAction::RefreshChatsIndex);
+            }
+            BackgroundResult::ConversationSessionRestarted {
+                project,
+                id,
+                result,
+            } => {
+                match result {
+                    Ok(restarted) => {
+                        app.notice = Some(format!(
+                            "new provider session ready — your next message replays {} message{} of this chat{}",
+                            restarted.handoff_messages,
+                            if restarted.handoff_messages == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
+                            if restarted.handoff_truncated {
+                                " (shortened to fit)"
+                            } else {
+                                ""
+                            },
+                        ));
+                    }
+                    Err(error) => {
+                        app.notice = Some(format!("session restart failed: {error}"));
+                    }
+                }
+                app.pending.push(PendingAction::LoadThread {
+                    project: project.clone(),
+                    id,
+                });
+                app.queue_pending(PendingAction::RefreshChats { project });
             }
             BackgroundResult::ConversationTurn {
                 project,

@@ -151,6 +151,8 @@ mod tests {
             output_tokens: None,
             cost_usd: None,
             last_error: None,
+            resume_failed: false,
+            session_restart: None,
             workflow: "conversation".to_owned(),
             task: "hello".to_owned(),
             steps: Vec::new(),

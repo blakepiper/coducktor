@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::agent_runner::{AgentRunSpec, prepend_system_prompt, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
-use crate::conversation_factory::provider_skill_context;
+use crate::conversation_factory::provider_turn_context;
 
 /// Where to find the opencode binary. Production wiring resolves `program`/`prefix_args` from
 /// `DUCK_OPENCODE_BIN` in the session factory; tests point `program` at `node` with
@@ -77,8 +77,8 @@ impl OpencodeRunSession {
                     .to_owned(),
             );
         }
-        let skill_context = provider_skill_context(&request.skill_context, &request.cwd)?;
-        let prompt = prepend_system_prompt(skill_context.as_deref(), &request.user_text);
+        let context = provider_turn_context(request)?;
+        let prompt = prepend_system_prompt(context.as_deref(), &request.user_text);
         let mut args = self.config.prefix_args.clone();
         args.extend(build_opencode_run_args(
             &self.spec,
@@ -520,6 +520,7 @@ mod tests {
             resume: false,
             cwd: cwd.to_path_buf(),
             additional_directories: Vec::new(),
+            session_handoff: None,
             cancellation: TurnCancellation::default(),
         }
     }

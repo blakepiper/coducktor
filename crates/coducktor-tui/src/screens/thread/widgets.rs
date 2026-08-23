@@ -168,6 +168,11 @@ pub(crate) fn conversation_header_actions(
         },
         ThreadAction::Archive,
     ));
+    // Offered only after the harness actually refused to resume its own session. Ordinary
+    // failures do not get this action, because replaying a transcript is a repair, not a retry.
+    if record.resume_failed && !record.state.is_active() {
+        actions.push(("Restart session", ThreadAction::RestartSession));
+    }
     if !record.archived && record.seen_at.is_some() {
         actions.push(("Mark unread", ThreadAction::MarkUnread));
     }

@@ -614,6 +614,32 @@ pub fn reduce_thread_incremental(
                     tone,
                 }));
             }
+            // A restart is a real event in this chat's life: the old session was abandoned and
+            // an excerpt was replayed into a new one. It belongs in the timeline, not just in a
+            // transient notice.
+            "session.restarted" => {
+                let messages = extra
+                    .get("handoffMessages")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let truncated = extra
+                    .get("handoffTruncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let previous = str_field(extra, "previousSessionId")
+                    .map(|id| format!(" (was {id})"))
+                    .unwrap_or_default();
+                let idx = current_turn(&mut turns, &mut turn_seq);
+                turns[idx].items.push(ThreadEntry::Note(ThreadNote {
+                    id: format!("v1:{}", event.seq),
+                    text: format!(
+                        "provider session restarted{previous} — the next message replays {messages} message{} of this chat{}",
+                        if messages == 1 { "" } else { "s" },
+                        if truncated { " (shortened to fit)" } else { "" },
+                    ),
+                    tone: NoteTone::Warning,
+                }));
+            }
             "error" | "session.error" => {
                 let Some(text) = str_field(extra, "message") else {
                     continue;

@@ -66,9 +66,8 @@ impl ConversationAgentSession {
                 .turn(&mut |event| forward_event(event, &mut captured, on_event))
         } else {
             let images = prompt_images(&request.images);
-            let skill_context = provider_skill_context(&request.skill_context, &request.cwd)?;
-            let provider_prompt =
-                prepend_system_prompt(skill_context.as_deref(), &request.user_text);
+            let context = provider_turn_context(request)?;
+            let provider_prompt = prepend_system_prompt(context.as_deref(), &request.user_text);
             self.inner
                 .send_message(&provider_prompt, &images, &mut |event| {
                     forward_event(event, &mut captured, on_event)
@@ -371,10 +370,27 @@ pub(crate) fn provider_skill_context(
     Ok(Some(context))
 }
 
+/// All provider-only context for one turn: the session handoff a restart still owes, then this
+/// turn's skill attachments. Both are delimited blocks the harness sees and the transcript does
+/// not — the user's own message is never rewritten.
+///
+/// Handoff first because it is history the rest reads against; skills last because they are
+/// instructions for the turn about to happen.
+pub(crate) fn provider_turn_context(
+    request: &ConversationTurnRequest,
+) -> Result<Option<String>, String> {
+    let skills = provider_skill_context(&request.skill_context, &request.cwd)?;
+    Ok(match (request.session_handoff.as_deref(), skills) {
+        (None, skills) => skills,
+        (Some(handoff), None) => Some(handoff.to_owned()),
+        (Some(handoff), Some(skills)) => Some(format!("{handoff}\n\n{skills}")),
+    })
+}
+
 fn to_agent_run_spec(request: &ConversationTurnRequest) -> Result<AgentRunSpec, String> {
     Ok(AgentRunSpec {
         cancellation: request.cancellation.clone().into(),
-        system_prompt: provider_skill_context(&request.skill_context, &request.cwd)?,
+        system_prompt: provider_turn_context(request)?,
         user_prompt: request.user_text.clone(),
         images: content_blocks(&request.images),
         cwd: request.cwd.clone(),
@@ -507,6 +523,7 @@ mod tests {
             resume: false,
             cwd: PathBuf::from("/repo"),
             additional_directories: Vec::new(),
+            session_handoff: None,
             cancellation: Default::default(),
         }
     }

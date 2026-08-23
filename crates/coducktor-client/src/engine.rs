@@ -23,9 +23,9 @@ use coducktor_contract::{
     AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
     ArchiveConversationResponse, CancelConversationTurnResponse, ConversationRecord,
     ConversationsIndexResponse, CreateConversationInput, CreateConversationResponse,
-    DeleteConversationResponse, SubmitConversationMessageInput, SubmitConversationMessageResponse,
-    UnarchiveConversationResponse, UpdateConversationGitModeInput,
-    UpdateConversationGitModeResponse,
+    DeleteConversationResponse, RestartConversationSessionResponse, SubmitConversationMessageInput,
+    SubmitConversationMessageResponse, UnarchiveConversationResponse,
+    UpdateConversationGitModeInput, UpdateConversationGitModeResponse,
 };
 use futures_core::stream::BoxStream;
 use serde_json::Value;
@@ -251,6 +251,14 @@ pub trait Engine: Send + Sync {
         scope: &Scope,
         conversation_id: &str,
     ) -> Result<CancelConversationTurnResponse, EngineError>;
+    /// Abandon a provider session the harness would not resume and prepare a new one. Sends
+    /// nothing: the user's next message carries the bounded handoff. Confirm with the user
+    /// before calling — nothing in the runtime may reach this on its own.
+    async fn restart_conversation_session(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<RestartConversationSessionResponse, EngineError>;
     async fn archive_conversation(
         &self,
         scope: &Scope,
@@ -480,6 +488,14 @@ impl Engine for InProcessEngine {
         conversation_id: &str,
     ) -> Result<CancelConversationTurnResponse, EngineError> {
         InProcessEngine::cancel_conversation_turn(self, scope, conversation_id).await
+    }
+
+    async fn restart_conversation_session(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<RestartConversationSessionResponse, EngineError> {
+        InProcessEngine::restart_conversation_session(self, scope, conversation_id).await
     }
 
     async fn archive_conversation(

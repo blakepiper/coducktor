@@ -29,6 +29,9 @@ struct Counts {
     turns: AtomicUsize,
     answers: AtomicUsize,
     in_turn: AtomicBool,
+    /// The provider-only handoff seen on each turn, so a test can prove what a restarted
+    /// session was actually told.
+    handoffs: Mutex<Vec<Option<String>>>,
 }
 
 /// A harness stand-in whose turn can be held open for as long as a test needs, and which can be
@@ -37,6 +40,9 @@ struct ScriptedFactory {
     counts: Arc<Counts>,
     hold: Arc<Mutex<bool>>,
     write_file: Option<String>,
+    /// Stand in for a harness that will not rejoin its own session: any turn asking to resume
+    /// fails, which is the only thing that offers a session restart.
+    refuse_resume: bool,
 }
 
 impl ScriptedFactory {
@@ -45,11 +51,17 @@ impl ScriptedFactory {
             counts: Arc::new(Counts::default()),
             hold: Arc::new(Mutex::new(false)),
             write_file: None,
+            refuse_resume: false,
         }
     }
 
     fn writing(mut self, name: &str) -> Self {
         self.write_file = Some(name.to_owned());
+        self
+    }
+
+    fn refusing_resume(mut self) -> Self {
+        self.refuse_resume = true;
         self
     }
 }
@@ -64,6 +76,7 @@ impl ConversationSessionFactory for ScriptedFactory {
             counts: self.counts.clone(),
             hold: self.hold.clone(),
             write_file: self.write_file.clone(),
+            refuse_resume: self.refuse_resume,
         }))
     }
 }
@@ -72,6 +85,7 @@ struct ScriptedSession {
     counts: Arc<Counts>,
     hold: Arc<Mutex<bool>>,
     write_file: Option<String>,
+    refuse_resume: bool,
 }
 
 impl ScriptedSession {
@@ -91,6 +105,18 @@ impl ConversationSession for ScriptedSession {
         on_event: &mut dyn FnMut(ConversationEventInput) -> io::Result<()>,
     ) -> Result<TurnOutcome, String> {
         self.counts.turns.fetch_add(1, Ordering::SeqCst);
+        self.counts
+            .handoffs
+            .lock()
+            .unwrap()
+            .push(request.session_handoff.clone());
+        if self.refuse_resume && request.resume {
+            return Ok(TurnOutcome::Failed {
+                message: "the provider refused to resume this session".to_owned(),
+                report: TurnReport::default(),
+                session_open: false,
+            });
+        }
         self.counts.in_turn.store(true, Ordering::Release);
         // Held while the caller probes unrelated engine work: if any of it needs the manager
         // lock this worker owns, the probe blocks and the test fails. A real harness polls its
@@ -111,7 +137,7 @@ impl ConversationSession for ScriptedSession {
             std::fs::write(request.cwd.join(name), "agent output\n")
                 .map_err(|error| error.to_string())?;
         }
-        on_event(ConversationEventInput::new("assistant-message").field("text", "done"))
+        on_event(ConversationEventInput::new("text").field("text", "done"))
             .map_err(|error| error.to_string())?;
         Ok(TurnOutcome::Ended {
             report: Self::report(),
@@ -575,7 +601,136 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// The one repair path that re-feeds a transcript to a provider — and even it costs no provider
+/// turn of its own. Everything about it is user-driven: the failure offers it, the user asks for
+/// it, and the user's own next message is what delivers the handoff.
+#[tokio::test]
+async fn a_session_restart_replays_a_bounded_handoff_on_the_next_message_only() {
+    let workspace = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    init_repo(repo.path());
+    let factory = ScriptedFactory::new().refusing_resume();
+    let counts = factory.counts.clone();
+    let engine = engine(&repo, &workspace, factory);
+
+    let created = engine
+        .create_conversation(
+            &Scope::Workspace,
+            create_input("fix the login redirect", false, ConversationGitMode::Manual),
+        )
+        .await
+        .unwrap()
+        .conversation;
+    engine.activate_conversations(&Scope::Workspace).unwrap();
+    wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
+
+    // The second message asks the harness to rejoin its own session, and it refuses.
+    engine
+        .submit_conversation_message(
+            &Scope::Workspace,
+            &created.id,
+            SubmitConversationMessageInput {
+                text: "now the logout".to_owned(),
+                images: Vec::new(),
+                skills: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let state = wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
+    assert_eq!(state, ConversationState::Failed);
+    let failed = engine
+        .get_conversation(&Scope::Workspace, &created.id)
+        .await
+        .unwrap();
+    assert!(
+        failed.resume_failed,
+        "a refused resume must offer a restart"
+    );
+    let turns_before = counts.turns.load(Ordering::SeqCst);
+
+    let restarted = engine
+        .restart_conversation_session(&Scope::Workspace, &created.id)
+        .await
+        .unwrap();
+
+    // A restart is inert: it sends nothing and costs nothing.
+    assert!(restarted.restarted);
+    assert_eq!(counts.turns.load(Ordering::SeqCst), turns_before);
+    assert_eq!(
+        restarted.previous_session_id.as_deref(),
+        Some("scripted-session")
+    );
+    assert!(restarted.handoff_messages > 0);
+    let record = engine
+        .get_conversation(&Scope::Workspace, &created.id)
+        .await
+        .unwrap();
+    assert!(record.provider_session_id.is_none());
+    assert!(!record.resume_failed);
+
+    // The user's own next message is what carries the excerpt into the new session.
+    engine
+        .submit_conversation_message(
+            &Scope::Workspace,
+            &created.id,
+            SubmitConversationMessageInput {
+                text: "try once more".to_owned(),
+                images: Vec::new(),
+                skills: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        wait_for_idle(&engine, &Scope::Workspace, &created.id).await,
+        ConversationState::Idle
+    );
+    assert_eq!(
+        counts.turns.load(Ordering::SeqCst),
+        turns_before + 1,
+        "one message is still exactly one provider turn"
+    );
+
+    let handoffs = counts.handoffs.lock().unwrap().clone();
+    assert!(
+        handoffs[..handoffs.len() - 1].iter().all(Option::is_none),
+        "nothing before the restart replays a transcript"
+    );
+    let handoff = handoffs
+        .last()
+        .cloned()
+        .flatten()
+        .expect("the restarted turn carries the handoff");
+    assert!(handoff.contains("fix the login redirect"));
+    assert!(handoff.contains("done"));
+
+    // The transcript still shows only what the user actually wrote.
+    let history = engine
+        .conversation_history(&Scope::Workspace, &created.id, None)
+        .await
+        .unwrap();
+    assert!(
+        history
+            .events
+            .iter()
+            .filter(|event| event.event_type == "user-message")
+            .all(|event| {
+                let text = event.extra.get("text").and_then(|value| value.as_str());
+                text.is_some_and(|text| !text.contains("coducktor-session-handoff"))
+            }),
+        "the handoff is provider-only and never rewrites a user message"
+    );
+    assert!(
+        history
+            .events
+            .iter()
+            .any(|event| event.event_type == "session.restarted")
+    );
+}
+
 /// Archiving is the only thing that closes a chat, so it is also the only thing that makes its
+/// checkout reclaimable/// Archiving is the only thing that closes a chat, so it is also the only thing that makes its
 /// checkout reclaimable — and getting the checkout back must not cost the transcript.
 #[tokio::test]
 async fn an_archived_clean_checkout_is_reclaimed_and_unarchiving_rebuilds_it() {

@@ -54,6 +54,8 @@ pub enum ThreadAction {
     AskSend,
     /// Flip a conversation between manual and automatic Git while it is idle.
     ToggleGitMode,
+    /// Abandon a provider session the harness would not resume. Confirmed, never automatic.
+    RestartSession,
     ReviewSendBack,
     ReviewDraftPr,
     ReviewOpenPr,
@@ -73,6 +75,7 @@ impl ThreadAction {
             Self::Cancel => ":stop",
             Self::Archive => ":archive",
             Self::Delete => ":delete",
+            Self::RestartSession => ":restart-session",
             _ => "chat action",
         }
     }
@@ -1524,6 +1527,30 @@ fn apply_conversation_action(
                 action: PendingAction::DeleteConversation { project, id },
             });
         }
+        ThreadAction::RestartSession => {
+            if record.state.is_active() {
+                app.notice =
+                    Some("stop the current turn before restarting the provider session".to_owned());
+                return;
+            }
+            if !record.resume_failed {
+                app.notice = Some(
+                    "this chat's provider session resumes normally — nothing to restart".to_owned(),
+                );
+                return;
+            }
+            // Say exactly what will happen before it happens: a new session, and a bounded
+            // excerpt of this chat replayed into it once.
+            app.confirm = Some(crate::app::ConfirmRequest {
+                text: format!(
+                    "Start a new provider session for \"{}\"? The old session is abandoned, and \
+                     your next message replays a bounded excerpt of this chat's messages into the \
+                     new one. Nothing is sent until you send it.",
+                    record.title
+                ),
+                action: PendingAction::RestartConversationSession { project, id },
+            });
+        }
         ThreadAction::ToggleGitMode => {
             if record.state.is_active() {
                 app.notice = Some("git mode can only change while the chat is idle".to_owned());
@@ -1667,7 +1694,9 @@ fn render_conversation(
         );
     }
 
-    let hint = followup_blocked_reason(app).unwrap_or("Enter · send");
+    let hint = followup_blocked_reason(app)
+        .or_else(|| session_restart_hint(app))
+        .unwrap_or("Enter · send");
     widgets::render_status_hint(frame, dock_rows[1], hint, &theme);
 
     app.thread_ui
@@ -1741,6 +1770,23 @@ pub fn followup_blocked_reason(app: &App) -> Option<&'static str> {
         Some(ConversationState::NeedsInput) => Some("answer the question above to continue"),
         Some(_) => None,
     }
+}
+
+/// The composer's standing notice about this chat's provider session. Deliberately not a blocked
+/// reason: after a failed resume the user may still just send — and after a restart, sending is
+/// exactly what completes it. Both states have to be visible *before* the message goes, because
+/// each changes what that message costs.
+fn session_restart_hint(app: &App) -> Option<&'static str> {
+    let record = app.thread_ui.data.conversation()?;
+    if record.resume_failed {
+        return Some(
+            "the harness could not resume this session — [Restart session], or send to retry",
+        );
+    }
+    let restart = record.session_restart.as_ref()?;
+    restart.new_session_id.is_none().then_some(
+        "Enter · send — starts a new provider session and replays a bounded excerpt of this chat",
+    )
 }
 
 fn submit_composer(app: &mut App, text: String, images: Vec<ImageInput>) -> bool {
@@ -1945,8 +1991,9 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
                 send_ask_answer(app, &ask);
             }
         }
-        // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
-        ThreadAction::ToggleGitMode => {}
+        // Both are conversation-only controls; a legacy record has no idle Git policy to flip
+        // and no provider session to restart.
+        ThreadAction::ToggleGitMode | ThreadAction::RestartSession => {}
         ThreadAction::ToggleTimelineItem(index) => {
             app.thread_ui.transcript.select(index);
             app.thread_ui.transcript.toggle_selected();
@@ -1982,8 +2029,9 @@ fn apply_action(app: &mut App, action: ThreadAction) {
     let project = app.thread_ui.data.project.clone();
     let id = app.thread_ui.data.run_id.clone();
     match action {
-        // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
-        ThreadAction::ToggleGitMode => {}
+        // Both are conversation-only controls; a legacy record has no idle Git policy to flip
+        // and no provider session to restart.
+        ThreadAction::ToggleGitMode | ThreadAction::RestartSession => {}
         ThreadAction::Archive => app.pending.push(PendingAction::Archive {
             project,
             id,
@@ -2184,6 +2232,8 @@ mod tests {
             output_tokens: None,
             cost_usd: None,
             last_error: None,
+            resume_failed: false,
+            session_restart: None,
             // Compatibility columns the legacy readers still project; a conversation carries
             // no workflow.
             workflow: String::new(),
@@ -2391,6 +2441,119 @@ mod tests {
                 .iter()
                 .any(|action| matches!(action, PendingAction::DeleteConversation { .. }))
         );
+    }
+
+    fn app_with_failed_resume() -> App {
+        use coducktor_contract::ConversationState;
+        let mut app = app_with_conversation(ConversationState::Failed);
+        if let Some(ThreadSubject::Conversation(record)) = app.thread_ui.data.subject.as_mut() {
+            record.resume_failed = true;
+            record.provider_session_id = Some("session-1".to_owned());
+        }
+        app
+    }
+
+    fn app_with_pending_restart() -> App {
+        use coducktor_contract::ConversationState;
+        let mut app = app_with_conversation(ConversationState::Idle);
+        if let Some(ThreadSubject::Conversation(record)) = app.thread_ui.data.subject.as_mut() {
+            record.session_restart = Some(coducktor_contract::ConversationSessionRestart {
+                restarted_at: "2026-08-23T00:00:00.000Z".to_owned(),
+                previous_session_id: Some("session-1".to_owned()),
+                new_session_id: None,
+                handoff_boundary_seq: 12.0,
+                handoff_messages: 4,
+                handoff_bytes: 900,
+                handoff_truncated: false,
+                extra: Default::default(),
+            });
+        }
+        app
+    }
+
+    /// Replaying a transcript is the one thing the cockpit otherwise never does, so it is offered
+    /// only where it is the actual repair, and only behind a confirmation that says so.
+    #[test]
+    fn a_session_restart_is_offered_only_after_a_failed_resume_and_always_confirms() {
+        use coducktor_contract::ConversationState;
+
+        let ordinary = app_with_conversation(ConversationState::Failed);
+        let record = ordinary.thread_ui.data.conversation().unwrap();
+        assert!(
+            !widgets::conversation_header_actions(record)
+                .iter()
+                .any(|(label, _)| *label == "Restart session"),
+            "an ordinary failure is not a resume failure"
+        );
+
+        let mut app = app_with_failed_resume();
+        let record = app.thread_ui.data.conversation().unwrap().clone();
+        assert!(
+            widgets::conversation_header_actions(&record)
+                .iter()
+                .any(|(label, _)| *label == "Restart session")
+        );
+
+        app.pending.clear();
+        apply_action(&mut app, ThreadAction::RestartSession);
+        assert!(
+            app.pending.is_empty(),
+            "a restart never happens without confirmation"
+        );
+        let confirm = app.confirm.expect("a restart confirms first");
+        assert!(
+            confirm.text.contains("new provider session")
+                && confirm.text.contains("replays")
+                && confirm.text.contains("Nothing is sent until you send it"),
+            "the confirmation must say what happens and when: {}",
+            confirm.text
+        );
+        assert!(matches!(
+            confirm.action,
+            PendingAction::RestartConversationSession { .. }
+        ));
+    }
+
+    #[test]
+    fn a_restart_is_refused_while_a_turn_is_running() {
+        use coducktor_contract::ConversationState;
+
+        let mut app = app_with_conversation(ConversationState::Running);
+        if let Some(ThreadSubject::Conversation(record)) = app.thread_ui.data.subject.as_mut() {
+            record.resume_failed = true;
+        }
+        app.pending.clear();
+        apply_action(&mut app, ThreadAction::RestartSession);
+
+        assert!(app.confirm.is_none());
+        assert!(app.pending.is_empty());
+        assert!(app.notice.is_some());
+    }
+
+    /// The user has to know a restart is armed *before* they send, because that message is what
+    /// pays for it.
+    #[test]
+    fn the_composer_says_a_pending_restart_will_replay_on_the_next_message() {
+        let failed = app_with_failed_resume();
+        assert_eq!(
+            session_restart_hint(&failed),
+            Some("the harness could not resume this session — [Restart session], or send to retry")
+        );
+
+        let armed = app_with_pending_restart();
+        assert!(can_send_followup(&armed), "a restart never blocks sending");
+        assert!(followup_blocked_reason(&armed).is_none());
+        let hint = session_restart_hint(&armed).expect("an armed restart is announced");
+        assert!(hint.contains("new provider session") && hint.contains("bounded excerpt"));
+
+        // Once the new session has taken, the composer goes back to saying nothing special.
+        let mut settled = app_with_pending_restart();
+        if let Some(ThreadSubject::Conversation(record)) = settled.thread_ui.data.subject.as_mut()
+            && let Some(restart) = record.session_restart.as_mut()
+        {
+            restart.new_session_id = Some("session-2".to_owned());
+        }
+        assert_eq!(session_restart_hint(&settled), None);
     }
 
     #[test]

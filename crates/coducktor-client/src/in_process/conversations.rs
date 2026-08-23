@@ -583,7 +583,39 @@ impl InProcessEngine {
         })
     }
 
-    /// Archive or unarchive a conversation.
+    /// Abandon a provider session the harness would not resume and prepare a fresh one.
+    ///
+    /// This is the only path that re-feeds a transcript to a provider, and it is deliberately
+    /// inert: it clears the session affinity, records the boundary, and stops. Nothing is sent
+    /// until the user's next message, which carries the bounded handoff into the new session —
+    /// so a restart still costs zero provider turns of its own. The caller confirms with the
+    /// user first; the engine never reaches here on its own.
+    pub async fn restart_conversation_session(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<RestartConversationSessionResponse, EngineError> {
+        let entry = self.project_conversations(scope)?;
+        let restarted = {
+            let mut manager = entry.manager.lock();
+            manager
+                .restart_session(conversation_id)
+                .map_err(conversation_err)?
+        };
+        if let Some(mut session) = restarted.session_to_cancel {
+            session.cancel();
+        }
+        let restart = restarted.record.session_restart.as_ref();
+        Ok(RestartConversationSessionResponse {
+            restarted: true,
+            previous_session_id: restart.and_then(|restart| restart.previous_session_id.clone()),
+            handoff_messages: restart.map(|restart| restart.handoff_messages).unwrap_or(0),
+            handoff_bytes: restart.map(|restart| restart.handoff_bytes).unwrap_or(0),
+            handoff_truncated: restart.is_some_and(|restart| restart.handoff_truncated),
+        })
+    }
+
+    /// Archive or unarchive a conversation.    /// Archive or unarchive a conversation.
     ///
     /// Unarchiving is the half with work to do: an archived conversation's checkout may have been
     /// reclaimed, and the composer must not reopen until that checkout is back. Restoration runs

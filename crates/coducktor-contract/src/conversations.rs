@@ -105,6 +105,31 @@ pub struct ConversationTurnSummary {
     pub extra: ExtraFields,
 }
 
+/// A durable record of one explicit provider-session restart.
+///
+/// Kept so the restart is auditable after the fact: which session was abandoned, which one
+/// replaced it, and exactly how much of the transcript was replayed into the new one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSessionRestart {
+    pub restarted_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_session_id: Option<String>,
+    /// Filled once the new session reports its own id. `None` means the handoff has not been
+    /// delivered yet — the next ordinary message carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_session_id: Option<String>,
+    /// The last history sequence included in the handoff. The excerpt is rebuilt from this, so
+    /// the boundary is the durable fact rather than a copy of the text.
+    pub handoff_boundary_seq: f64,
+    pub handoff_messages: u64,
+    pub handoff_bytes: u64,
+    /// Whether the excerpt dropped or shortened anything to fit its bounds.
+    pub handoff_truncated: bool,
+    #[serde(default, flatten)]
+    pub extra: ExtraFields,
+}
+
 /// New conversation record stored alongside legacy `RunRecord` values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +182,13 @@ pub struct ConversationRecord {
     pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Set when a turn that asked the provider to resume its own session failed. It is the only
+    /// thing that offers the session-restart action, and any turn that ends normally clears it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume_failed: bool,
+    /// The most recent explicit session restart, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_restart: Option<ConversationSessionRestart>,
 
     // Minimum compatibility vocabulary required while old readers still consume `runs.json`.
     pub workflow: String,
@@ -307,6 +339,18 @@ pub struct DeleteConversationResponse {
     pub branch_removed: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// What an explicit session restart did, so the cockpit can say it plainly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartConversationSessionResponse {
+    pub restarted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_session_id: Option<String>,
+    pub handoff_messages: u64,
+    pub handoff_bytes: u64,
+    pub handoff_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
