@@ -1716,6 +1716,143 @@ mod tests {
         );
     }
 
+    /// The record the engine would return for a chat created from this composer, so the gate
+    /// can continue the loop without a live provider.
+    fn accepted_conversation(
+        state: coducktor_contract::ConversationState,
+        input: &coducktor_contract::CreateConversationInput,
+    ) -> coducktor_contract::ConversationRecord {
+        coducktor_contract::ConversationRecord {
+            record_kind: coducktor_contract::RecordKind::Conversation,
+            id: "chat-1".to_owned(),
+            project_id: input.project_id.clone(),
+            title: input.text.clone(),
+            initial_message: coducktor_contract::ConversationMessage {
+                text: input.text.clone(),
+                images: Vec::new(),
+                skill_attachments: Vec::new(),
+                extra: Default::default(),
+            },
+            harness: input.harness,
+            model: input.model.clone(),
+            reasoning: input.reasoning.clone(),
+            provider_session_id: Some("sess-1".to_owned()),
+            repository_root: "/repo".to_owned(),
+            cwd: "/repo".to_owned(),
+            base_branch: input.base_branch.clone(),
+            branch: Some("coducktor/chat-1".to_owned()),
+            worktree: input.worktree,
+            worktree_path: Some("/repo/.worktrees/chat-1".to_owned()),
+            git_mode: input.git_mode,
+            state,
+            active_turn: None,
+            latest_turn: None,
+            created_at: "2026-08-22T10:00:00Z".to_owned(),
+            updated_at: "2026-08-22T10:00:00Z".to_owned(),
+            seen_at: None,
+            archived: false,
+            archived_at: None,
+            tokens_used: 12.0,
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: Some(0.01),
+            last_error: None,
+            workflow: String::new(),
+            task: String::new(),
+            steps: Vec::new(),
+            extra: Default::default(),
+        }
+    }
+
+    /// The Phase 4 gate: the exact section 2 loop, twice in one conversation, by keyboard, at
+    /// each required terminal size. Steps 4 and 5 (the provider actually running) are core-level
+    /// and covered there; this drives every step the cockpit owns.
+    #[test]
+    fn the_primary_chat_loop_completes_twice_at_every_required_size() {
+        use coducktor_contract::ConversationState;
+
+        for (width, height) in [(80u16, 24u16), (120, 40), (200, 60)] {
+            // 1-2. Open a project's composer with its harness and branch already resolved.
+            let mut app = app_with_new_task("main");
+            let screen = render(&mut app, width, height);
+            assert!(
+                screen.contains("harness: claude") && screen.contains("branch: main"),
+                "the composer states its affinity at {width}x{height}"
+            );
+
+            // 3. Submit exactly one message.
+            for character in "ship the shell".chars() {
+                app.handle_event(crossterm::event::Event::Key(key(character)));
+            }
+            app.handle_event(crossterm::event::Event::Key(enter_key()));
+            let creates = app
+                .pending
+                .iter()
+                .filter_map(|action| match action {
+                    PendingAction::CreateConversation { input, .. } => Some(input.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(creates.len(), 1, "one submission is one create at {width}x{height}");
+            let input = creates.into_iter().next().unwrap();
+            assert_eq!(input.text, "ship the shell");
+
+            // 6. The turn ends and the chat becomes idle.
+            let record = accepted_conversation(ConversationState::Idle, &input);
+            app.thread_ui.load(
+                "main".to_owned(),
+                record.id.clone(),
+                crate::screens::thread::ThreadSubject::Conversation(Box::new(record.clone())),
+                Vec::new(),
+                -1.0,
+                None,
+            );
+            app.navigate_route(crate::app::Route::Thread {
+                project: "main".to_owned(),
+                id: record.id.clone(),
+            });
+            let screen = render(&mut app, width, height);
+            assert!(
+                screen.contains("claude"),
+                "the thread header carries the chat's harness at {width}x{height}"
+            );
+
+            // 7. The composer is ready for the next message, and sending resumes the same chat.
+            assert!(crate::screens::thread::can_send_followup(&app));
+            app.pending.clear();
+            app.thread_ui.focus = crate::screens::thread::ThreadFocus::Composer;
+            app.thread_ui.composer.focus();
+            for character in "now the tests".chars() {
+                app.handle_event(crossterm::event::Event::Key(key(character)));
+            }
+            app.handle_event(crossterm::event::Event::Key(enter_key()));
+
+            let sends = app
+                .pending
+                .iter()
+                .filter_map(|action| match action {
+                    PendingAction::SubmitConversationMessage { id, input, .. } => {
+                        Some((id.clone(), input.text.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sends,
+                vec![("chat-1".to_owned(), "now the tests".to_owned())],
+                "the second user message is exactly one more turn on the same chat at \
+                 {width}x{height}"
+            );
+            assert!(
+                !app.pending.iter().any(|action| matches!(
+                    action,
+                    PendingAction::CreateConversation { .. }
+                )),
+                "a follow-up must resume the chat, not start a new one"
+            );
+        }
+    }
+
     #[test]
     fn a_sent_message_clears_its_skill_attachments() {
         let mut app = app_with_new_task("t-attach-clear");
