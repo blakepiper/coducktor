@@ -236,6 +236,12 @@ enum BackgroundResult {
     ActivateConversations {
         result: Result<(), coducktor_client::EngineError>,
     },
+    /// One conversation mutation settled: submit, answer, or cancel.
+    ConversationTurn {
+        project: String,
+        id: String,
+        result: Result<(), coducktor_client::EngineError>,
+    },
     RefreshChatsIndex {
         result: Result<
             coducktor_contract::ConversationsIndexResponse,
@@ -908,6 +914,63 @@ fn execute_pending(
                         project,
                         generation,
                         result,
+                    },
+                );
+            }
+            PendingAction::SubmitConversationMessage { project, id, input } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .submit_conversation_message(&scope, &id_for_task, input)
+                            .await
+                    },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result: result.map(|_| ()),
+                    },
+                );
+            }
+            PendingAction::AnswerConversationQuestion { project, id, input } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .answer_conversation_question(&scope, &id_for_task, input)
+                            .await
+                    },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result: result.map(|_| ()),
+                    },
+                );
+            }
+            PendingAction::CancelConversationTurn { project, id } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .cancel_conversation_turn(&scope, &id_for_task)
+                            .await
+                    },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result: result.map(|_| ()),
                     },
                 );
             }
@@ -2683,6 +2746,30 @@ fn drain_background_results(
                 if let Some(error) = error {
                     app.notice = Some(format!("refresh chats failed: {error}"));
                 }
+            }
+            BackgroundResult::ConversationTurn {
+                project,
+                id,
+                result,
+            } => {
+                match result {
+                    Ok(()) => {
+                        app.pending.push(PendingAction::ActivateConversations {
+                            project: project.clone(),
+                        });
+                    }
+                    Err(error) => {
+                        // The message never reached the engine, so give the user their draft
+                        // back rather than losing it to a transport failure.
+                        screens::thread::restore_failed_delivery(app, &project, &id);
+                        app.notice = Some(format!("send failed: {error}"));
+                    }
+                }
+                app.pending.push(PendingAction::LoadThread {
+                    project: project.clone(),
+                    id,
+                });
+                app.queue_pending(PendingAction::RefreshChats { project });
             }
             BackgroundResult::RefreshChatsIndex { result } => {
                 app.finish_coalescable_dispatch(&PendingAction::RefreshChatsIndex);

@@ -690,6 +690,23 @@ pub enum PendingAction {
     RefreshTasks {
         project: String,
     },
+    /// Queue exactly one ordinary follow-up turn on a conversation.
+    SubmitConversationMessage {
+        project: String,
+        id: String,
+        input: coducktor_contract::SubmitConversationMessageInput,
+    },
+    /// Answer a pending provider-native question inside the turn that asked it.
+    AnswerConversationQuestion {
+        project: String,
+        id: String,
+        input: coducktor_contract::AnswerConversationQuestionInput,
+    },
+    /// Cancel a conversation's live turn, leaving it follow-up capable.
+    CancelConversationTurn {
+        project: String,
+        id: String,
+    },
     /// Refresh a project's conversation rows for the chat browser.
     RefreshChats {
         project: String,

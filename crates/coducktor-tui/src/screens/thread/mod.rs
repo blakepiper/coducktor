@@ -1455,6 +1455,64 @@ fn handle_composer_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
+/// Give a failed follow-up its draft back. The submitted text is never silently dropped.
+pub fn restore_failed_delivery(app: &mut App, project: &str, id: &str) {
+    app.thread_ui.restore_pending_prompt(project, id);
+}
+
+/// The action set a conversation actually supports. Finish, Continue, Review acceptance, and
+/// the native CLI hand-off do not exist here: a turn ending is not a decision the user has to
+/// ratify, and the composer is simply available again (sections 5.3 and 5.5).
+fn apply_conversation_action(
+    app: &mut App,
+    record: &coducktor_contract::ConversationRecord,
+    action: ThreadAction,
+) {
+    let project = app.thread_ui.data.project.clone();
+    let id = record.id.clone();
+    match action {
+        ThreadAction::Cancel => {
+            // Cancel is immediate and leaves the chat follow-up capable, so it needs no
+            // destructive confirmation.
+            app.pending
+                .push(PendingAction::CancelConversationTurn { project, id });
+            app.thread_ui.cancel_pending = true;
+        }
+        ThreadAction::Archive => app.pending.push(PendingAction::Archive {
+            project,
+            id,
+            archived: !record.archived,
+        }),
+        ThreadAction::MarkUnread => app.pending.push(PendingAction::Unread { project, id }),
+        ThreadAction::Delete => {
+            if record.state.is_active() {
+                app.notice =
+                    Some("stop the current turn before deleting this chat".to_owned());
+                return;
+            }
+            let mut targets = vec![format!("the transcript for \"{}\"", record.title)];
+            if let Some(path) = record.worktree_path.as_deref() {
+                targets.push(format!("its worktree at {path}"));
+            }
+            if let Some(branch) = record.branch.as_deref() {
+                targets.push(format!("its branch {branch}"));
+            }
+            app.confirm = Some(crate::app::ConfirmRequest {
+                text: format!("Delete {}?", targets.join(", ")),
+                action: PendingAction::Delete { project, id },
+            });
+        }
+        ThreadAction::FocusComposer => {
+            app.thread_ui.focus = ThreadFocus::Composer;
+            app.thread_ui.composer.focus();
+        }
+        ThreadAction::OpenGitTab(tab) => {
+            crate::screens::task_git::open(app, &project, &id, tab);
+        }
+        _ => {}
+    }
+}
+
 fn is_clipboard_paste_key(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char(character) if character.eq_ignore_ascii_case(&'v'))
         && key
@@ -1477,10 +1535,70 @@ fn handle_clipboard_paste(app: &mut App) -> bool {
     }
 }
 
+/// Whether the composer may send right now. Section 5.3: there is no in-flight message queue,
+/// so a queued or running turn disables Send while the draft is preserved. A pending structured
+/// question must be answered (or the turn cancelled) before an ordinary message is available.
+pub fn can_send_followup(app: &App) -> bool {
+    use coducktor_contract::ConversationState;
+
+    let Some(state) = app.thread_ui.data.conversation_state() else {
+        // Legacy records are historical and never accept a message.
+        return false;
+    };
+    if app.thread_ui.data.conversation().is_some_and(|record| record.archived) {
+        return false;
+    }
+    matches!(
+        state,
+        ConversationState::Idle | ConversationState::Failed | ConversationState::Cancelled
+    )
+}
+
+/// Why Send is unavailable, for the composer hint.
+pub fn followup_blocked_reason(app: &App) -> Option<&'static str> {
+    use coducktor_contract::ConversationState;
+
+    match app.thread_ui.data.conversation_state() {
+        None => Some("this is a historical task record — start a new chat to continue"),
+        Some(_) if app.thread_ui.data.conversation().is_some_and(|r| r.archived) => {
+            Some("unarchive this chat to send a message")
+        }
+        Some(ConversationState::Queued) => Some("waiting for the harness to start — Esc cancels"),
+        Some(ConversationState::Running) => Some("the harness is working — Esc cancels"),
+        Some(ConversationState::NeedsInput) => Some("answer the question above to continue"),
+        Some(_) => None,
+    }
+}
+
 fn submit_composer(app: &mut App, text: String, images: Vec<ImageInput>) -> bool {
     if app.thread_ui.pending_prompt.is_some() {
         app.notice = Some("a message is already being delivered".to_owned());
         return false;
+    }
+    if let Some(record) = app.thread_ui.data.conversation().cloned() {
+        if !can_send_followup(app) {
+            // The draft is deliberately left intact: the user keeps typing while the turn runs
+            // and sends once it ends.
+            app.notice = followup_blocked_reason(app).map(ToOwned::to_owned);
+            return false;
+        }
+        let project = app.thread_ui.data.project.clone();
+        let pending_label = if text.is_empty() {
+            "[Image]".to_owned()
+        } else {
+            text.clone()
+        };
+        app.thread_ui.set_pending_composer(pending_label, false);
+        app.pending.push(PendingAction::SubmitConversationMessage {
+            project,
+            id: record.id.clone(),
+            input: coducktor_contract::SubmitConversationMessageInput {
+                text,
+                images,
+                skills: Vec::new(),
+            },
+        });
+        return true;
     }
     let Some(run) = app.thread_ui.data.run().cloned() else {
         return false;
@@ -1701,6 +1819,10 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
 }
 
 fn apply_action(app: &mut App, action: ThreadAction) {
+    if let Some(record) = app.thread_ui.data.conversation().cloned() {
+        apply_conversation_action(app, &record, action);
+        return;
+    }
     let Some(run) = app.thread_ui.data.run().cloned() else {
         return;
     };
@@ -1898,6 +2020,198 @@ mod tests {
             id: "run-1".to_owned(),
         });
         app
+    }
+
+    fn conversation(state: coducktor_contract::ConversationState) -> coducktor_contract::ConversationRecord {
+        coducktor_contract::ConversationRecord {
+            record_kind: coducktor_contract::RecordKind::Conversation,
+            id: "chat-1".to_owned(),
+            project_id: "main".to_owned(),
+            title: "Ship the shell".to_owned(),
+            initial_message: coducktor_contract::ConversationMessage {
+                text: "ship the shell".to_owned(),
+                images: Vec::new(),
+                skill_attachments: Vec::new(),
+                extra: Default::default(),
+            },
+            harness: coducktor_contract::Runner::Claude,
+            model: None,
+            reasoning: None,
+            provider_session_id: None,
+            repository_root: "/repo".to_owned(),
+            cwd: "/repo".to_owned(),
+            base_branch: Some("main".to_owned()),
+            branch: Some("coducktor/chat-1".to_owned()),
+            worktree: true,
+            worktree_path: Some("/repo/.worktrees/chat-1".to_owned()),
+            git_mode: coducktor_contract::ConversationGitMode::Manual,
+            state,
+            active_turn: None,
+            latest_turn: None,
+            created_at: "2026-08-22T10:00:00Z".to_owned(),
+            updated_at: "2026-08-22T10:00:00Z".to_owned(),
+            seen_at: None,
+            archived: false,
+            archived_at: None,
+            tokens_used: 0.0,
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            last_error: None,
+            // Compatibility columns the legacy readers still project; a conversation carries
+            // no workflow.
+            workflow: String::new(),
+            task: String::new(),
+            steps: Vec::new(),
+            extra: Default::default(),
+        }
+    }
+
+    fn app_with_conversation(state: coducktor_contract::ConversationState) -> App {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.thread_ui.load(
+            "main".to_owned(),
+            "chat-1".to_owned(),
+            ThreadSubject::Conversation(Box::new(conversation(state))),
+            Vec::new(),
+            -1.0,
+            None,
+        );
+        app.navigate_route(crate::app::Route::Thread {
+            project: "main".to_owned(),
+            id: "chat-1".to_owned(),
+        });
+        app
+    }
+
+    #[test]
+    fn an_active_turn_disables_send_but_keeps_the_draft() {
+        use coducktor_contract::ConversationState;
+
+        for state in [ConversationState::Queued, ConversationState::Running] {
+            let mut app = app_with_conversation(state);
+            assert!(!can_send_followup(&app), "{state:?} must not accept a send");
+            app.thread_ui.composer.set_text("the next thing");
+
+            let delivered = submit_composer(&mut app, "the next thing".to_owned(), Vec::new());
+
+            assert!(!delivered);
+            assert!(
+                !app.pending.iter().any(|action| matches!(
+                    action,
+                    PendingAction::SubmitConversationMessage { .. }
+                )),
+                "no in-flight message queue exists"
+            );
+            assert_eq!(
+                app.thread_ui.composer.text, "the next thing",
+                "the draft survives so the user can send it when the turn ends"
+            );
+        }
+    }
+
+    #[test]
+    fn a_settled_conversation_accepts_exactly_one_follow_up() {
+        use coducktor_contract::ConversationState;
+
+        for state in [
+            ConversationState::Idle,
+            ConversationState::Failed,
+            ConversationState::Cancelled,
+        ] {
+            let mut app = app_with_conversation(state);
+            assert!(can_send_followup(&app), "{state:?} may send");
+
+            assert!(submit_composer(&mut app, "next".to_owned(), Vec::new()));
+
+            let sends = app
+                .pending
+                .iter()
+                .filter(|action| {
+                    matches!(action, PendingAction::SubmitConversationMessage { .. })
+                })
+                .count();
+            assert_eq!(sends, 1, "one user message is exactly one queued turn");
+        }
+    }
+
+    #[test]
+    fn a_pending_question_blocks_an_ordinary_follow_up() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::NeedsInput);
+        assert!(!can_send_followup(&app));
+        assert!(
+            followup_blocked_reason(&app).is_some_and(|reason| reason.contains("question")),
+            "the composer explains why it is unavailable"
+        );
+        assert!(!submit_composer(&mut app, "unrelated".to_owned(), Vec::new()));
+    }
+
+    #[test]
+    fn a_legacy_record_is_read_only() {
+        let app = app_with_run(RunStatus::Done);
+        assert!(
+            !can_send_followup(&app),
+            "a historical task record never accepts a message"
+        );
+        assert!(
+            app.thread_ui
+                .data
+                .subject
+                .as_ref()
+                .is_some_and(|subject| !subject.is_interactive())
+        );
+    }
+
+    #[test]
+    fn a_conversation_offers_no_finish_continue_or_terminal() {
+        use coducktor_contract::ConversationState;
+
+        for action in [
+            ThreadAction::Finish,
+            ThreadAction::Continue,
+            ThreadAction::Terminal,
+            ThreadAction::ReviewAccept,
+        ] {
+            let mut app = app_with_conversation(ConversationState::Idle);
+            app.pending.clear();
+            apply_action(&mut app, action.clone());
+            assert!(
+                app.pending.is_empty(),
+                "{action:?} must not be reachable on a conversation"
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_is_immediate_and_delete_waits_for_a_settled_turn() {
+        use coducktor_contract::ConversationState;
+
+        let mut running = app_with_conversation(ConversationState::Running);
+        running.pending.clear();
+        apply_action(&mut running, ThreadAction::Cancel);
+        assert!(
+            running.pending.iter().any(|action| matches!(
+                action,
+                PendingAction::CancelConversationTurn { .. }
+            )),
+            "cancel needs no confirmation — it leaves the chat follow-up capable"
+        );
+        assert!(running.confirm.is_none());
+
+        let mut active = app_with_conversation(ConversationState::Running);
+        active.pending.clear();
+        apply_action(&mut active, ThreadAction::Delete);
+        assert!(active.confirm.is_none(), "delete is refused while a turn runs");
+        assert!(active.notice.is_some());
+
+        let mut idle = app_with_conversation(ConversationState::Idle);
+        apply_action(&mut idle, ThreadAction::Delete);
+        let confirm = idle.confirm.expect("a settled chat confirms deletion");
+        assert!(
+            confirm.text.contains("worktree") && confirm.text.contains("branch"),
+            "the confirmation names every managed target: {}",
+            confirm.text
+        );
     }
 
     #[test]
