@@ -23,6 +23,214 @@ use super::actions::{resume_hint, run_action_flags};
 use super::reducer::{ThreadAsk, ThreadEntry, ThreadState};
 
 /// The header: title, status pill, meta row, tabs, action bar. Returns the height it used.
+/// The conversation header. Harness, model, reasoning, branch, and worktree are immutable
+/// affinity and live here rather than in every follow-up composer (section 5.1); Git mode is
+/// shown here too and is the one value that can still change, while idle.
+pub fn render_conversation_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    record: &coducktor_contract::ConversationRecord,
+    theme: &Theme,
+    hitmap: &mut crate::input::hitmap::HitMap,
+    action_focus: Option<usize>,
+) -> u16 {
+    use crate::screens::chats_util;
+
+    if area.height == 0 {
+        return 0;
+    }
+    let entry = coducktor_client::conversation_index_entry(&record.project_id, record);
+    let att = chats_util::attention(&entry);
+    let mut title_line = vec![
+        Span::styled(
+            record.title.clone(),
+            Style::default()
+                .fg(theme.palette.fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(format!("[{}]", att.label), att.tone.style(theme)),
+    ];
+    if record.seen_at.is_none() {
+        title_line.push(Span::styled(
+            " ●",
+            Style::default().fg(theme.palette.review),
+        ));
+    }
+    let mut lines = vec![Line::from(title_line)];
+
+    let soft = Style::default().fg(theme.palette.soft_fg);
+    let mut affinity = format!("{:?}", record.harness).to_ascii_lowercase();
+    if let Some(model) = record.model.as_deref() {
+        affinity.push('/');
+        affinity.push_str(model);
+    }
+    if let Some(reasoning) = record.reasoning.as_deref() {
+        affinity.push_str(&format!(" · {reasoning}"));
+    }
+    let mut meta = vec![Span::styled(format!("{affinity}  "), soft)];
+    if let Some(branch) = &record.branch {
+        meta.push(Span::styled(format!("{branch}  "), soft));
+    }
+    meta.push(Span::styled(
+        format!(
+            "{}  ",
+            if record.worktree {
+                "worktree"
+            } else {
+                "in place"
+            }
+        ),
+        soft,
+    ));
+    meta.push(Span::styled(
+        format!(
+            "git: {}  ",
+            match record.git_mode {
+                coducktor_contract::ConversationGitMode::Auto => "auto",
+                coducktor_contract::ConversationGitMode::Manual => "manual",
+            }
+        ),
+        soft,
+    ));
+    meta.push(Span::styled(
+        format!(
+            "{} tok  ${:.2}",
+            record.tokens_used as i64,
+            record.cost_usd.unwrap_or(0.0)
+        ),
+        soft,
+    ));
+    lines.push(Line::from(meta));
+
+    lines.push(Line::from(git_tab_spans(area, hitmap, theme)));
+
+    let actions = conversation_header_actions(record);
+    let mut action_spans = Vec::new();
+    for (index, (label, _)) in actions.iter().enumerate() {
+        let style = if action_focus == Some(index) {
+            Style::default()
+                .fg(theme.palette.accent)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default().fg(theme.palette.fg)
+        };
+        action_spans.push(Span::styled(format!("[{label}] "), style));
+    }
+    lines.push(Line::from(action_spans));
+
+    let height = (lines.len() as u16).min(area.height);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default().fg(theme.palette.fg)),
+        Rect::new(area.x, area.y, area.width, height),
+    );
+    if let Some(action_row) = area.y.checked_add(3)
+        && action_row < area.bottom()
+    {
+        let mut cursor = area.x;
+        for (label, action) in &actions {
+            let width = label.chars().count() as u16 + 3;
+            hitmap.register(
+                Rect::new(cursor, action_row, width, 1),
+                4,
+                HitAction::ThreadScreen(action.clone()),
+            );
+            cursor += width;
+        }
+    }
+    height
+}
+
+/// What a conversation can do from its header. Section 5.5 keeps Changes/Files/Commits, Git and
+/// PR actions, archive, delete, mark read/unread, and cancel — and nothing else.
+pub(crate) fn conversation_header_actions(
+    record: &coducktor_contract::ConversationRecord,
+) -> Vec<(&'static str, ThreadAction)> {
+    let mut actions = Vec::new();
+    if record.state.is_active() {
+        actions.push(("Cancel", ThreadAction::Cancel));
+    }
+    if !record.state.is_active() {
+        // Git mode governs post-turn behavior, so it may only change while idle (section 4.1).
+        actions.push((
+            match record.git_mode {
+                coducktor_contract::ConversationGitMode::Auto => "Git: auto",
+                coducktor_contract::ConversationGitMode::Manual => "Git: manual",
+            },
+            ThreadAction::ToggleGitMode,
+        ));
+    }
+    actions.push((
+        if record.archived {
+            "Restore"
+        } else {
+            "Archive"
+        },
+        ThreadAction::Archive,
+    ));
+    if !record.archived && record.seen_at.is_some() {
+        actions.push(("Mark unread", ThreadAction::MarkUnread));
+    }
+    if !record.state.is_active() {
+        actions.push(("Delete", ThreadAction::Delete));
+    }
+    actions
+}
+
+/// The Session/Changes/Files/Commits tab row, shared by both header kinds.
+fn git_tab_spans(
+    area: Rect,
+    hitmap: &mut crate::input::hitmap::HitMap,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let tabs: [(&str, Option<HitAction>); 4] = [
+        ("Session", None),
+        (
+            "Changes",
+            Some(HitAction::ThreadScreen(ThreadAction::OpenGitTab(
+                crate::app::TaskGitTab::Changes,
+            ))),
+        ),
+        (
+            "Files",
+            Some(HitAction::ThreadScreen(ThreadAction::OpenGitTab(
+                crate::app::TaskGitTab::Files,
+            ))),
+        ),
+        (
+            "Commits",
+            Some(HitAction::ThreadScreen(ThreadAction::OpenGitTab(
+                crate::app::TaskGitTab::Commits,
+            ))),
+        ),
+    ];
+    let mut tab_spans = Vec::new();
+    let tab_row_y = area.y.saturating_add(2);
+    let mut tab_x = area.x;
+    for (index, (tab, action)) in tabs.iter().enumerate() {
+        let active = index == 0;
+        let label = format!(" {tab} ");
+        let width = label.chars().count() as u16;
+        tab_spans.push(Span::styled(
+            label,
+            if active {
+                Style::default()
+                    .fg(theme.palette.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.palette.soft_fg)
+            },
+        ));
+        if let Some(action) = action.clone()
+            && tab_row_y < area.bottom()
+        {
+            hitmap.register(Rect::new(tab_x, tab_row_y, width, 1), 3, action);
+        }
+        tab_x = tab_x.saturating_add(width);
+    }
+    tab_spans
+}
+
 pub fn render_header(
     frame: &mut Frame<'_>,
     area: Rect,

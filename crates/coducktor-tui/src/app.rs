@@ -702,6 +702,12 @@ pub enum PendingAction {
         id: String,
         input: coducktor_contract::AnswerConversationQuestionInput,
     },
+    /// Change a conversation's idle Git policy.
+    SetConversationGitMode {
+        project: String,
+        id: String,
+        git_mode: coducktor_contract::ConversationGitMode,
+    },
     /// Cancel a conversation's live turn, leaving it follow-up capable.
     CancelConversationTurn {
         project: String,

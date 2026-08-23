@@ -56,6 +56,8 @@ pub enum ThreadAction {
         option: usize,
     },
     AskSend,
+    /// Flip a conversation between manual and automatic Git while it is idle.
+    ToggleGitMode,
     ReviewSendBack,
     ReviewDraftPr,
     ReviewOpenPr,
@@ -967,6 +969,10 @@ pub fn handle_scroll(app: &mut App, up: bool) {
 }
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
+    if let Some(record) = app.thread_ui.data.conversation().cloned() {
+        render_conversation(frame, area, app, &record);
+        return;
+    }
     let Some(run) = app.thread_ui.data.run().cloned() else {
         frame.render_widget(
             Paragraph::new("Loading…").style(Style::default().fg(app.theme.palette.soft_fg)),
@@ -1064,14 +1070,25 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         ])
         .split(area);
 
-    widgets::render_header(
-        frame,
-        rows[0],
-        &run,
-        &theme,
-        &mut app.hitmap,
-        app.thread_ui.header_action_focus,
-    );
+    if let Some(conversation) = app.thread_ui.data.conversation().cloned() {
+        widgets::render_conversation_header(
+            frame,
+            rows[0],
+            &conversation,
+            &theme,
+            &mut app.hitmap,
+            app.thread_ui.header_action_focus,
+        );
+    } else {
+        widgets::render_header(
+            frame,
+            rows[0],
+            &run,
+            &theme,
+            &mut app.hitmap,
+            app.thread_ui.header_action_focus,
+        );
+    }
     if step_rail_height > 0 {
         widgets::render_step_rail(
             frame,
@@ -1502,6 +1519,31 @@ fn apply_conversation_action(
                 action: PendingAction::Delete { project, id },
             });
         }
+        ThreadAction::ToggleGitMode => {
+            if record.state.is_active() {
+                app.notice =
+                    Some("git mode can only change while the chat is idle".to_owned());
+                return;
+            }
+            let next = match record.git_mode {
+                coducktor_contract::ConversationGitMode::Auto => {
+                    coducktor_contract::ConversationGitMode::Manual
+                }
+                coducktor_contract::ConversationGitMode::Manual => {
+                    coducktor_contract::ConversationGitMode::Auto
+                }
+            };
+            if next == coducktor_contract::ConversationGitMode::Auto && !record.worktree {
+                app.notice =
+                    Some("git auto needs a managed worktree — this chat runs in place".to_owned());
+                return;
+            }
+            app.pending.push(PendingAction::SetConversationGitMode {
+                project,
+                id,
+                git_mode: next,
+            });
+        }
         ThreadAction::FocusComposer => {
             app.thread_ui.focus = ThreadFocus::Composer;
             app.thread_ui.composer.focus();
@@ -1511,6 +1553,123 @@ fn apply_conversation_action(
         }
         _ => {}
     }
+}
+
+/// The conversation timeline. One chronological transcript, a question card when the provider
+/// is asking, a live row while a turn runs, and the composer — no step rail, review panel,
+/// auto-resume hint, or take-over line (section 5.5).
+fn render_conversation(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App,
+    record: &coducktor_contract::ConversationRecord,
+) {
+    use coducktor_contract::ConversationState;
+
+    let theme = app.theme;
+    let ask = pending_ask(&app.thread_ui.data.state).cloned();
+    let ask_height = ask
+        .as_ref()
+        .map(|ask| {
+            let rows: usize = ask.questions.iter().map(|q| 1 + q.options.len()).sum();
+            (rows as u16 + 2).min(12)
+        })
+        .unwrap_or(0);
+    let hint_height = 1;
+    let composer_height = app.thread_ui.composer.height_for_width(area.width).max(3);
+    let dock_height = ask_height + hint_height + composer_height;
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Min(3),
+            Constraint::Length(dock_height),
+        ])
+        .split(area);
+
+    widgets::render_conversation_header(
+        frame,
+        rows[0],
+        record,
+        &theme,
+        &mut app.hitmap,
+        app.thread_ui.header_action_focus,
+    );
+
+    const THROBBER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+    let throbber = THROBBER[(app.animation_tick as usize / 3) % THROBBER.len()];
+    let status = if app.thread_ui.cancel_pending {
+        format!("{throbber} Stopping…")
+    } else if record.state == ConversationState::Running {
+        let elapsed = record
+            .active_turn
+            .as_ref()
+            .and_then(|turn| turn.started_at.as_deref())
+            .map(|started| crate::screens::runs_util::short_age(started, app.now_epoch))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "0s".to_owned());
+        format!(
+            "{throbber} {} · {elapsed} · {} tok",
+            app.thread_ui.data.view_model.current_status,
+            record.tokens_used as i64
+        )
+    } else {
+        app.thread_ui.data.view_model.current_status.clone()
+    };
+    let transcript_title = format!(
+        " Session  ·  {}{} ",
+        status,
+        if app.thread_ui.transcript.unseen_count() > 0 {
+            format!("  ·  {} new", app.thread_ui.transcript.unseen_count())
+        } else {
+            String::new()
+        }
+    );
+    let transcript_block = Block::default()
+        .title(transcript_title)
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(theme.palette.border));
+    let transcript_area = transcript_block.inner(rows[1]);
+    app.thread_ui.transcript_area = Some(transcript_area);
+    frame.render_widget(transcript_block, rows[1]);
+    if transcript_area.height > 0 {
+        app.thread_ui.transcript.render_interactive(
+            frame.buffer_mut(),
+            transcript_area,
+            &theme,
+            &mut app.hitmap,
+        );
+    }
+
+    let dock_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(ask_height),
+            Constraint::Length(hint_height),
+            Constraint::Length(composer_height),
+        ])
+        .split(rows[2]);
+
+    // A structured question sits directly above the composer and owns the turn until answered.
+    if let Some(ask) = &ask {
+        widgets::render_ask_card(
+            frame,
+            dock_rows[0],
+            ask,
+            &app.thread_ui.ask_selections,
+            app.thread_ui.ask_focus,
+            &theme,
+            &mut app.hitmap,
+        );
+    }
+
+    let hint = followup_blocked_reason(app).unwrap_or("Enter · send");
+    widgets::render_status_hint(frame, dock_rows[1], hint, &theme);
+
+    app.thread_ui
+        .composer
+        .render(frame, dock_rows[2], theme, &mut app.hitmap, 5);
 }
 
 fn is_clipboard_paste_key(key: KeyEvent) -> bool {
@@ -1832,6 +1991,8 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
                 send_ask_answer(app, &ask);
             }
         }
+        // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
+        ThreadAction::ToggleGitMode => {}
         ThreadAction::ToggleTimelineItem(index) => {
             app.thread_ui.transcript.select(index);
             app.thread_ui.transcript.toggle_selected();
@@ -1867,6 +2028,8 @@ fn apply_action(app: &mut App, action: ThreadAction) {
     let project = app.thread_ui.data.project.clone();
     let id = app.thread_ui.data.run_id.clone();
     match action {
+        // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
+        ThreadAction::ToggleGitMode => {}
         ThreadAction::Finish => app.pending.push(PendingAction::FinishRun { project, id }),
         ThreadAction::Continue => app.pending.push(PendingAction::ContinueRun {
             project,
@@ -2947,6 +3110,126 @@ mod tests {
                 terminal.backend().buffer()
             );
         }
+    }
+
+    fn conversation_screen(state: coducktor_contract::ConversationState, width: u16, height: u16) -> String {
+        let mut app = app_with_conversation(state);
+        app.thread_ui.push_event(
+            1.0,
+            event(
+                1.0,
+                "item.completed",
+                json!({"item": {"kind": "message", "id": "m1", "role": "assistant", "text": "On it."}}),
+            ),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn a_conversation_thread_shows_its_affinity_and_no_removed_control() {
+        use coducktor_contract::ConversationState;
+
+        for (width, height) in [(80u16, 24u16), (120, 40), (200, 60)] {
+            let screen = conversation_screen(ConversationState::Idle, width, height);
+            assert!(
+                screen.contains("claude"),
+                "the immutable harness is in the header at {width}x{height}"
+            );
+            assert!(screen.contains("git: manual"), "git mode is shown in the header");
+            assert!(screen.contains("worktree"));
+            // Scan only for strings the thread itself would draw. "Terminal" is excluded here
+            // because the workspace sidebar legitimately offers an embedded terminal tab; the
+            // thread's own control set is asserted exactly below instead.
+            for removed in ["Send back", "take over", "Accept", "autonomous pass"] {
+                assert!(
+                    !screen.contains(removed),
+                    "{removed:?} is still reachable at {width}x{height}"
+                );
+            }
+        }
+
+        // The header's control set is the authoritative list of what a chat can do.
+        for state in [
+            ConversationState::Idle,
+            ConversationState::Running,
+            ConversationState::NeedsInput,
+            ConversationState::Failed,
+            ConversationState::Cancelled,
+        ] {
+            let labels = widgets::conversation_header_actions(&conversation(state))
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect::<Vec<_>>();
+            for removed in ["Finish", "Continue", "Terminal", "Accept", "Send back"] {
+                assert!(
+                    !labels.contains(&removed),
+                    "{removed:?} must not be offered in {state:?}: {labels:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_running_conversation_offers_cancel_and_says_why_send_is_unavailable() {
+        let screen = conversation_screen(coducktor_contract::ConversationState::Running, 120, 40);
+        assert!(screen.contains("Cancel"), "a live turn can be stopped");
+        assert!(
+            screen.contains("Esc cancels"),
+            "the composer explains the block instead of silently ignoring Enter"
+        );
+        assert!(
+            !screen.contains("queues a follow-up"),
+            "there is no in-flight message queue"
+        );
+    }
+
+    #[test]
+    fn git_mode_only_toggles_while_idle() {
+        use coducktor_contract::ConversationState;
+
+        let mut idle = app_with_conversation(ConversationState::Idle);
+        idle.pending.clear();
+        apply_action(&mut idle, ThreadAction::ToggleGitMode);
+        let Some(PendingAction::SetConversationGitMode { git_mode, .. }) = idle.pending.first()
+        else {
+            panic!("an idle chat can change its git policy: {:?}", idle.pending);
+        };
+        assert_eq!(*git_mode, coducktor_contract::ConversationGitMode::Auto);
+
+        let mut running = app_with_conversation(ConversationState::Running);
+        running.pending.clear();
+        apply_action(&mut running, ThreadAction::ToggleGitMode);
+        assert!(
+            running.pending.is_empty(),
+            "git mode governs post-turn behavior, so it cannot change mid-turn"
+        );
+        assert!(running.notice.is_some());
+    }
+
+    #[test]
+    fn git_auto_is_refused_for_an_in_place_conversation() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        let mut record = conversation(coducktor_contract::ConversationState::Idle);
+        record.worktree = false;
+        record.worktree_path = None;
+        app.thread_ui.set_conversation(record);
+        app.pending.clear();
+
+        apply_action(&mut app, ThreadAction::ToggleGitMode);
+
+        assert!(app.pending.is_empty());
+        assert!(
+            app.notice.as_deref().is_some_and(|n| n.contains("worktree")),
+            "auto commits need a managed checkout"
+        );
     }
 
     #[test]

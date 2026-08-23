@@ -955,6 +955,33 @@ fn execute_pending(
                     },
                 );
             }
+            PendingAction::SetConversationGitMode {
+                project,
+                id,
+                git_mode,
+            } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .update_conversation_git_mode(
+                                &scope,
+                                &id_for_task,
+                                coducktor_contract::UpdateConversationGitModeInput { git_mode },
+                            )
+                            .await
+                    },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result: result.map(|_| ()),
+                    },
+                );
+            }
             PendingAction::CancelConversationTurn { project, id } => {
                 let scope = Scope::Project(project.clone());
                 let engine_for_task = engine.clone();
