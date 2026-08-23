@@ -131,6 +131,10 @@ pub struct ConversationRecord {
     pub worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// When this archived conversation's checkout was reclaimed. The transcript and managed
+    /// branch survive it; unarchiving rebuilds the directory from that branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_reclaimed_at: Option<String>,
     pub git_mode: ConversationGitMode,
     pub state: ConversationState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

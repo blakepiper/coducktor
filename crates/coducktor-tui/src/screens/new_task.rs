@@ -1723,6 +1723,7 @@ mod tests {
             branch: Some("coducktor/chat-1".to_owned()),
             worktree: input.worktree,
             worktree_path: Some("/repo/.worktrees/chat-1".to_owned()),
+            worktree_reclaimed_at: None,
             git_mode: input.git_mode,
             state,
             active_turn: None,

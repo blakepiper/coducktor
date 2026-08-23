@@ -8,6 +8,7 @@ pub mod git;
 pub mod lifecycle;
 pub mod manager;
 pub mod persistence;
+pub mod retention;
 
 pub use lifecycle::*;
 pub use manager::*;

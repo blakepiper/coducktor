@@ -575,6 +575,149 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// Archiving is the only thing that closes a chat, so it is also the only thing that makes its
+/// checkout reclaimable — and getting the checkout back must not cost the transcript.
+#[tokio::test]
+async fn an_archived_clean_checkout_is_reclaimed_and_unarchiving_rebuilds_it() {
+    let workspace = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    init_repo(repo.path());
+    let engine = engine(&repo, &workspace, ScriptedFactory::new());
+
+    let created = engine
+        .create_conversation(
+            &Scope::Workspace,
+            create_input("Fix the login redirect", true, ConversationGitMode::Manual),
+        )
+        .await
+        .unwrap()
+        .conversation;
+    let worktree = created
+        .worktree_path
+        .clone()
+        .expect("a managed worktree was requested");
+    let branch = created
+        .branch
+        .clone()
+        .expect("a managed branch was created");
+    engine.activate_conversations(&Scope::Workspace).unwrap();
+    wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
+
+    // An unarchived chat's checkout is never retention-eligible: its next message has to open
+    // the harness in that exact directory.
+    let listed = engine.worktrees().await.unwrap();
+    let row = listed
+        .worktrees
+        .iter()
+        .find(|row| row.run_id == created.id)
+        .expect("the conversation worktree should be listed");
+    assert!(!row.reclaimable);
+    assert!(
+        engine
+            .reclaim_worktrees()
+            .await
+            .unwrap()
+            .reclaimed
+            .is_empty()
+    );
+
+    engine
+        .archive_conversation(&Scope::Workspace, &created.id, true)
+        .await
+        .unwrap();
+    let reclaimed = engine.reclaim_worktrees().await.unwrap();
+    assert_eq!(reclaimed.reclaimed, vec![created.id.clone()]);
+    assert!(
+        !Path::new(&worktree).exists(),
+        "the directory should be gone"
+    );
+
+    // The two things that make the work recoverable survive: the transcript and the branch.
+    assert!(
+        !engine
+            .conversation_history(&Scope::Workspace, &created.id, None)
+            .await
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    assert!(git(repo.path(), &["branch", "--list", &branch]).contains(&branch));
+
+    engine
+        .archive_conversation(&Scope::Workspace, &created.id, false)
+        .await
+        .unwrap();
+    let restored = engine
+        .get_conversation(&Scope::Workspace, &created.id)
+        .await
+        .unwrap();
+    assert!(!restored.archived);
+    let restored_path = restored
+        .worktree_path
+        .clone()
+        .expect("the restored conversation keeps a managed worktree");
+    assert!(Path::new(&restored_path).exists());
+    assert_eq!(restored.cwd, restored_path);
+    assert_ne!(restored.cwd, repo.path().to_string_lossy());
+    assert!(restored.worktree_reclaimed_at.is_none());
+
+    // The rebuilt checkout is the same branch, so committed work comes back with it.
+    assert_eq!(
+        git(
+            Path::new(&restored_path),
+            &["rev-parse", "--abbrev-ref", "HEAD"]
+        ),
+        branch
+    );
+}
+
+/// A checkout with uncommitted changes is never reclaimed: the managed branch only preserves
+/// what was committed, so the budget must not win over unrecoverable work.
+#[tokio::test]
+async fn an_archived_checkout_with_uncommitted_changes_is_kept() {
+    let workspace = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    init_repo(repo.path());
+    let engine = engine(
+        &repo,
+        &workspace,
+        ScriptedFactory::new().writing("agent.txt"),
+    );
+
+    let created = engine
+        .create_conversation(
+            &Scope::Workspace,
+            create_input("Fix the login redirect", true, ConversationGitMode::Manual),
+        )
+        .await
+        .unwrap()
+        .conversation;
+    let worktree = created.worktree_path.clone().unwrap();
+    engine.activate_conversations(&Scope::Workspace).unwrap();
+    wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
+    assert!(
+        !git(Path::new(&worktree), &["status", "--porcelain"]).is_empty(),
+        "manual Git mode should have left the agent's file uncommitted"
+    );
+
+    engine
+        .archive_conversation(&Scope::Workspace, &created.id, true)
+        .await
+        .unwrap();
+    let reclaimed = engine.reclaim_worktrees().await.unwrap();
+
+    assert!(reclaimed.reclaimed.is_empty(), "{reclaimed:?}");
+    assert!(Path::new(&worktree).join("agent.txt").exists());
+    assert!(
+        engine
+            .get_conversation(&Scope::Workspace, &created.id)
+            .await
+            .unwrap()
+            .worktree_reclaimed_at
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn shutdown_signals_a_live_conversation_turn_instead_of_abandoning_it() {
     let workspace = TempDir::new().unwrap();

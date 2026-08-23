@@ -268,6 +268,7 @@ impl ConversationManager {
             worktree_path: input
                 .worktree_path
                 .map(|path| path.to_string_lossy().into_owned()),
+            worktree_reclaimed_at: None,
             git_mode: input.git_mode,
             state: ConversationState::Queued,
             active_turn: Some(turn.clone()),
@@ -745,6 +746,7 @@ impl ConversationManager {
         next.branch = Some(branch.to_owned());
         next.base_branch = Some(base_branch.to_owned());
         next.cwd = worktree_path.to_string_lossy().into_owned();
+        next.worktree_reclaimed_at = None;
         let placed = self.commit_record(previous, next)?;
         for request in self.queue.iter_mut() {
             if request.conversation_id == conversation_id {
@@ -752,6 +754,19 @@ impl ConversationManager {
             }
         }
         Ok(placed)
+    }
+
+    /// Record that an archived conversation's checkout was reclaimed. The transcript, record, and
+    /// managed branch are untouched — only the directory is gone, and unarchiving rebuilds it.
+    pub fn mark_worktree_reclaimed(
+        &mut self,
+        conversation_id: &str,
+        reclaimed_at: String,
+    ) -> io::Result<ConversationRecord> {
+        let previous = self.require(conversation_id)?;
+        let mut next = previous.clone();
+        next.worktree_reclaimed_at = Some(reclaimed_at);
+        self.commit_record(previous, next)
     }
 
     /// Signal every in-flight turn's cancellation token without touching durable state. Used at

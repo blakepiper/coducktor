@@ -485,6 +485,19 @@ fn git_has_identity(dir: &Path) -> bool {
     name.ok && !name.stdout.trim().is_empty() && email.ok && !email.stdout.trim().is_empty()
 }
 
+/// Whether a worktree has nothing uncommitted — the precondition for reclaiming its directory.
+///
+/// Fails *closed*: an unreadable directory or a `git status` that does not succeed reports
+/// "not clean", because reclamation destroys anything the working tree still holds and the
+/// managed branch only preserves what was committed.
+pub fn worktree_is_clean(dir: &Path) -> bool {
+    if !dir.exists() {
+        return false;
+    }
+    let status = run_git(dir, &["status", "--porcelain"]);
+    status.ok && status.stdout.trim().is_empty()
+}
+
 /// Stage and commit everything in the worktree as a "coducktor autosave" commit (janitor
 /// pattern) — the agent's progress is always recoverable from the `duck/<id8>` branch
 /// history. Quietly a no-op when nothing changed.

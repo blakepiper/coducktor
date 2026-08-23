@@ -583,6 +583,13 @@ impl InProcessEngine {
         })
     }
 
+    /// Archive or unarchive a conversation.
+    ///
+    /// Unarchiving is the half with work to do: an archived conversation's checkout may have been
+    /// reclaimed, and the composer must not reopen until that checkout is back. Restoration runs
+    /// before the flag flips and outside the manager lock, because it shells out to Git. A
+    /// conversation whose worktree cannot be rebuilt stays archived — its transcript stays
+    /// readable, and its next turn never silently falls back to the repository root.
     pub async fn archive_conversation(
         &self,
         scope: &Scope,
@@ -590,10 +597,61 @@ impl InProcessEngine {
         archived: bool,
     ) -> Result<ConversationRecord, EngineError> {
         let entry = self.project_conversations(scope)?;
+        if !archived {
+            self.restore_conversation_worktree(&entry, conversation_id)
+                .await?;
+        }
         let mut manager = entry.manager.lock();
         manager
             .archive(conversation_id, archived)
             .map_err(conversation_err)
+    }
+
+    /// Rebuild the managed checkout an archived conversation needs before it can accept a
+    /// message. A no-op for in-place conversations and for a directory that is still there.
+    async fn restore_conversation_worktree(
+        &self,
+        entry: &ProjectConversations,
+        conversation_id: &str,
+    ) -> Result<(), EngineError> {
+        let record = {
+            let manager = entry.manager.lock();
+            manager.get(conversation_id).cloned()
+        };
+        let Some(record) = record else {
+            return Ok(());
+        };
+        if !record.archived || !record.worktree {
+            return Ok(());
+        }
+        if record
+            .worktree_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).exists())
+        {
+            return Ok(());
+        }
+        let root = entry.root.clone();
+        let restored = tokio::task::spawn_blocking(move || {
+            coducktor_core::conversations::retention::restore_worktree(&root, &record)
+        })
+        .await
+        .map_err(|error| EngineError::Transport(error.to_string()))?
+        .map_err(|reason| EngineError::Conflict {
+            reason: format!(
+                "the managed worktree could not be restored, so this chat stays archived: {reason}"
+            ),
+        })?;
+        let mut manager = entry.manager.lock();
+        manager
+            .place_worktree(
+                conversation_id,
+                Path::new(&restored.path),
+                &restored.branch,
+                &restored.base_branch,
+            )
+            .map_err(conversation_err)?;
+        Ok(())
     }
 
     pub async fn read_conversation(

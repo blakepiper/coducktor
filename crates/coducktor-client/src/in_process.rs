@@ -1695,6 +1695,45 @@ impl InProcessEngine {
                 reclaimable,
             });
         }
+        // Conversations own worktrees too, and deleting a chat is the wrong way to get a
+        // checkout back — history is the product. Only an archived chat is listed as
+        // reclaimable; see `conversations::retention`.
+        for record in self.conversation_records() {
+            let Some(path) = record.worktree_path.as_deref() else {
+                continue;
+            };
+            if !Path::new(path).exists() {
+                continue;
+            }
+            let size = worktree_size_bytes(Path::new(path));
+            if let Some(bytes) = size {
+                total = total.saturating_add(bytes);
+            } else {
+                any_size_unavailable = true;
+            }
+            let title = if record.title.is_empty() {
+                record.id.clone()
+            } else {
+                record.title.clone()
+            };
+            let status = worktree_conversation_status(&record);
+            let reclaimable = coducktor_core::conversations::retention::is_reclaimable(&record);
+            let finished_at = record.archived_at.clone().or_else(|| {
+                record
+                    .latest_turn
+                    .as_ref()
+                    .and_then(|turn| turn.finished_at.clone())
+            });
+            worktrees.push(WorktreeInfo {
+                run_id: record.id,
+                title,
+                status,
+                branch: record.branch,
+                size_bytes: size.map(|bytes| bytes as f64),
+                finished_at,
+                reclaimable,
+            });
+        }
         Ok(WorktreesResponse {
             worktrees,
             total_bytes: (!any_size_unavailable).then_some(total),
@@ -1702,26 +1741,71 @@ impl InProcessEngine {
         })
     }
 
+    /// This project's conversation records, or none when its manager cannot be opened. The
+    /// worktree panel degrades to legacy rows rather than failing.
+    fn conversation_records(&self) -> Vec<coducktor_contract::ConversationRecord> {
+        let Ok(entry) = self.project_conversations(&Scope::Workspace) else {
+            return Vec::new();
+        };
+        let manager = entry.manager.lock();
+        manager.list().into_iter().cloned().collect()
+    }
+
     pub async fn reclaim_worktrees(&self) -> Result<ReclaimWorktreesResponse, EngineError> {
         let keep = self.worktree_keep();
-        let mut manager = self.manager.lock();
-        let runs = manager.list_runs();
-        let reclaimed = coducktor_core::runs::retention::reclaim_worktrees(
-            &self.repo_root,
-            &runs,
-            keep,
-            coducktor_core::time::now_iso8601,
-        );
         let mut ids = Vec::new();
-        for (id, timestamp) in reclaimed {
-            if manager
-                .edit_run(&id, |run| run.worktree_reclaimed_at = Some(timestamp))
-                .is_ok()
-            {
-                ids.push(id);
+        {
+            let mut manager = self.manager.lock();
+            let runs = manager.list_runs();
+            let reclaimed = coducktor_core::runs::retention::reclaim_worktrees(
+                &self.repo_root,
+                &runs,
+                keep,
+                coducktor_core::time::now_iso8601,
+            );
+            for (id, timestamp) in reclaimed {
+                if manager
+                    .edit_run(&id, |run| run.worktree_reclaimed_at = Some(timestamp))
+                    .is_ok()
+                {
+                    ids.push(id);
+                }
             }
         }
+        ids.extend(self.reclaim_conversation_worktrees(keep));
         Ok(ReclaimWorktreesResponse { reclaimed: ids })
+    }
+
+    /// Reclaim archived conversation checkouts. Unlike legacy runs these are not count-budgeted
+    /// — archiving is the explicit signal — but `keep == 0` remains the user's "never reclaim
+    /// anything automatically" setting and is honored here too. The Git work happens with no
+    /// manager lock held, and the records are updated afterwards.
+    fn reclaim_conversation_worktrees(&self, keep: u64) -> Vec<String> {
+        if keep == 0 {
+            return Vec::new();
+        }
+        let Ok(entry) = self.project_conversations(&Scope::Workspace) else {
+            return Vec::new();
+        };
+        let records = {
+            let manager = entry.manager.lock();
+            manager.list().into_iter().cloned().collect::<Vec<_>>()
+        };
+        let reclaimed = coducktor_core::conversations::retention::reclaim_worktrees(
+            &self.repo_root,
+            &records,
+            coducktor_core::time::now_iso8601,
+        );
+        let mut manager = entry.manager.lock();
+        reclaimed
+            .into_iter()
+            .filter(|(id, timestamp)| {
+                manager
+                    .mark_worktree_reclaimed(id, timestamp.clone())
+                    .is_ok()
+            })
+            .map(|(id, _)| id)
+            .collect()
     }
 
     pub async fn remove_run_worktree(

@@ -299,6 +299,25 @@ fn worktree_run_status(status: coducktor_contract::RunStatus) -> WorktreeRunStat
     }
 }
 
+/// Project a conversation's state onto the worktree panel's status vocabulary. `Done` is the
+/// panel's "finished, safe to reclaim" reading, and for a conversation that is exactly what
+/// archiving means — nothing else closes one.
+fn worktree_conversation_status(
+    record: &coducktor_contract::ConversationRecord,
+) -> WorktreeRunStatus {
+    use coducktor_contract::ConversationState;
+    if record.archived {
+        return WorktreeRunStatus::Done;
+    }
+    match record.state {
+        ConversationState::Queued => WorktreeRunStatus::Queued,
+        ConversationState::Running | ConversationState::NeedsInput => WorktreeRunStatus::Running,
+        ConversationState::Idle => WorktreeRunStatus::Idle,
+        ConversationState::Failed => WorktreeRunStatus::Failed,
+        ConversationState::Cancelled => WorktreeRunStatus::Cancelled,
+    }
+}
+
 fn worktree_size_bytes(path: &Path) -> Option<u64> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if metadata.is_file() {
