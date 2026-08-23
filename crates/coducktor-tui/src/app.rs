@@ -39,7 +39,7 @@ pub enum NavItem {
 }
 
 impl NavItem {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 8] = [
         Self::Tasks,
         Self::Scratchpad,
         Self::Ide,
@@ -47,7 +47,6 @@ impl NavItem {
         Self::RepoGit,
         Self::Github,
         Self::Skills,
-        Self::Workflows,
         Self::Settings,
     ];
 
@@ -4945,7 +4944,7 @@ mod tests {
             KeyCode::Left,
             KeyModifiers::CONTROL,
         )));
-        for _ in 0..11 {
+        for _ in 0..10 {
             app.handle_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
         }
         app.handle_event(Event::Key(KeyEvent::new(
@@ -5295,9 +5294,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal.draw(|frame| app.render(frame)).unwrap();
 
-        // 12 rows: current project + 9 navs + All tasks + Settings.
+        // 11 rows: current project + 8 navs + All chats + Settings. Workflows left the nav
+        // with the workflow-era product surfaces.
         app.handle_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
-        assert_eq!(app.sidebar_selected, 11);
+        assert_eq!(app.sidebar_selected, 10);
         app.handle_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,

@@ -8,12 +8,12 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, NavItem, RowMenu, RowMenuItem};
 use crate::input::hitmap::HitAction;
 use crate::screens::runs_util::{
-    Attention, TaskView, UsageKind, attention, clock_time, compare_groups, filter_runs,
+    Attention, TaskView, UsageKind, attention, clock_time, filter_runs,
     finished_run_count, format_cost, format_diff, format_tokens, is_read_done_item, is_unread,
     queue_positions, run_title, short_age, sort_runs, task_reference, usage_cells, workflow_label,
 };
@@ -449,15 +449,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let view = app.task_view();
     let now = app.now_epoch;
     let project = app.current_project().to_owned();
-    let compare_height = compare_groups(&app.tasks, view).len() as u16;
-
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(compare_height.min(3)),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
     render_title_row(frame, layout[0], app, view);
 
@@ -499,7 +493,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             action: HitAction::NewTask,
         }),
     );
-    render_compare_strips(frame, layout[2], app, view);
 }
 
 fn render_title_row(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: TaskView) {
@@ -555,47 +548,6 @@ fn render_title_row(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: Task
         3,
         HitAction::ArchivedTasks,
     );
-}
-
-fn render_compare_strips(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: TaskView) {
-    if area.height == 0 {
-        return;
-    }
-    let groups = compare_groups(&app.tasks, view);
-    if groups.is_empty() {
-        return;
-    }
-    let lines: Vec<Line<'static>> = groups
-        .iter()
-        .map(|group| {
-            Line::from(vec![
-                Span::styled(
-                    format!("  {} — {} variants finished", group.title, group.count),
-                    Style::default().fg(app.theme.palette.soft_fg),
-                ),
-                Span::styled("  Compare", Style::default().fg(app.theme.palette.accent)),
-            ])
-        })
-        .collect();
-    let block = Block::default().borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .style(Style::default().bg(app.theme.palette.surface)),
-        area,
-    );
-    for (index, group) in groups.iter().enumerate() {
-        if let Some(y) = inner.y.checked_add(index as u16)
-            && y < inner.bottom()
-        {
-            app.hitmap.register(
-                Rect::new(inner.x, y, inner.width, 1),
-                2,
-                HitAction::OpenCompare(group.group_id.clone()),
-            );
-        }
-    }
 }
 
 /// Route mouse/keyboard interactions from the table back into the app.
