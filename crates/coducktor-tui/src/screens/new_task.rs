@@ -1,15 +1,16 @@
-//! New Task screen — `screens/new_task.rs`.
+//! New Chat screen — `screens/new_task.rs`.
 //!
-//! Layout: a centered hero with
-//! "What should the agent work on?", the shared composer card (auto-growing text
-//! area, pasted-image row — no Dictation, per decision 2), a pill row —
-//! `skill/workflow ▾` · `runner ▾` · `model ▾` · `reasoning ▾` · `×N variants ▾` ·
-//! `branch: <branch> ▾` · `worktree: on ▾` · `mode: autonomous ▾` · `git: manual ▾` —
-//! then the send hint.
+//! Layout: a centered hero with "What should the agent work on?", the shared composer card
+//! (auto-growing text area, pasted-image row), a pill row in section 5.1 focus order —
+//! `harness ▾` · `model ▾` · `reasoning ▾` · `skills ▾` · `branch: <branch> ▾` ·
+//! `worktree: on ▾` · `git: manual ▾` — then the send hint.
+//!
+//! Harness, model, reasoning, branch, and worktree become immutable conversation affinity on
+//! the first successful submission; skills are per-message attachments.
 
 use coducktor_contract::{
     ProviderStatusResponse, ReasoningEffort, RepoInfo, Runner, RunnerModelCatalogResponse,
-    RunnerSelection, Skill, TaskSource, UiState, WorkflowDef, WorkspaceConfigResponse,
+    Skill, UiState, WorkflowDef, WorkspaceConfigResponse,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -21,36 +22,32 @@ use ratatui::widgets::{Paragraph, Wrap};
 use crate::app::{App, PendingAction};
 use crate::input::hitmap::{HitAction, NewTaskAction};
 use crate::new_task_form::{
-    self, ComposerConfig, CreateRunBodyOpts, ModelPreset, NewTaskDraft, ReasoningOption,
+    self, ComposerConfig, CreateConversationOpts, ModelPreset, NewTaskDraft, ReasoningOption,
 };
 use crate::theme::Theme;
 use crate::widgets::composer::{Composer, ComposerContext, ComposerEvent};
 use crate::widgets::picker::{Picker, PickerEvent, PickerItem};
 
-/// The pills on the composer's second row, in focus order.
+/// The pills on the composer's second row, in section 5.1 focus order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PillId {
-    Source,
-    Runner,
+    Harness,
     Model,
     Reasoning,
-    Variants,
+    Skills,
     Base,
     Worktree,
-    Autonomous,
     GitMode,
 }
 
 impl PillId {
-    const ALL: [Self; 9] = [
-        Self::Source,
-        Self::Runner,
+    const ALL: [Self; 7] = [
+        Self::Harness,
         Self::Model,
         Self::Reasoning,
-        Self::Variants,
+        Self::Skills,
         Self::Base,
         Self::Worktree,
-        Self::Autonomous,
         Self::GitMode,
     ];
 
@@ -70,42 +67,37 @@ impl PillId {
 /// The open pill picker, with its candidate list.
 #[derive(Debug, Clone)]
 pub enum PickerKind {
-    Source(Picker),
-    Runner(Picker),
+    Harness(Picker),
     Model(Picker),
     Reasoning(Picker),
-    Variants(Picker),
+    /// Multi-select: picking toggles one attachment and leaves the picker open.
+    Skills(Picker),
     Base(Picker),
     Worktree(Picker),
-    Autonomous(Picker),
     GitMode(Picker),
 }
 
 impl PickerKind {
     fn picker(&self) -> &Picker {
         match self {
-            Self::Source(picker)
-            | Self::Runner(picker)
+            Self::Harness(picker)
             | Self::Model(picker)
             | Self::Reasoning(picker)
-            | Self::Variants(picker)
+            | Self::Skills(picker)
             | Self::Base(picker)
             | Self::Worktree(picker)
-            | Self::Autonomous(picker)
             | Self::GitMode(picker) => picker,
         }
     }
 
     fn picker_mut(&mut self) -> &mut Picker {
         match self {
-            Self::Source(picker)
-            | Self::Runner(picker)
+            Self::Harness(picker)
             | Self::Model(picker)
             | Self::Reasoning(picker)
-            | Self::Variants(picker)
+            | Self::Skills(picker)
             | Self::Base(picker)
             | Self::Worktree(picker)
-            | Self::Autonomous(picker)
             | Self::GitMode(picker) => picker,
         }
     }
@@ -143,79 +135,51 @@ pub struct NewTaskUi {
 /// The fully-resolved composer values (draft + config + catalogs), mirroring the
 /// the derived picker state used by the new-task screen.
 pub struct Effective {
-    pub source: TaskSource,
-    pub runners: Vec<Runner>,
-    pub runner: RunnerSelection,
-    pub display_runner: Runner,
+    /// Skill attachments that still exist, in the user's selection order.
+    pub skills: Vec<String>,
+    pub harnesses: Vec<Runner>,
+    pub harness: Runner,
     pub models: Vec<ModelPreset>,
     pub model: String,
     pub reasoning_options: Vec<ReasoningOption>,
     pub reasoning_effort: ReasoningEffort,
-    pub variants: u64,
     pub has_git: bool,
     pub worktree_on: bool,
-    pub autonomous_on: bool,
     pub git_auto_on: bool,
     pub base_branch: String,
     pub providers_ready: bool,
 }
 
 pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
-    let source = new_task_form::resolve_source(
-        &[
-            draft.source.clone(),
-            data.ui_state
-                .as_ref()
-                .and_then(|state| state.last_task.clone()),
-        ],
-        &data.skills,
-        &data.workflows,
-    );
-    let selected_skill = match &source {
-        TaskSource::Skill { reference } => data
-            .skills
-            .iter()
-            .find(|skill| skill.name == *reference)
-            .cloned(),
-        _ => None,
-    };
+    let skills = new_task_form::retain_existing_skills(&draft.skills, &data.skills);
 
-    let runners = new_task_form::usable_runners(data.provider_status.as_ref());
+    let harnesses = new_task_form::usable_runners(data.provider_status.as_ref());
     let preferred = data
         .config
         .as_ref()
-        .map(|config| config.default_runner)
-        .unwrap_or(RunnerSelection::Claude);
-    let runner = if runners.is_empty() {
+        .map(|config| config.default_harness)
+        .unwrap_or(Runner::Claude);
+    let harness = if harnesses.is_empty() {
         preferred
     } else {
-        new_task_form::resolve_runner_selection(draft.runner, &runners, preferred)
-    };
-    let display_runner = match runner {
-        RunnerSelection::Auto => Runner::Claude,
-        RunnerSelection::Claude => Runner::Claude,
-        RunnerSelection::Codex => Runner::Codex,
-        RunnerSelection::OpenCode => Runner::OpenCode,
-        RunnerSelection::Pi => Runner::Pi,
+        new_task_form::resolve_harness(draft.harness, &harnesses, preferred)
     };
     let display_catalog = data
         .model_catalog
         .as_ref()
-        .filter(|catalog| catalog.runner == display_runner);
+        .filter(|catalog| catalog.runner == harness);
 
     let models = new_task_form::models_for_runner(
-        display_runner,
+        harness,
         display_catalog,
         &[
             draft.model.as_deref(),
-            data.config
-                .as_ref()
-                .and_then(|config| match display_runner {
-                    Runner::Claude => config.default_models.claude.as_deref(),
-                    Runner::Codex => config.default_models.codex.as_deref(),
-                    Runner::OpenCode => config.default_models.opencode.as_deref(),
-                    Runner::Pi => config.default_models.pi.as_deref(),
-                }),
+            data.config.as_ref().and_then(|config| match harness {
+                Runner::Claude => config.default_models.claude.as_deref(),
+                Runner::Codex => config.default_models.codex.as_deref(),
+                Runner::OpenCode => config.default_models.opencode.as_deref(),
+                Runner::Pi => config.default_models.pi.as_deref(),
+            }),
         ],
     );
     let models_locked = data
@@ -228,7 +192,7 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
     } else {
         new_task_form::resolve_model(
             draft.model.as_deref(),
-            display_runner,
+            harness,
             data.config.as_ref().map(|config| &config.default_models),
             display_catalog,
         )
@@ -257,32 +221,6 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
     };
 
     let has_git = data.repo.is_some();
-    let configured_variants = project_defaults
-        .and_then(|defaults| defaults.variants)
-        .or_else(|| workspace_defaults.and_then(|defaults| defaults.variants))
-        .unwrap_or(1)
-        .clamp(1, 3);
-    let variants = if has_git {
-        if draft.variants_explicit || draft.variants != 1 {
-            draft.variants.clamp(1, 3)
-        } else {
-            configured_variants
-        }
-    } else {
-        1
-    };
-    let configured_autonomous = draft.autonomous.or_else(|| {
-        project_defaults
-            .and_then(|defaults| defaults.autonomous)
-            .or_else(|| {
-                workspace_defaults.and_then(|defaults| {
-                    defaults.autonomous.or(match defaults.inherited_autonomous {
-                        coducktor_contract::InheritedAutonomous::Value(value) => Some(value),
-                        coducktor_contract::InheritedAutonomous::SourceDependent => None,
-                    })
-                })
-            })
-    });
     let configured_worktree = project_defaults
         .and_then(|defaults| defaults.worktree)
         .or_else(|| {
@@ -290,16 +228,16 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
                 .map(|defaults| defaults.worktree.unwrap_or(defaults.inherited_worktree))
         })
         .unwrap_or(true);
-    let (autonomous_on, worktree_on) = new_task_form::resolve_composer_run_mode(
+    let configured_git_auto = project_defaults
+        .and_then(|defaults| defaults.git_auto)
+        .or_else(|| workspace_defaults.and_then(|defaults| defaults.git_auto))
+        .unwrap_or(false);
+    let (worktree_on, git_auto_on) = new_task_form::resolve_composer_git_mode(
         has_git,
-        variants,
         draft.worktree,
-        selected_skill
-            .as_ref()
-            .and_then(|skill| skill.interactive)
-            .unwrap_or(false),
-        configured_autonomous,
+        draft.git_auto,
         configured_worktree,
+        configured_git_auto,
     );
 
     let base_branch = data
@@ -309,27 +247,17 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
         .or_else(|| data.repo.as_ref().map(|repo| repo.branch.clone()))
         .unwrap_or_else(|| "main".to_owned());
 
-    let git_auto_on = draft.git_auto.unwrap_or_else(|| {
-        project_defaults
-            .and_then(|defaults| defaults.git_auto)
-            .or_else(|| workspace_defaults.and_then(|defaults| defaults.git_auto))
-            .unwrap_or(false)
-    });
-
     Effective {
-        providers_ready: !runners.is_empty(),
-        source,
-        runners,
-        runner,
-        display_runner,
+        providers_ready: !harnesses.is_empty(),
+        skills,
+        harnesses,
+        harness,
         models,
         model,
         reasoning_options,
         reasoning_effort,
-        variants,
         has_git,
         worktree_on,
-        autonomous_on,
         git_auto_on,
         base_branch,
     }
@@ -386,14 +314,12 @@ fn composer_context<'a>(app: &'a App) -> ComposerContext<'a> {
 
 pub fn apply_hit(app: &mut App, action: NewTaskAction) {
     match action {
-        NewTaskAction::SourcePill => open_pill(app, PillId::Source),
-        NewTaskAction::RunnerPill => open_pill(app, PillId::Runner),
+        NewTaskAction::HarnessPill => open_pill(app, PillId::Harness),
         NewTaskAction::ModelPill => open_pill(app, PillId::Model),
         NewTaskAction::ReasoningPill => open_pill(app, PillId::Reasoning),
-        NewTaskAction::VariantsPill => open_pill(app, PillId::Variants),
+        NewTaskAction::SkillsPill => open_pill(app, PillId::Skills),
         NewTaskAction::BasePill => open_pill(app, PillId::Base),
         NewTaskAction::WorktreePill => open_pill(app, PillId::Worktree),
-        NewTaskAction::AutonomousPill => open_pill(app, PillId::Autonomous),
         NewTaskAction::GitModePill => open_pill(app, PillId::GitMode),
         NewTaskAction::Compose => {
             focus_composer(app);
@@ -419,24 +345,36 @@ pub fn pick_index(app: &mut App, index: usize) {
     };
     kind.picker_mut().selected = index;
     let picker = kind.picker().clone();
+    let pill = picker_pill(kind);
     if let Some(item) = picker.items.get(index) {
         let value = item.value.clone();
-        let pill = picker_pill(kind);
         apply_pick(app, pill, &value);
     }
-    app.new_task_ui.picker = None;
+    if pill == PillId::Skills {
+        // Attachments are additive, so keep the list open and re-label the toggled rows.
+        refresh_skills_picker(app, index);
+    } else {
+        app.new_task_ui.picker = None;
+    }
+}
+
+/// Rebuild the skills list in place after a toggle, preserving the highlighted row.
+fn refresh_skills_picker(app: &mut App, index: usize) {
+    let items = skill_items(app);
+    if let Some(PickerKind::Skills(picker)) = app.new_task_ui.picker.as_mut() {
+        picker.selected = index.min(items.len().saturating_sub(1));
+        picker.items = items;
+    }
 }
 
 fn picker_pill(kind: &PickerKind) -> PillId {
     match kind {
-        PickerKind::Source(_) => PillId::Source,
-        PickerKind::Runner(_) => PillId::Runner,
+        PickerKind::Harness(_) => PillId::Harness,
         PickerKind::Model(_) => PillId::Model,
         PickerKind::Reasoning(_) => PillId::Reasoning,
-        PickerKind::Variants(_) => PillId::Variants,
+        PickerKind::Skills(_) => PillId::Skills,
         PickerKind::Base(_) => PillId::Base,
         PickerKind::Worktree(_) => PillId::Worktree,
-        PickerKind::Autonomous(_) => PillId::Autonomous,
         PickerKind::GitMode(_) => PillId::GitMode,
     }
 }
@@ -449,6 +387,9 @@ pub fn remove_attachment(app: &mut App, index: usize) {
 pub fn clear_draft(app: &mut App) {
     app.new_task_ui.composer.clear_content();
     app.new_task_ui.draft.text.clear();
+    // Skills are attachments on one message, not sticky composer state (section 5.1). Harness,
+    // model, reasoning, branch, and worktree deliberately survive for the next chat.
+    app.new_task_ui.draft.skills.clear();
     write_draft(app);
 }
 
@@ -492,7 +433,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         if app.new_task_ui.composer.menu.is_none() {
             match key.code {
                 KeyCode::Tab => {
-                    focus_pill(app, PillId::Source);
+                    focus_pill(app, PillId::Harness);
                     return true;
                 }
                 KeyCode::BackTab => {
@@ -509,13 +450,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             match app.new_task_ui.pill_focus {
                 Some(PillId::GitMode) => focus_composer(app),
                 Some(pill) => focus_pill(app, pill.next()),
-                None => focus_pill(app, PillId::Source),
+                None => focus_pill(app, PillId::Harness),
             }
             true
         }
         KeyCode::BackTab => {
             match app.new_task_ui.pill_focus {
-                Some(PillId::Source) => focus_composer(app),
+                Some(PillId::Harness) => focus_composer(app),
                 Some(pill) => focus_pill(app, pill.previous()),
                 None => focus_pill(app, PillId::GitMode),
             }
@@ -525,7 +466,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             let pill = app
                 .new_task_ui
                 .pill_focus
-                .map_or(PillId::Source, PillId::next);
+                .map_or(PillId::Harness, PillId::next);
             focus_pill(app, pill);
             true
         }
@@ -535,10 +476,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 .pill_focus
                 .map_or(PillId::GitMode, PillId::previous);
             focus_pill(app, pill);
-            true
-        }
-        KeyCode::Char(' ') if app.new_task_ui.pill_focus == Some(PillId::Autonomous) => {
-            toggle_autonomous(app);
             true
         }
         KeyCode::Char(' ') if app.new_task_ui.pill_focus == Some(PillId::Worktree) => {
@@ -692,43 +629,50 @@ fn handle_picker_key(app: &mut App, key: KeyEvent) -> bool {
     }
 }
 
-fn toggle_autonomous(app: &mut App) {
-    let draft = &mut app.new_task_ui.draft;
-    let effective = effective_values(draft, &app.new_task_ui.data);
-    draft.autonomous = Some(!effective.autonomous_on);
-    write_draft(app);
-}
-
 fn toggle_worktree(app: &mut App) {
-    let draft = &mut app.new_task_ui.draft;
-    let effective = effective_values(draft, &app.new_task_ui.data);
-    if effective.variants > 1 {
+    let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
+    if !effective.has_git {
         return;
     }
-    draft.worktree = Some(!effective.worktree_on);
+    let next = !effective.worktree_on;
+    let draft = &mut app.new_task_ui.draft;
+    draft.worktree = Some(next);
+    if !next && effective.git_auto_on {
+        // Git auto commits on a managed checkout; without one it would write into the user's
+        // own working tree, so the downgrade is explicit rather than silent.
+        draft.git_auto = Some(false);
+        app.notice =
+            Some("git set to manual — automatic commits require a managed worktree".to_owned());
+    }
     write_draft(app);
 }
 
 fn toggle_git_auto(app: &mut App) {
+    let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
+    if !effective.has_git {
+        return;
+    }
+    let next = !effective.git_auto_on;
     let draft = &mut app.new_task_ui.draft;
-    let effective = effective_values(draft, &app.new_task_ui.data);
-    draft.git_auto = Some(!effective.git_auto_on);
+    draft.git_auto = Some(next);
+    if next && !effective.worktree_on {
+        draft.worktree = Some(true);
+        app.notice = Some("worktree enabled — git auto requires a managed worktree".to_owned());
+    }
     write_draft(app);
 }
 
 fn open_pill(app: &mut App, pill: PillId) {
     let mut picker = Picker::new(picker_title(pill));
-    picker.searchable = matches!(pill, PillId::Source | PillId::Base);
+    picker.searchable = matches!(pill, PillId::Skills | PillId::Base);
     focus_pill(app, pill);
     app.new_task_ui.picker = Some(match pill {
-        PillId::Source => PickerKind::Source(picker),
-        PillId::Runner => PickerKind::Runner(picker),
+        PillId::Harness => PickerKind::Harness(picker),
         PillId::Model => PickerKind::Model(picker),
         PillId::Reasoning => PickerKind::Reasoning(picker),
-        PillId::Variants => PickerKind::Variants(picker),
+        PillId::Skills => PickerKind::Skills(picker),
         PillId::Base => PickerKind::Base(picker),
         PillId::Worktree => PickerKind::Worktree(picker),
-        PillId::Autonomous => PickerKind::Autonomous(picker),
         PillId::GitMode => PickerKind::GitMode(picker),
     });
     refresh_picker_items(app);
@@ -736,14 +680,12 @@ fn open_pill(app: &mut App, pill: PillId) {
 
 fn picker_title(pill: PillId) -> &'static str {
     match pill {
-        PillId::Source => "skill / workflow",
-        PillId::Runner => "RUNNER",
+        PillId::Harness => "HARNESS",
         PillId::Model => "MODEL",
         PillId::Reasoning => "REASONING",
-        PillId::Variants => "VARIANTS",
+        PillId::Skills => "SKILLS",
         PillId::Base => "BRANCH",
         PillId::Worktree => "WORKTREE",
-        PillId::Autonomous => "TASK MODE",
         PillId::GitMode => "GIT CONTROLS",
     }
 }
@@ -764,24 +706,26 @@ fn refresh_picker_items(app: &mut App) {
     };
     let query = kind.picker().query.clone();
     let items = match kind {
-        PickerKind::Source(picker) => {
+        PickerKind::Skills(picker) => {
             let usage = app
                 .new_task_ui
                 .data
                 .ui_state
                 .as_ref()
                 .and_then(|state| state.skill_usage.as_ref());
-            let mut items = source_picker_items(&app.new_task_ui.data, &query, usage);
+            let mut items = skills_picker_items(
+                &app.new_task_ui.draft,
+                &app.new_task_ui.data,
+                &query,
+                usage,
+            );
             picker.set_items(std::mem::take(&mut items));
             return;
         }
-        PickerKind::Runner(_) => runner_picker_items(&app.new_task_ui.data),
+        PickerKind::Harness(_) => harness_picker_items(&app.new_task_ui.data),
         PickerKind::Model(_) => model_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data),
         PickerKind::Reasoning(_) => {
             reasoning_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data)
-        }
-        PickerKind::Variants(_) => {
-            variants_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data)
         }
         PickerKind::Base(_) => {
             base_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, &query)
@@ -789,111 +733,86 @@ fn refresh_picker_items(app: &mut App) {
         PickerKind::Worktree(_) => {
             worktree_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data)
         }
-        PickerKind::Autonomous(_) => autonomous_picker_items(),
         PickerKind::GitMode(_) => git_auto_picker_items(),
     };
     kind.picker_mut().set_items(items);
 }
 
-fn source_picker_items(
+/// The attachment list: every discovered skill, grouped by usage tier, with the currently
+/// attached ones marked. Attachments are additive, so this list never offers a "none" row —
+/// deselecting is toggling the same row off.
+fn skills_picker_items(
+    draft: &NewTaskDraft,
     data: &NewTaskData,
     query: &str,
     usage: Option<&std::collections::BTreeMap<String, f64>>,
 ) -> Vec<PickerItem> {
-    let mut items: Vec<PickerItem> = Vec::new();
     let matched = crate::skills::search_skills(&data.skills, query, usage)
         .into_iter()
         .filter(|skill| skill.name != coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME)
         .collect::<Vec<_>>();
     let tiers =
         crate::skills::partition_skill_refs(&matched, usage, crate::skills::MOST_USED_LIMIT);
-    let query = query.trim().to_lowercase();
-    let baseline_matches = "execution baseline no skill plain task".contains(&query);
-    if baseline_matches {
-        items.push(PickerItem {
-            value: "baseline".to_owned(),
-            label: "execution".to_owned(),
-            description: Some("run the task as written, without a skill or workflow".to_owned()),
-            group: Some("task mode".to_owned()),
-            emphasized: false,
-        });
-    }
-    if "planning plan".contains(&query) {
-        items.push(PickerItem {
-            value: format!(
-                "skill:{}",
-                coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME
-            ),
-            label: coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME.to_owned(),
-            description: Some(
-                coducktor_core::skills::BUILT_IN_PLANNING_SKILL_DESCRIPTION.to_owned(),
-            ),
-            group: Some("task mode".to_owned()),
-            emphasized: false,
-        });
-    }
+    let mut items: Vec<PickerItem> = Vec::new();
     for (group, skills) in [
         ("most used", tiers.most_used),
         ("project skills", tiers.project),
+        ("global", tiers.global),
     ] {
         for skill in skills {
+            let attached = draft.skills.contains(&skill.name);
             items.push(PickerItem {
                 value: format!("skill:{}", skill.name),
-                label: skill.name.clone(),
+                label: format!(
+                    "{} {}",
+                    if attached { "[x]" } else { "[ ]" },
+                    skill.name
+                ),
                 description: skill.description.clone(),
                 group: Some(group.to_owned()),
-                emphasized: true,
+                emphasized: attached,
             });
         }
-    }
-    let workflows = crate::skills::search_workflows(&data.workflows, &query);
-    for workflow in workflows {
-        items.push(PickerItem {
-            value: format!("workflow:{}", workflow.name),
-            label: workflow.name.clone(),
-            description: workflow.description.clone(),
-            group: Some("workflows".to_owned()),
-            emphasized: false,
-        });
-    }
-    for skill in tiers.global {
-        items.push(PickerItem {
-            value: format!("skill:{}", skill.name),
-            label: skill.name.clone(),
-            description: skill.description.clone(),
-            group: Some("global".to_owned()),
-            emphasized: false,
-        });
     }
     items
 }
 
-fn runner_picker_items(data: &NewTaskData) -> Vec<PickerItem> {
+/// Rebuild the attachment list for the open picker from the live draft.
+fn skill_items(app: &App) -> Vec<PickerItem> {
+    let query = app
+        .new_task_ui
+        .picker
+        .as_ref()
+        .map(|kind| kind.picker().query.clone())
+        .unwrap_or_default();
+    let usage = app
+        .new_task_ui
+        .data
+        .ui_state
+        .as_ref()
+        .and_then(|state| state.skill_usage.as_ref());
+    skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, &query, usage)
+}
+
+/// Exactly the usable backends. A conversation's harness is concrete and immutable, so there
+/// is no Auto row to route or fail over (section 5.1).
+fn harness_picker_items(data: &NewTaskData) -> Vec<PickerItem> {
     let effective = effective_values(&NewTaskDraft::default(), data);
-    let runners = if effective.runners.is_empty() {
+    let harnesses = if effective.harnesses.is_empty() {
         vec![Runner::Claude]
     } else {
-        effective.runners.clone()
+        effective.harnesses.clone()
     };
-    let mut items = Vec::new();
-    if runners
-        .iter()
-        .any(|runner| matches!(runner, Runner::Claude | Runner::Codex | Runner::OpenCode))
-    {
-        items.push(PickerItem::simple(
-            "runner:auto",
-            "auto",
-            Some("Choose an available provider for this task".to_owned()),
-        ));
-    }
-    items.extend(runners.into_iter().map(|runner| {
-        PickerItem::simple(
-            format!("runner:{}", runner_label(runner)),
-            runner_label(runner).to_owned(),
-            Some(runner_desc(runner).to_owned()),
-        )
-    }));
-    items
+    harnesses
+        .into_iter()
+        .map(|runner| {
+            PickerItem::simple(
+                format!("harness:{}", runner_label(runner)),
+                runner_label(runner).to_owned(),
+                Some(runner_desc(runner).to_owned()),
+            )
+        })
+        .collect()
 }
 
 fn runner_desc(runner: Runner) -> &'static str {
@@ -945,27 +864,6 @@ fn reasoning_id(effort: ReasoningEffort) -> &'static str {
     }
 }
 
-fn variants_picker_items(draft: &NewTaskDraft, data: &NewTaskData) -> Vec<PickerItem> {
-    let effective = effective_values(draft, data);
-    let mut items = vec![
-        PickerItem::simple("variants:1", "×1", Some("One run".to_owned())),
-        PickerItem::simple(
-            "variants:2",
-            "×2 variants",
-            Some("Two competing runs — pick the diff you keep".to_owned()),
-        ),
-        PickerItem::simple(
-            "variants:3",
-            "×3 variants",
-            Some("Three competing runs — pick the diff you keep".to_owned()),
-        ),
-    ];
-    if !effective.has_git {
-        items.clear();
-    }
-    items
-}
-
 fn base_picker_items(_draft: &NewTaskDraft, data: &NewTaskData, query: &str) -> Vec<PickerItem> {
     let branch = data
         .repo
@@ -1012,34 +910,17 @@ fn base_picker_items(_draft: &NewTaskDraft, data: &NewTaskData, query: &str) -> 
     items
 }
 
-fn worktree_picker_items(draft: &NewTaskDraft, data: &NewTaskData) -> Vec<PickerItem> {
-    let effective = effective_values(draft, data);
-    let mut items = vec![PickerItem::simple(
-        "worktree:true",
-        "on",
-        Some("Run in an isolated task worktree".to_owned()),
-    )];
-    if effective.variants <= 1 {
-        items.push(PickerItem::simple(
+fn worktree_picker_items(_draft: &NewTaskDraft, _data: &NewTaskData) -> Vec<PickerItem> {
+    vec![
+        PickerItem::simple(
+            "worktree:true",
+            "on",
+            Some("Run in an isolated task worktree".to_owned()),
+        ),
+        PickerItem::simple(
             "worktree:false",
             "off",
             Some("Modify the currently checked-out branch directly".to_owned()),
-        ));
-    }
-    items
-}
-
-fn autonomous_picker_items() -> Vec<PickerItem> {
-    vec![
-        PickerItem::simple(
-            "autonomous:true",
-            "autonomous",
-            Some("Continue through the workflow without waiting for approval".to_owned()),
-        ),
-        PickerItem::simple(
-            "autonomous:false",
-            "manual approval",
-            Some("Pause for your input before continuing or reviewing changes".to_owned()),
         ),
     ]
 }
@@ -1061,12 +942,19 @@ fn git_auto_picker_items() -> Vec<PickerItem> {
 
 fn apply_pick(app: &mut App, pill: PillId, value: &str) {
     match pill {
-        PillId::Source => {
-            app.new_task_ui.draft.source = parse_source(value);
+        PillId::Skills => {
+            if let Some(name) = value.strip_prefix("skill:") {
+                let skills = &mut app.new_task_ui.draft.skills;
+                if let Some(at) = skills.iter().position(|existing| existing == name) {
+                    skills.remove(at);
+                } else {
+                    skills.push(name.to_owned());
+                }
+            }
         }
-        PillId::Runner => {
-            if let Some(selection) = parse_runner(value) {
-                app.new_task_ui.draft.runner = Some(selection);
+        PillId::Harness => {
+            if let Some(harness) = parse_harness(value) {
+                app.new_task_ui.draft.harness = Some(harness);
                 app.new_task_ui.draft.model = None;
                 app.new_task_ui.draft.reasoning_effort = None;
             }
@@ -1079,15 +967,6 @@ fn apply_pick(app: &mut App, pill: PillId, value: &str) {
         PillId::Reasoning => {
             if let Some(effort) = parse_reasoning(value) {
                 app.new_task_ui.draft.reasoning_effort = Some(effort);
-            }
-        }
-        PillId::Variants => {
-            if let Some(count) = value
-                .strip_prefix("variants:")
-                .and_then(|count| count.parse().ok())
-            {
-                app.new_task_ui.draft.variants = count;
-                app.new_task_ui.draft.variants_explicit = true;
             }
         }
         PillId::Base => {
@@ -1106,11 +985,6 @@ fn apply_pick(app: &mut App, pill: PillId, value: &str) {
                 app.new_task_ui.draft.worktree = Some(worktree == "true");
             }
         }
-        PillId::Autonomous => {
-            if let Some(autonomous) = value.strip_prefix("autonomous:") {
-                app.new_task_ui.draft.autonomous = Some(autonomous == "true");
-            }
-        }
         PillId::GitMode => {
             if let Some(git_auto) = value.strip_prefix("git-auto:") {
                 app.new_task_ui.draft.git_auto = Some(git_auto == "true");
@@ -1120,31 +994,12 @@ fn apply_pick(app: &mut App, pill: PillId, value: &str) {
     write_draft(app);
 }
 
-fn parse_source(value: &str) -> Option<TaskSource> {
-    match value {
-        "baseline" => Some(new_task_form::BASELINE_SOURCE),
-        _ => value
-            .strip_prefix("skill:")
-            .map(|name| TaskSource::Skill {
-                reference: name.to_owned(),
-            })
-            .or_else(|| {
-                value
-                    .strip_prefix("workflow:")
-                    .map(|name| TaskSource::Workflow {
-                        reference: name.to_owned(),
-                    })
-            }),
-    }
-}
-
-fn parse_runner(value: &str) -> Option<RunnerSelection> {
-    match value.strip_prefix("runner:") {
-        Some("auto") => Some(RunnerSelection::Auto),
-        Some("claude") => Some(RunnerSelection::Claude),
-        Some("codex") => Some(RunnerSelection::Codex),
-        Some("opencode") => Some(RunnerSelection::OpenCode),
-        Some("pi") => Some(RunnerSelection::Pi),
+fn parse_harness(value: &str) -> Option<Runner> {
+    match value.strip_prefix("harness:") {
+        Some("claude") => Some(Runner::Claude),
+        Some("codex") => Some(Runner::Codex),
+        Some("opencode") => Some(Runner::OpenCode),
+        Some("pi") => Some(Runner::Pi),
         _ => None,
     }
 }
@@ -1172,9 +1027,13 @@ fn request_start(app: &mut App) {
         app.notice = Some("describe a task first".to_owned());
         return;
     }
-    let opts = CreateRunBodyOpts {
-        task: text,
-        source: effective.source.clone(),
+    let project = app.current_project().to_owned();
+    let opts = CreateConversationOpts {
+        project_id: project.clone(),
+        text,
+        images,
+        skills: effective.skills.clone(),
+        harness: effective.harness,
         model: effective.model.clone(),
         reasoning_effort: Some(effective.reasoning_effort),
         models_locked: app
@@ -1184,33 +1043,22 @@ fn request_start(app: &mut App) {
             .as_ref()
             .map(|config| config.models_locked)
             .unwrap_or(false),
-        runner: effective.runner,
-        runner_explicit: app.new_task_ui.draft.runner.is_some(),
-        default_runner: app
-            .new_task_ui
-            .data
-            .config
-            .as_ref()
-            .map(|config| config.default_runner),
-        variants: effective.variants,
-        images,
-        worktree: Some(effective.worktree_on),
-        autonomous: effective.autonomous_on,
+        base_branch: Some(effective.base_branch.clone()),
+        worktree: effective.worktree_on,
         git_auto: effective.git_auto_on,
     };
-    let input = new_task_form::build_create_run_body(&opts);
-    let project = app.current_project().to_owned();
+    let input = new_task_form::build_create_conversation_input(&opts);
     finish_submit(app, project, input, &effective);
 }
 
-/// Queue the start, spend the draft, and remember the source for the next visit.
+/// Queue the create, spend the draft, and remember the attached skills for the next visit.
 fn finish_submit(
     app: &mut App,
     project: String,
-    input: coducktor_contract::CreateRunInput,
+    input: coducktor_contract::CreateConversationInput,
     effective: &Effective,
 ) {
-    app.pending.push(PendingAction::StartRun {
+    app.pending.push(PendingAction::CreateConversation {
         project: project.clone(),
         input,
     });
@@ -1227,13 +1075,7 @@ fn finish_submit(
     app.new_task_ui.pill_focus = None;
     clear_draft(app);
     let mut state = app.new_task_ui.data.ui_state.clone().unwrap_or_default();
-    state.last_task = Some(effective.source.clone());
-    state.recent_sources = Some(new_task_form::push_recent_source(
-        state.recent_sources.as_deref(),
-        effective.source.clone(),
-        24,
-    ));
-    if let TaskSource::Skill { reference } = &effective.source {
+    for reference in &effective.skills {
         state.skill_usage = Some(crate::skills::bump_skill_usage(
             state.skill_usage.as_ref(),
             reference,
@@ -1258,12 +1100,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     // Model catalog is per-runner; request it once per runner change. A failed
     // catalog degrades to the static presets — never a retry loop.
-    if coducktor_contract::runner_discovers_models(effective.display_runner)
-        && app.new_task_ui.data.models_requested_for != Some(effective.display_runner)
+    if coducktor_contract::runner_discovers_models(effective.harness)
+        && app.new_task_ui.data.models_requested_for != Some(effective.harness)
     {
-        app.new_task_ui.data.models_requested_for = Some(effective.display_runner);
+        app.new_task_ui.data.models_requested_for = Some(effective.harness);
         app.queue_pending(PendingAction::RefreshModels {
-            runner: effective.display_runner,
+            runner: effective.harness,
         });
     }
 
@@ -1382,14 +1224,12 @@ fn render_pills(frame: &mut Frame<'_>, area: Rect, app: &mut App, effective: &Ef
                 Rect::new(column, y, width.min(area.right().saturating_sub(column)), 1),
                 6,
                 HitAction::NewTaskScreen(match pill {
-                    PillId::Source => NewTaskAction::SourcePill,
-                    PillId::Runner => NewTaskAction::RunnerPill,
+                    PillId::Harness => NewTaskAction::HarnessPill,
                     PillId::Model => NewTaskAction::ModelPill,
                     PillId::Reasoning => NewTaskAction::ReasoningPill,
-                    PillId::Variants => NewTaskAction::VariantsPill,
+                    PillId::Skills => NewTaskAction::SkillsPill,
                     PillId::Base => NewTaskAction::BasePill,
                     PillId::Worktree => NewTaskAction::WorktreePill,
-                    PillId::Autonomous => NewTaskAction::AutonomousPill,
                     PillId::GitMode => NewTaskAction::GitModePill,
                 }),
             );
@@ -1403,18 +1243,15 @@ fn render_pills(frame: &mut Frame<'_>, area: Rect, app: &mut App, effective: &Ef
 }
 
 fn pill_entries(effective: &Effective) -> Vec<(PillId, String)> {
+    let skills = match effective.skills.len() {
+        0 => "skills: none".to_owned(),
+        1 => format!("skills: {}", effective.skills[0]),
+        count => format!("skills: {count}"),
+    };
     let mut pills = vec![
         (
-            PillId::Source,
-            match &effective.source {
-                TaskSource::Baseline => "source: execution".to_owned(),
-                TaskSource::Skill { reference } => format!("source: skill:{reference}"),
-                TaskSource::Workflow { reference } => format!("source: workflow:{reference}"),
-            },
-        ),
-        (
-            PillId::Runner,
-            format!("runner: {}", runner_selection_label(effective.runner)),
+            PillId::Harness,
+            format!("harness: {}", runner_label(effective.harness)),
         ),
         (
             PillId::Model,
@@ -1428,10 +1265,7 @@ fn pill_entries(effective: &Effective) -> Vec<(PillId, String)> {
             PillId::Reasoning,
             format!("reasoning: {}", reasoning_label(effective.reasoning_effort)),
         ),
-        (
-            PillId::Variants,
-            format!("variants: ×{}", effective.variants),
-        ),
+        (PillId::Skills, skills),
         (PillId::Base, format!("branch: {}", effective.base_branch)),
         (
             PillId::Worktree,
@@ -1441,12 +1275,6 @@ fn pill_entries(effective: &Effective) -> Vec<(PillId, String)> {
             ),
         ),
     ];
-    let mode = if effective.autonomous_on {
-        "autonomous"
-    } else {
-        "manual approval"
-    };
-    pills.push((PillId::Autonomous, format!("mode: {mode}")));
     let git_mode = if effective.git_auto_on {
         "auto"
     } else {
@@ -1506,16 +1334,6 @@ fn render_actions(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn theme_soft(theme: Theme) -> Style {
     Style::default().fg(theme.palette.soft_fg)
-}
-
-fn runner_selection_label(selection: RunnerSelection) -> String {
-    match selection {
-        RunnerSelection::Auto => "auto".to_owned(),
-        RunnerSelection::Claude => "claude".to_owned(),
-        RunnerSelection::Codex => "codex".to_owned(),
-        RunnerSelection::OpenCode => "opencode".to_owned(),
-        RunnerSelection::Pi => "pi".to_owned(),
-    }
 }
 
 fn reasoning_label(effort: ReasoningEffort) -> String {
@@ -1656,8 +1474,10 @@ mod tests {
         let started = app
             .pending
             .iter()
-            .find(|action| matches!(action, PendingAction::StartRun { .. }));
-        let PendingAction::StartRun { project, input } = started.expect("a start is queued") else {
+            .find(|action| matches!(action, PendingAction::CreateConversation { .. }));
+        let PendingAction::CreateConversation { project, input } =
+            started.expect("a create is queued")
+        else {
             unreachable!()
         };
         assert_eq!(project, "t-1");
@@ -1665,12 +1485,15 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "task": "ship the shell",
-                "steps": [{ "id": "task", "name": "execution", "prompt": "{{task}}" }],
-                "autonomous": true,
+                "projectId": "t-1",
+                "text": "ship the shell",
+                "harness": "claude",
+                "baseBranch": "main",
+                "worktree": true,
+                "gitMode": "manual",
             })
         );
-        // The text is spent; the source is remembered for the next visit.
+        // The text is spent; the harness affinity is remembered for the next visit.
         assert!(app.new_task_ui.composer.text.is_empty());
         assert!(!app.new_task_ui.composer_focused);
         assert!(!app.new_task_ui.composer.focused);
@@ -1738,7 +1561,7 @@ mod tests {
         assert_eq!(app.new_task_ui.pill_focus, Some(PillId::GitMode));
 
         assert!(handle_key(&mut app, back_tab));
-        assert_eq!(app.new_task_ui.pill_focus, Some(PillId::Autonomous));
+        assert_eq!(app.new_task_ui.pill_focus, Some(PillId::Worktree));
     }
 
     #[test]
@@ -1769,8 +1592,6 @@ mod tests {
         });
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
         assert_eq!(effective.reasoning_effort, ReasoningEffort::XHigh);
-        assert_eq!(effective.variants, 3);
-        assert!(!effective.autonomous_on);
         assert!(effective.worktree_on);
     }
 
@@ -1813,8 +1634,6 @@ mod tests {
 
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
         assert_eq!(effective.reasoning_effort, ReasoningEffort::Low);
-        assert_eq!(effective.variants, 3);
-        assert!(!effective.autonomous_on);
         assert!(effective.worktree_on);
     }
 
@@ -1838,47 +1657,48 @@ mod tests {
 
         app.handle_event(crossterm::event::Event::Key(enter_key()));
 
-        let Some(PendingAction::StartRun { input, .. }) = app
+        let Some(PendingAction::CreateConversation { input, .. }) = app
             .pending
             .iter()
-            .find(|action| matches!(action, PendingAction::StartRun { .. }))
+            .find(|action| matches!(action, PendingAction::CreateConversation { .. }))
         else {
-            panic!("a start is queued");
+            panic!("a create is queued");
         };
-        assert_eq!(input.task, pasted);
-        assert_eq!(input.images.as_ref().map(Vec::len), Some(1));
-        assert_eq!(input.images.as_ref().unwrap()[0].data, "AQID");
+        assert_eq!(input.text, pasted);
+        assert_eq!(input.images.len(), 1);
+        assert_eq!(input.images[0].data, "AQID");
     }
 
     #[test]
-    fn submitting_with_a_skill_source_builds_the_inline_chain_and_bumps_usage() {
+    fn submitting_with_an_attached_skill_sends_the_exact_text_and_bumps_usage() {
         let mut app = app_with_new_task("t-2");
-        app.new_task_ui.draft.source = Some(coducktor_contract::TaskSource::Skill {
-            reference: "om-fix".to_owned(),
-        });
+        app.new_task_ui.draft.skills = vec!["om-fix".to_owned()];
         for character in "fix the flake".chars() {
             app.handle_event(crossterm::event::Event::Key(key(character)));
         }
         app.handle_event(crossterm::event::Event::Key(enter_key()));
 
-        let PendingAction::StartRun { input, .. } = app
+        let PendingAction::CreateConversation { input, .. } = app
             .pending
             .iter()
-            .find(|action| matches!(action, PendingAction::StartRun { .. }))
-            .expect("a start is queued")
+            .find(|action| matches!(action, PendingAction::CreateConversation { .. }))
+            .expect("a create is queued")
         else {
             unreachable!()
         };
-        let json = serde_json::to_value(input).unwrap();
+        // The user's exact text is the message; the skill rides as an attachment rather than
+        // rewriting the prompt into a workflow step.
+        assert_eq!(input.text, "fix the flake");
         assert_eq!(
-            json,
-            serde_json::json!({
-                "task": "fix the flake",
-                "steps": [{ "id": "task", "name": "om-fix", "skill": "om-fix", "prompt": "{{task}}" }],
-                "autonomous": true,
-            })
+            input
+                .skills
+                .iter()
+                .map(|selection| selection.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["om-fix"]
         );
-        // The ui-state write remembers the skill pick AND bumps its usage count.
+        assert_eq!(input.harness, Runner::Claude);
+
         let PendingAction::PutUiState { state, .. } = app
             .pending
             .iter()
@@ -1894,11 +1714,19 @@ mod tests {
                 .and_then(|usage| usage.get("om-fix")),
             Some(&1.0)
         );
-        assert_eq!(
-            state.last_task.as_ref().unwrap(),
-            &coducktor_contract::TaskSource::Skill {
-                reference: "om-fix".to_owned(),
-            }
+    }
+
+    #[test]
+    fn a_sent_message_clears_its_skill_attachments() {
+        let mut app = app_with_new_task("t-attach-clear");
+        app.new_task_ui.draft.skills = vec!["om-fix".to_owned()];
+        for character in "go".chars() {
+            app.handle_event(crossterm::event::Event::Key(key(character)));
+        }
+        app.handle_event(crossterm::event::Event::Key(enter_key()));
+        assert!(
+            app.new_task_ui.draft.skills.is_empty(),
+            "attachments are per-message and clear after a successful send"
         );
     }
 
@@ -1929,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn source_picker_groups_and_ranks_skills() {
+    fn skills_picker_groups_and_ranks_skills_without_task_modes() {
         let mut app = app_with_new_task("t-5");
         let mut usage = std::collections::BTreeMap::new();
         usage.insert("om-open-pr".to_owned(), 3.0);
@@ -1937,7 +1765,8 @@ mod tests {
             skill_usage: Some(usage),
             ..UiState::default()
         });
-        let items = source_picker_items(
+        let items = skills_picker_items(
+            &app.new_task_ui.draft,
             &app.new_task_ui.data,
             "",
             app.new_task_ui
@@ -1947,38 +1776,26 @@ mod tests {
                 .and_then(|state| state.skill_usage.as_ref()),
         );
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
-        // Task modes lead for an empty query, then most used across localities, then project,
-        // workflows, and global entries.
-        assert_eq!(
-            labels,
-            [
-                "execution",
-                "planning",
-                "om-open-pr",
-                "om-fix",
-                "quick-task"
-            ]
-        );
-
+        // Only skills: the baseline/planning task modes and workflows are gone, and each row
+        // carries its attachment state.
+        assert_eq!(labels, ["[ ] om-open-pr", "[ ] om-fix"]);
         let tiers: Vec<&str> = items
             .iter()
             .map(|item| item.group.as_deref().unwrap_or(""))
             .collect();
-        assert_eq!(
-            tiers,
-            [
-                "task mode",
-                "task mode",
-                "most used",
-                "project skills",
-                "workflows"
-            ]
-        );
+        assert_eq!(tiers, ["most used", "project skills"]);
 
         // A typed query narrows and re-ranks: an exact name match beats the rest.
-        let filtered = source_picker_items(&app.new_task_ui.data, "om-fix", None);
+        let filtered =
+            skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, "om-fix", None);
         let labels: Vec<&str> = filtered.iter().map(|item| item.label.as_str()).collect();
-        assert_eq!(labels, ["om-fix"]);
+        assert_eq!(labels, ["[ ] om-fix"]);
+
+        // An attached skill is marked in place.
+        app.new_task_ui.draft.skills = vec!["om-fix".to_owned()];
+        let attached =
+            skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, "om-fix", None);
+        assert_eq!(attached[0].label, "[x] om-fix");
     }
 
     #[test]
@@ -1986,15 +1803,9 @@ mod tests {
         let app = app_with_new_task("t-6");
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
         assert!(effective.providers_ready);
-        assert_eq!(effective.runner, RunnerSelection::Claude);
-        assert_eq!(effective.display_runner, Runner::Claude);
+        assert_eq!(effective.harness, Runner::Claude);
         assert_eq!(effective.model, "", "untouched model resolves to auto");
         assert!(effective.has_git);
-        assert_eq!(effective.variants, 1);
-        assert!(
-            effective.autonomous_on,
-            "autonomous is the zero-config default"
-        );
         assert!(
             effective.worktree_on,
             "isolated worktrees are the zero-config default"
@@ -2045,26 +1856,64 @@ mod tests {
     }
 
     #[test]
-    fn task_mode_picker_has_only_autonomous_and_manual_approval() {
-        let mut app = app_with_new_task("t-mode");
-        open_pill(&mut app, PillId::Autonomous);
+    fn the_skills_pill_toggles_attachments_and_stays_open() {
+        let mut app = app_with_new_task("t-skills");
+        open_pill(&mut app, PillId::Skills);
+        pick_index(&mut app, 0);
+        let first = app.new_task_ui.draft.skills.clone();
+        assert_eq!(first.len(), 1, "picking attaches one skill");
+        assert!(
+            matches!(app.new_task_ui.picker, Some(PickerKind::Skills(_))),
+            "a multi-select list stays open so a second skill can be attached"
+        );
+        assert!(
+            app.new_task_ui
+                .picker
+                .as_ref()
+                .is_some_and(|kind| kind.picker().items[0].label.starts_with("[x]")),
+            "the toggled row re-labels in place"
+        );
+
+        pick_index(&mut app, 0);
+        assert!(
+            app.new_task_ui.draft.skills.is_empty(),
+            "picking the same row again detaches it"
+        );
+    }
+
+    #[test]
+    fn no_composer_control_offers_a_workflow_variants_or_task_mode() {
+        let app = app_with_new_task("t-removed");
+        let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
+        let labels = pill_entries(&effective)
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>()
+            .join(" ");
+        for removed in ["source", "workflow", "variants", "mode:", "×"] {
+            assert!(
+                !labels.contains(removed),
+                "{removed:?} is still reachable in {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_harness_picker_offers_no_auto_row() {
+        let mut app = app_with_new_task("t-harness");
+        open_pill(&mut app, PillId::Harness);
         let items = app
             .new_task_ui
             .picker
             .as_ref()
             .map(|kind| kind.picker().items.clone())
             .unwrap_or_default();
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| item.label.as_str())
-                .collect::<Vec<_>>(),
-            vec!["autonomous", "manual approval"]
+        assert!(!items.is_empty());
+        assert!(
+            items.iter().all(|item| item.value != "harness:auto"),
+            "a conversation's harness is concrete"
         );
-        assert!(items.iter().all(|item| !item.value.starts_with("skill:")));
-        pick_index(&mut app, 1);
-        assert_eq!(app.new_task_ui.draft.autonomous, Some(false));
-        assert!(!effective_values(&app.new_task_ui.draft, &app.new_task_ui.data).autonomous_on);
+        assert!(items.iter().all(|item| item.label != "auto"));
     }
 
     #[test]
@@ -2116,7 +1965,7 @@ mod tests {
             stale: false,
             reason: None,
         });
-        app.new_task_ui.draft.runner = Some(RunnerSelection::Codex);
+        app.new_task_ui.draft.harness = Some(Runner::Codex);
         open_pill(&mut app, PillId::Model);
         let items = app
             .new_task_ui
@@ -2145,7 +1994,7 @@ mod tests {
                 connected_provider(Runner::Codex),
             ],
         });
-        app.new_task_ui.draft.runner = Some(RunnerSelection::Codex);
+        app.new_task_ui.draft.harness = Some(Runner::Codex);
         open_pill(&mut app, PillId::Model);
         assert_eq!(
             app.new_task_ui
@@ -2181,7 +2030,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_runner_does_not_request_a_non_discovery_claude_catalog() {
+    fn a_legacy_auto_default_does_not_request_a_non_discovery_claude_catalog() {
         let mut app = app_with_new_task("t-auto-model");
         app.new_task_ui.data.provider_status = Some(ProviderStatusResponse {
             providers: vec![
@@ -2189,8 +2038,11 @@ mod tests {
                 connected_provider(Runner::Codex),
             ],
         });
+        // A stored `auto` default collapses to Claude rather than resurrecting routing.
         app.new_task_ui.data.config = Some(ComposerConfig {
-            default_runner: RunnerSelection::Auto,
+            default_harness: new_task_form::harness_from_selection(
+                coducktor_contract::RunnerSelection::Auto,
+            ),
             ..ComposerConfig::default()
         });
         app.pending.clear();
@@ -2203,19 +2055,21 @@ mod tests {
     }
 
     #[test]
-    fn runner_picker_offers_auto_before_connected_providers() {
+    fn harness_picker_lists_only_connected_providers() {
         let data = NewTaskData {
             provider_status: Some(ProviderStatusResponse {
                 providers: vec![connected_provider(Runner::Codex)],
             }),
             ..NewTaskData::default()
         };
-        let items = runner_picker_items(&data);
+        let items = harness_picker_items(&data);
         assert_eq!(
-            items.first().map(|item| item.value.as_str()),
-            Some("runner:auto")
+            items
+                .iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["harness:codex"]
         );
-        assert!(items.iter().any(|item| item.value == "runner:codex"));
     }
 
     #[test]
@@ -2223,7 +2077,7 @@ mod tests {
         let mut app = app_with_new_task("t-layout");
         let content = render(&mut app, 80, 24);
         assert!(
-            content.contains("autonomous"),
+            content.contains("git:"),
             "pill row must not clip its final field"
         );
         assert!(
@@ -2234,25 +2088,21 @@ mod tests {
     }
 
     #[test]
-    fn the_source_pill_picker_selects_a_skill_into_the_draft() {
+    fn the_skills_pill_picker_attaches_a_skill_to_the_draft() {
         let mut app = app_with_new_task("t-7");
-        open_pill(&mut app, PillId::Source);
+        open_pill(&mut app, PillId::Skills);
         assert!(app.new_task_ui.picker.is_some());
-        app.new_task_ui
-            .picker
-            .as_mut()
-            .unwrap()
-            .picker_mut()
-            .selected = 2;
         let kind = app.new_task_ui.picker.clone().unwrap();
-        let value = kind.picker().items[2].value.clone();
-        apply_pick(&mut app, PillId::Source, &value);
-        assert_eq!(
-            app.new_task_ui.draft.source,
-            Some(coducktor_contract::TaskSource::Skill {
-                reference: "om-fix".to_owned(),
-            })
-        );
+        let value = kind
+            .picker()
+            .items
+            .iter()
+            .find(|item| item.value == "skill:om-fix")
+            .expect("om-fix is offered")
+            .value
+            .clone();
+        apply_pick(&mut app, PillId::Skills, &value);
+        assert_eq!(app.new_task_ui.draft.skills, vec!["om-fix".to_owned()]);
     }
 
     #[test]
@@ -2265,7 +2115,7 @@ mod tests {
         assert!(
             app.pending
                 .iter()
-                .any(|action| matches!(action, PendingAction::StartRun { .. }))
+                .any(|action| matches!(action, PendingAction::CreateConversation { .. }))
         );
 
         // The workspace run event carries the queued run, and the shell's own task list picks it

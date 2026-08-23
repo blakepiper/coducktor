@@ -5,42 +5,11 @@
 //! cockpit) lives on `App::new_task_drafts` — see `screens::new_task::sync_draft`.
 
 use coducktor_contract::{
-    ConfigResponse, CreateRunInput, CreateRunInputBase, CreateRunResponse, ImageInput,
-    ProjectComposerDefaults, ProviderConnectionState, ProviderStatusResponse, ReasoningEffort,
-    Runner, RunnerModelCatalogResponse, RunnerModels, RunnerSelection, Skill, TaskSource,
-    WorkflowDef, WorkflowStepDef, runner_discovers_models,
+    ConfigResponse, ConversationGitMode, ConversationSkillSelection, CreateConversationInput,
+    ImageInput, ProjectComposerDefaults, ProviderConnectionState, ProviderStatusResponse,
+    ReasoningEffort, Runner, RunnerModelCatalogResponse, RunnerModels, RunnerSelection, Skill,
+    runner_discovers_models,
 };
-
-/// What the composer runs: the plain-task baseline, a named workflow, or a single skill.
-pub const BASELINE_SOURCE: TaskSource = TaskSource::Baseline;
-
-fn same_source(a: &TaskSource, b: &TaskSource) -> bool {
-    match (a, b) {
-        (TaskSource::Baseline, TaskSource::Baseline) => true,
-        (TaskSource::Skill { reference: a }, TaskSource::Skill { reference: b })
-        | (TaskSource::Workflow { reference: a }, TaskSource::Workflow { reference: b }) => a == b,
-        _ => false,
-    }
-}
-
-/// Prepend `source` to the recency list (newest first), dropping any earlier
-/// occurrence of the same source+ref, and cap the length.
-pub fn push_recent_source(
-    recent: Option<&[TaskSource]>,
-    source: TaskSource,
-    cap: usize,
-) -> Vec<TaskSource> {
-    let rest = recent
-        .unwrap_or(&[])
-        .iter()
-        .filter(|existing| !same_source(existing, &source))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut next = Vec::with_capacity(cap);
-    next.push(source);
-    next.extend(rest.into_iter().take(cap.saturating_sub(1)));
-    next
-}
 
 /// The agent-backend catalog in stable `RUNNERS` order.
 pub const RUNNERS: [Runner; 4] = [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi];
@@ -203,57 +172,21 @@ pub fn resolve_runner(picked: Option<Runner>, available: &[Runner], preferred: R
 
 /// `auto` is an authored policy, not a constructible backend. Preserve it for the
 /// composer; concrete picker consumers keep using `resolve_runner`.
-pub fn resolve_runner_selection(
-    picked: Option<RunnerSelection>,
-    available: &[Runner],
-    preferred: RunnerSelection,
-) -> RunnerSelection {
-    if picked == Some(RunnerSelection::Auto) {
-        return RunnerSelection::Auto;
-    }
-    if picked.is_none()
-        && preferred == RunnerSelection::Auto
-        && available.contains(&Runner::Claude)
-        && available.contains(&Runner::Codex)
-    {
-        return RunnerSelection::Auto;
-    }
-    let preferred_runner = selection_to_runner(preferred);
-    let resolved = resolve_runner(picked.map(selection_to_runner), available, preferred_runner);
-    runner_to_selection(resolved)
+/// A conversation's harness is concrete and immutable, so the composer resolves an exact
+/// runner: the user's pick when it is usable, else the configured default, else the first
+/// usable backend. There is no Auto choice to route or fail over.
+pub fn resolve_harness(picked: Option<Runner>, available: &[Runner], preferred: Runner) -> Runner {
+    resolve_runner(picked, available, preferred)
 }
 
-fn selection_to_runner(selection: RunnerSelection) -> Runner {
+/// Collapse a stored `RunnerSelection` default onto a concrete harness. Legacy configs may
+/// still say `auto`; the composer treats that as "no opinion" and falls back to Claude.
+pub fn harness_from_selection(selection: RunnerSelection) -> Runner {
     match selection {
-        RunnerSelection::Auto => Runner::Claude,
-        RunnerSelection::Claude => Runner::Claude,
+        RunnerSelection::Auto | RunnerSelection::Claude => Runner::Claude,
         RunnerSelection::Codex => Runner::Codex,
         RunnerSelection::OpenCode => Runner::OpenCode,
         RunnerSelection::Pi => Runner::Pi,
-    }
-}
-
-fn runner_to_selection(runner: Runner) -> RunnerSelection {
-    match runner {
-        Runner::Claude => RunnerSelection::Claude,
-        Runner::Codex => RunnerSelection::Codex,
-        Runner::OpenCode => RunnerSelection::OpenCode,
-        Runner::Pi => RunnerSelection::Pi,
-    }
-}
-
-/// The runner field shared by every NEW-run surface. Explicit/sticky intent always
-/// rides the request; only an untouched pick matching the active project's known
-/// default may be omitted.
-pub fn runner_override(
-    runner: RunnerSelection,
-    default_runner: Option<RunnerSelection>,
-    explicit: bool,
-) -> Option<RunnerSelection> {
-    if !explicit && Some(runner) == default_runner {
-        None
-    } else {
-        Some(runner)
     }
 }
 
@@ -364,158 +297,111 @@ fn reasoning_effort_id(effort: ReasoningEffort) -> &'static str {
     }
 }
 
-/// Whether a source still exists in the catalogs.
-pub fn source_exists(source: &TaskSource, skills: &[Skill], workflows: &[WorkflowDef]) -> bool {
-    match source {
-        TaskSource::Baseline => true,
-        TaskSource::Skill { reference } => {
-            reference == coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME
-                || skills.iter().any(|skill| skill.name == *reference)
-        }
-        TaskSource::Workflow { reference } => {
-            workflows.iter().any(|workflow| workflow.name == *reference)
-        }
-    }
+/// Whether an attached skill still exists in the discovered catalog.
+pub fn skill_exists(reference: &str, skills: &[Skill]) -> bool {
+    skills.iter().any(|skill| skill.name == reference)
 }
 
-/// The effective source: the first candidate that still exists, else the zero-config
-/// cold default: the plain-task baseline.
-pub fn resolve_source(
-    candidates: &[Option<TaskSource>],
-    skills: &[Skill],
-    workflows: &[WorkflowDef],
-) -> TaskSource {
-    for candidate in candidates {
-        if let Some(candidate) = candidate
-            && source_exists(candidate, skills, workflows)
-        {
-            return candidate.clone();
-        }
+/// Drop attachments whose skill has disappeared from the catalog, preserving the user's
+/// selection order. An empty catalog is treated as "not yet loaded" and left untouched so a
+/// slow discovery pass cannot silently clear a draft's attachments.
+pub fn retain_existing_skills(selected: &[String], skills: &[Skill]) -> Vec<String> {
+    if skills.is_empty() {
+        return selected.to_vec();
     }
-    TaskSource::Baseline
+    selected
+        .iter()
+        .filter(|reference| skill_exists(reference, skills))
+        .cloned()
+        .collect()
 }
 
-/// The assembled run-request options.
+/// The assembled conversation-request options. Harness, model, reasoning, branch, worktree,
+/// and Git mode become immutable conversation affinity; skills ride only this first message.
 #[derive(Debug, Clone)]
-pub struct CreateRunBodyOpts {
-    pub task: String,
-    pub source: TaskSource,
+pub struct CreateConversationOpts {
+    pub project_id: String,
+    pub text: String,
+    pub images: Vec<ImageInput>,
+    pub skills: Vec<String>,
+    pub harness: Runner,
     pub model: String,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub models_locked: bool,
-    pub runner: RunnerSelection,
-    pub runner_explicit: bool,
-    pub default_runner: Option<RunnerSelection>,
-    pub variants: u64,
-    pub images: Vec<ImageInput>,
-    /// Resolved worktree flag: `false` → run in the repo working tree (single runs only).
-    pub worktree: Option<bool>,
-    pub autonomous: bool,
-    /// Resolved automatic git commit/push flag for this run.
+    pub base_branch: Option<String>,
+    pub worktree: bool,
     pub git_auto: bool,
 }
 
-fn task_step(id: &str, name: &str, skill: Option<&str>) -> WorkflowStepDef {
-    WorkflowStepDef {
-        id: id.to_owned(),
-        name: Some(name.to_owned()),
-        prompt: Some("{{task}}".to_owned()),
-        skill: skill.map(ToOwned::to_owned),
-        model: None,
-        runner: None,
-        allowed_tools: None,
-        bash_allowlist: None,
-        command: None,
-        on_fail: None,
-    }
-}
-
-/// The exact run-request body the composer sends — built from
-/// `buildCreateRunBody`: a skill runs as a one-step inline chain; a workflow goes by
-/// name; `model`/`variants`/`images` only when they say something.
-pub fn build_create_run_body(opts: &CreateRunBodyOpts) -> CreateRunInput {
-    let (workflow, steps) = match &opts.source {
-        TaskSource::Baseline => (None, Some(vec![task_step("task", "execution", None)])),
-        TaskSource::Skill { reference } => (
-            None,
-            Some(vec![task_step("task", reference, Some(reference))]),
-        ),
-        TaskSource::Workflow { reference } => (Some(reference.clone()), None),
-    };
-    CreateRunInputBase {
-        workflow,
-        steps,
-        task: opts.task.clone(),
-        model: if opts.models_locked {
+/// The exact conversation-create body the composer sends. Empty picks are omitted rather than
+/// sent as blank strings so the harness applies its own default.
+pub fn build_create_conversation_input(opts: &CreateConversationOpts) -> CreateConversationInput {
+    CreateConversationInput {
+        project_id: opts.project_id.clone(),
+        text: opts.text.clone(),
+        images: opts.images.clone(),
+        skills: opts
+            .skills
+            .iter()
+            .map(|reference| ConversationSkillSelection {
+                id: reference.clone(),
+            })
+            .collect(),
+        harness: opts.harness,
+        model: if opts.models_locked || opts.model.is_empty() {
             None
         } else {
-            (!opts.model.is_empty()).then(|| opts.model.clone())
+            Some(opts.model.clone())
         },
-        reasoning_effort: opts
+        reasoning: opts
             .reasoning_effort
-            .filter(|effort| *effort != ReasoningEffort::Auto),
-        runner: runner_override(opts.runner, opts.default_runner, opts.runner_explicit),
-        agent_profile: None,
-        variants: (opts.variants > 1).then_some(opts.variants as f64),
-        worktree: match opts.worktree {
-            Some(false) if opts.variants <= 1 => Some(false),
-            _ => None,
-        },
-        autonomous: opts.autonomous.then_some(true),
-        git_auto: opts.git_auto.then_some(true),
-        system_prompt: match &opts.source {
-            TaskSource::Skill { reference }
-                if reference == coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME =>
-            {
-                Some(coducktor_core::skills::BUILT_IN_PLANNING_SKILL_BODY.to_owned())
-            }
-            _ => None,
-        },
-        images: if opts.images.is_empty() {
-            None
+            .filter(|effort| *effort != ReasoningEffort::Auto)
+            .map(|effort| reasoning_effort_id(effort).to_owned()),
+        base_branch: opts
+            .base_branch
+            .as_ref()
+            .filter(|branch| !branch.is_empty())
+            .cloned(),
+        worktree: opts.worktree,
+        git_mode: if opts.git_auto {
+            ConversationGitMode::Auto
         } else {
-            Some(opts.images.clone())
+            ConversationGitMode::Manual
         },
     }
 }
 
-/// Where a successful start navigates: the run's thread — for ×2/×3 the first variant's thread.
-pub fn started_run_id(response: &CreateRunResponse) -> Option<String> {
-    match response {
-        CreateRunResponse::Single(record) => Some(record.id.clone()),
-        CreateRunResponse::Group { runs } => runs.first().map(|record| record.id.clone()),
-    }
+/// Where a successful create navigates: the new conversation's thread.
+pub fn started_conversation_id(response: &coducktor_contract::CreateConversationResponse) -> String {
+    response.conversation.id.clone()
 }
 
-/// Resolve run-mode values once, in precedence order: hard constraints, explicit
-/// draft choices, an interactive-skill worktree recommendation, then configured
-/// defaults (the port of `resolveComposerRunMode`).
-pub fn resolve_composer_run_mode(
+/// Resolve the worktree and Git-mode pair in precedence order: hard constraints first, then
+/// the explicit draft choice, then configured defaults. Section 5.2 ties the two together —
+/// Git auto requires a managed worktree, and turning the worktree off downgrades Git to
+/// manual — so they are resolved together rather than independently.
+pub fn resolve_composer_git_mode(
     has_git: bool,
-    variants: u64,
     explicit_worktree: Option<bool>,
-    interactive: bool,
-    configured_autonomous: Option<bool>,
+    explicit_git_auto: Option<bool>,
     configured_worktree: bool,
+    configured_git_auto: bool,
 ) -> (bool, bool) {
-    let autonomous = configured_autonomous.unwrap_or(true);
-    let worktree = if !has_git {
-        false
-    } else if variants > 1 {
-        true
-    } else {
-        explicit_worktree
-            .or_else(|| (interactive).then_some(false))
-            .unwrap_or(configured_worktree)
-    };
-    (autonomous, worktree)
+    if !has_git {
+        return (false, false);
+    }
+    let worktree = explicit_worktree.unwrap_or(configured_worktree);
+    let git_auto = explicit_git_auto.unwrap_or(configured_git_auto);
+    // Git auto is deterministic post-turn work on a managed checkout; without a worktree it
+    // would commit into the user's own working tree.
+    (worktree, git_auto && worktree)
 }
 
 /// The config a project contributes to the composer's effective values.
 #[derive(Debug, Clone)]
 pub struct ComposerConfig {
     pub base_branch: Option<String>,
-    pub default_runner: RunnerSelection,
+    pub default_harness: Runner,
     pub default_models: RunnerModels,
     pub composer_defaults: Option<ProjectComposerDefaults>,
     pub models_locked: bool,
@@ -525,7 +411,7 @@ impl Default for ComposerConfig {
     fn default() -> Self {
         Self {
             base_branch: None,
-            default_runner: RunnerSelection::Claude,
+            default_harness: Runner::Claude,
             default_models: RunnerModels::default(),
             composer_defaults: None,
             models_locked: false,
@@ -537,7 +423,7 @@ impl ComposerConfig {
     pub fn from_config(config: &ConfigResponse) -> Self {
         Self {
             base_branch: config.base_branch.clone(),
-            default_runner: config.default_runner,
+            default_harness: harness_from_selection(config.default_runner),
             default_models: config.default_models.clone(),
             composer_defaults: config.composer_defaults.clone(),
             models_locked: config.models_locked,
@@ -547,40 +433,19 @@ impl ComposerConfig {
 
 /// The per-project new-task draft (port of `NewTaskDraft`). `None` fields mean
 /// "the user has not chosen" — the form falls back to persisted/last-used/defaults.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct NewTaskDraft {
     pub text: String,
-    pub source: Option<TaskSource>,
-    pub runner: Option<RunnerSelection>,
+    /// Skill names attached to this message. Skills are additive per message rather than a
+    /// mutually exclusive task source, so zero or more may be selected.
+    pub skills: Vec<String>,
+    pub harness: Option<Runner>,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
-    pub variants: u64,
-    /// Distinguishes an explicit ×1 choice from the untouched draft so a workspace default
-    /// greater than one can seed a fresh composer without preventing the user from choosing ×1.
-    pub variants_explicit: bool,
     pub worktree: Option<bool>,
-    /// TUI-only override: pin autonomous on/off; `None` follows the workspace default.
-    pub autonomous: Option<bool>,
     /// TUI-only override: pin automatic git commit/push on/off; `None` follows the workspace
     /// default.
     pub git_auto: Option<bool>,
-}
-
-impl Default for NewTaskDraft {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            source: None,
-            runner: None,
-            model: None,
-            reasoning_effort: None,
-            variants: 1,
-            variants_explicit: false,
-            worktree: None,
-            autonomous: None,
-            git_auto: None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -595,28 +460,6 @@ mod tests {
             body: String::new(),
             path: format!("/skills/{name}.md"),
             source,
-        }
-    }
-
-    fn workflow(name: &str) -> WorkflowDef {
-        WorkflowDef {
-            name: name.to_owned(),
-            description: None,
-            steps: Vec::new(),
-            source: coducktor_contract::WorkflowSource::BuiltIn,
-            path: None,
-        }
-    }
-
-    fn source(kind: &str, ref_: &str) -> TaskSource {
-        match kind {
-            "skill" => TaskSource::Skill {
-                reference: ref_.to_owned(),
-            },
-            "workflow" => TaskSource::Workflow {
-                reference: ref_.to_owned(),
-            },
-            _ => TaskSource::Baseline,
         }
     }
 
@@ -675,18 +518,6 @@ mod tests {
         assert_eq!(
             resolve_runner(None, &[Runner::Codex, Runner::OpenCode], Runner::Claude),
             Runner::Codex
-        );
-    }
-
-    #[test]
-    fn resolve_runner_selection_preserves_an_untouched_auto_default() {
-        assert_eq!(
-            resolve_runner_selection(
-                None,
-                &[Runner::Claude, Runner::Codex],
-                RunnerSelection::Auto
-            ),
-            RunnerSelection::Auto
         );
     }
 
@@ -825,254 +656,150 @@ mod tests {
     }
 
     #[test]
-    fn resolve_source_takes_the_first_existing_candidate_then_defaults_to_baseline() {
-        let skills = vec![skill("om-fix", coducktor_contract::SkillSource::Ai)];
-        let workflows = vec![workflow("quick-task")];
+    fn attachments_drop_only_skills_that_disappeared_from_a_loaded_catalog() {
+        let catalog = vec![
+            skill("review", coducktor_contract::SkillSource::Agents),
+            skill("triage", coducktor_contract::SkillSource::Global),
+        ];
+        let selected = vec!["review".to_owned(), "gone".to_owned(), "triage".to_owned()];
         assert_eq!(
-            resolve_source(
-                &[
-                    Some(source("skill", "gone")),
-                    Some(source("workflow", "quick-task"))
-                ],
-                &skills,
-                &workflows,
-            ),
-            source("workflow", "quick-task")
+            retain_existing_skills(&selected, &catalog),
+            vec!["review".to_owned(), "triage".to_owned()],
+            "selection order survives the filter"
         );
         assert_eq!(
-            resolve_source(&[], &skills, &workflows),
-            TaskSource::Baseline
+            retain_existing_skills(&selected, &[]),
+            selected,
+            "an unloaded catalog must not silently clear a draft"
         );
-        assert_eq!(resolve_source(&[], &[], &[]), TaskSource::Baseline);
-        assert!(!source_exists(
-            &source("skill", "quick-task"),
-            &skills,
-            &workflows
-        ));
-        assert!(!source_exists(
-            &source("workflow", "om-fix"),
-            &skills,
-            &workflows
-        ));
-        assert!(source_exists(&TaskSource::Baseline, &[], &[]));
-        assert!(source_exists(
-            &source(
-                "skill",
-                coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME
-            ),
-            &[],
-            &[]
-        ));
     }
 
-    fn base_opts() -> CreateRunBodyOpts {
-        CreateRunBodyOpts {
-            task: "do the thing".to_owned(),
-            source: TaskSource::Baseline,
+    #[test]
+    fn harness_resolution_is_concrete_and_never_auto() {
+        let available = [Runner::Codex, Runner::Pi];
+        assert_eq!(
+            resolve_harness(Some(Runner::Pi), &available, Runner::Codex),
+            Runner::Pi,
+            "an installed pick wins"
+        );
+        assert_eq!(
+            resolve_harness(Some(Runner::Claude), &available, Runner::Codex),
+            Runner::Codex,
+            "an unavailable pick falls back to the configured default"
+        );
+        assert_eq!(
+            harness_from_selection(RunnerSelection::Auto),
+            Runner::Claude,
+            "a legacy auto default collapses to a concrete harness"
+        );
+        assert_eq!(
+            harness_from_selection(RunnerSelection::OpenCode),
+            Runner::OpenCode
+        );
+    }
+
+    fn base_opts() -> CreateConversationOpts {
+        CreateConversationOpts {
+            project_id: "proj".to_owned(),
+            text: "ship the login fix".to_owned(),
+            images: Vec::new(),
+            skills: Vec::new(),
+            harness: Runner::Claude,
             model: String::new(),
             reasoning_effort: None,
             models_locked: false,
-            runner: RunnerSelection::Claude,
-            runner_explicit: false,
-            default_runner: Some(RunnerSelection::Claude),
-            variants: 1,
-            images: Vec::new(),
-            worktree: None,
-            autonomous: false,
+            base_branch: Some("main".to_owned()),
+            worktree: true,
             git_auto: false,
         }
     }
 
     #[test]
-    fn baseline_source_builds_a_plain_one_step_chain() {
-        let body = build_create_run_body(&base_opts());
-        let json = serde_json::to_value(&body).unwrap();
+    fn a_plain_message_sends_only_its_exact_text_and_affinity() {
+        let input = build_create_conversation_input(&base_opts());
+        assert_eq!(input.project_id, "proj");
+        assert_eq!(input.text, "ship the login fix");
+        assert_eq!(input.harness, Runner::Claude);
+        assert!(input.skills.is_empty());
+        assert_eq!(input.model, None, "auto omits the model flag");
+        assert_eq!(input.reasoning, None);
+        assert_eq!(input.base_branch.as_deref(), Some("main"));
+        assert!(input.worktree);
+        assert_eq!(input.git_mode, ConversationGitMode::Manual);
+    }
+
+    #[test]
+    fn skills_ride_the_message_as_ordered_attachments() {
+        let mut opts = base_opts();
+        opts.skills = vec!["review".to_owned(), "triage".to_owned()];
+        let input = build_create_conversation_input(&opts);
         assert_eq!(
-            json,
-            serde_json::json!({
-                "task": "do the thing",
-                "steps": [{ "id": "task", "name": "execution", "prompt": "{{task}}" }],
-            })
+            input
+                .skills
+                .iter()
+                .map(|selection| selection.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["review", "triage"]
         );
     }
 
     #[test]
-    fn built_in_planning_source_sends_its_planning_instructions() {
+    fn explicit_model_and_reasoning_are_sent_but_auto_and_locked_are_omitted() {
         let mut opts = base_opts();
-        opts.source = source(
-            "skill",
-            coducktor_core::skills::BUILT_IN_PLANNING_SKILL_NAME,
-        );
-        let body = build_create_run_body(&opts);
-        let json = serde_json::to_value(&body).unwrap();
-        assert_eq!(
-            json["steps"],
-            serde_json::json!([{
-                "id": "task",
-                "name": "planning",
-                "skill": "planning",
-                "prompt": "{{task}}"
-            }])
-        );
-        assert_eq!(
-            json["systemPrompt"],
-            coducktor_core::skills::BUILT_IN_PLANNING_SKILL_BODY
-        );
-    }
-
-    #[test]
-    fn workflow_source_sends_workflow_by_name_and_omits_defaults() {
-        let mut opts = base_opts();
-        opts.source = source("workflow", "quick-task");
-        let body = build_create_run_body(&opts);
-        let json = serde_json::to_value(&body).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({ "task": "do the thing", "workflow": "quick-task" })
-        );
-    }
-
-    #[test]
-    fn skill_source_builds_the_inline_skill_chain() {
-        let mut opts = base_opts();
-        opts.source = source("skill", "om-fix");
-        opts.model = "sonnet".to_owned();
-        opts.default_runner = Some(RunnerSelection::Codex);
-        let body = build_create_run_body(&opts);
-        let json = serde_json::to_value(&body).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "task": "do the thing",
-                "steps": [{ "id": "task", "name": "om-fix", "skill": "om-fix", "prompt": "{{task}}" }],
-                "model": "sonnet",
-                "runner": "claude",
-            })
-        );
-    }
-
-    #[test]
-    fn explicit_reasoning_is_sent_but_auto_is_omitted() {
-        let mut opts = base_opts();
-        assert!(build_create_run_body(&opts).reasoning_effort.is_none());
+        opts.model = "opus".to_owned();
         opts.reasoning_effort = Some(ReasoningEffort::High);
+        let input = build_create_conversation_input(&opts);
+        assert_eq!(input.model.as_deref(), Some("opus"));
+        assert_eq!(input.reasoning.as_deref(), Some("high"));
+
+        opts.reasoning_effort = Some(ReasoningEffort::Auto);
+        assert_eq!(build_create_conversation_input(&opts).reasoning, None);
+
+        opts.models_locked = true;
+        assert_eq!(build_create_conversation_input(&opts).model, None);
+    }
+
+    #[test]
+    fn git_auto_rides_as_the_conversations_git_mode() {
+        let mut opts = base_opts();
+        opts.git_auto = true;
         assert_eq!(
-            build_create_run_body(&opts).reasoning_effort,
-            Some(ReasoningEffort::High)
+            build_create_conversation_input(&opts).git_mode,
+            ConversationGitMode::Auto
         );
     }
 
     #[test]
-    fn runner_is_omitted_only_when_untouched_and_equal_to_the_default() {
+    fn images_ride_along_with_the_first_message() {
         let mut opts = base_opts();
-        opts.runner = RunnerSelection::Codex;
-        opts.default_runner = Some(RunnerSelection::Codex);
-        assert!(build_create_run_body(&opts).runner.is_none());
-        opts.runner_explicit = true;
-        assert_eq!(
-            build_create_run_body(&opts).runner,
-            Some(RunnerSelection::Codex)
-        );
-        opts.runner_explicit = false;
-        opts.default_runner = Some(RunnerSelection::Claude);
-        assert_eq!(
-            build_create_run_body(&opts).runner,
-            Some(RunnerSelection::Codex)
-        );
-    }
-
-    #[test]
-    fn worktree_false_is_sent_only_for_a_single_run() {
-        let mut opts = base_opts();
-        opts.worktree = Some(false);
-        assert_eq!(build_create_run_body(&opts).worktree, Some(false));
-        opts.worktree = Some(true);
-        assert!(build_create_run_body(&opts).worktree.is_none());
-        opts.worktree = Some(false);
-        opts.variants = 2;
-        assert!(build_create_run_body(&opts).worktree.is_none());
-    }
-
-    #[test]
-    fn variants_and_images_ride_along() {
-        let mut opts = base_opts();
-        opts.source = source("workflow", "quick-task");
-        opts.variants = 3;
         opts.images = vec![ImageInput {
             media_type: "image/png".to_owned(),
-            data: "aGk=".to_owned(),
+            data: "abc".to_owned(),
         }];
-        let body = build_create_run_body(&opts);
-        assert_eq!(body.variants, Some(3.0));
-        assert_eq!(body.images, Some(opts.images.clone()));
+        assert_eq!(build_create_conversation_input(&opts).images.len(), 1);
     }
 
     #[test]
-    fn started_run_id_selects_the_first_variant() {
-        let single = CreateRunResponse::Single(Box::new(coducktor_contract::RunRecord {
-            id: "r1".to_owned(),
-            ..coducktor_contract::RunRecord::default()
-        }));
-        assert_eq!(started_run_id(&single).as_deref(), Some("r1"));
-        let group = CreateRunResponse::Group {
-            runs: vec![
-                coducktor_contract::RunRecord {
-                    id: "v-a".to_owned(),
-                    ..Default::default()
-                },
-                coducktor_contract::RunRecord {
-                    id: "v-b".to_owned(),
-                    ..Default::default()
-                },
-            ],
-        };
-        assert_eq!(started_run_id(&group).as_deref(), Some("v-a"));
-    }
-
-    #[test]
-    fn push_recent_source_dedups_same_source_and_caps() {
-        let a = source("skill", "a");
-        let b = source("skill", "b");
-        let after = push_recent_source(Some(&[a.clone(), b.clone()]), b.clone(), 24);
-        assert_eq!(after, vec![b.clone(), a.clone()]);
-        let seed: Vec<TaskSource> = (0..24)
-            .map(|index| source("skill", &format!("k{index}")))
-            .collect();
-        let after = push_recent_source(Some(&seed), source("skill", "new"), 24);
-        assert_eq!(after.len(), 24);
-        assert_eq!(after[0], source("skill", "new"));
-        assert_eq!(after[23], source("skill", "k22"));
+    fn git_auto_never_survives_without_a_managed_worktree() {
+        // Explicit worktree off downgrades an explicit git auto rather than committing into
+        // the user's own checkout.
         assert_eq!(
-            push_recent_source(None, source("skill", "a"), 24),
-            vec![source("skill", "a")]
+            resolve_composer_git_mode(true, Some(false), Some(true), true, false),
+            (false, false)
         );
-    }
-
-    #[test]
-    fn resolve_composer_run_mode_follows_the_precedence_order() {
         assert_eq!(
-            resolve_composer_run_mode(true, 1, None, false, None, true),
+            resolve_composer_git_mode(true, Some(true), Some(true), false, false),
             (true, true)
         );
         assert_eq!(
-            resolve_composer_run_mode(false, 1, None, false, None, true),
-            (true, false)
+            resolve_composer_git_mode(true, None, None, true, true),
+            (true, true),
+            "configured defaults apply when the draft is untouched"
         );
         assert_eq!(
-            resolve_composer_run_mode(true, 3, None, false, None, true),
-            (true, true)
-        );
-        assert_eq!(
-            resolve_composer_run_mode(true, 1, Some(false), false, None, true),
-            (true, false)
-        );
-        assert_eq!(
-            resolve_composer_run_mode(true, 1, None, true, None, true),
-            (true, false)
-        );
-        assert_eq!(
-            resolve_composer_run_mode(true, 1, None, false, Some(false), true),
-            (false, true)
+            resolve_composer_git_mode(false, Some(true), Some(true), true, true),
+            (false, false),
+            "a non-Git project has neither a worktree nor automatic commits"
         );
     }
 }

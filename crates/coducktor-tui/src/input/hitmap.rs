@@ -71,17 +71,15 @@ pub enum WorkflowAction {
     Delete,
 }
 
-/// A new-task screen control (a pill, a button, or the composer).
+/// A New Chat screen control (a pill, a button, or the composer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewTaskAction {
-    SourcePill,
-    RunnerPill,
+    HarnessPill,
     ModelPill,
     ReasoningPill,
-    VariantsPill,
+    SkillsPill,
     BasePill,
     WorktreePill,
-    AutonomousPill,
     GitModePill,
     Compose,
 }

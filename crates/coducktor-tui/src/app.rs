@@ -695,6 +695,16 @@ pub enum PendingAction {
         project: String,
         input: coducktor_contract::CreateRunInput,
     },
+    /// Create a conversation from an already-assembled New Chat body. Like `StartRun`, this
+    /// only durably queues the first turn; `ActivateConversations` opens the provider.
+    CreateConversation {
+        project: String,
+        input: coducktor_contract::CreateConversationInput,
+    },
+    /// Release queued conversation turns once the route has installed its live listener.
+    ActivateConversations {
+        project: String,
+    },
     /// Release accepted queued work only after the thread route has installed its live listener.
     ActivateRuns {
         project: String,

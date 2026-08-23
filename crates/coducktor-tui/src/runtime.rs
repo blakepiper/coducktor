@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use coducktor_client::{Engine, EngineEvent, InProcessEngine, Scope, Topic};
-use coducktor_contract::{ApiRun, BackendCheckName, TaskSource};
+use coducktor_contract::{ApiRun, BackendCheckName};
 use coducktor_core::paths::ProcessEnv;
 use coducktor_core::workspace::migrations::run_migrations;
 use crossterm::event::{self, Event, MouseEventKind};
@@ -227,6 +227,14 @@ enum BackgroundResult {
     StartRun {
         project: String,
         result: Result<coducktor_contract::CreateRunResponse, coducktor_client::EngineError>,
+    },
+    CreateConversation {
+        project: String,
+        result:
+            Result<coducktor_contract::CreateConversationResponse, coducktor_client::EngineError>,
+    },
+    ActivateConversations {
+        result: Result<(), coducktor_client::EngineError>,
     },
     ActivateRuns {
         result: Result<(), coducktor_client::EngineError>,
@@ -754,14 +762,9 @@ fn apply_launch_args(app: &mut App, cli: &Cli) {
         }
     }
     if cli.workflow.is_some() || cli.model.is_some() {
-        if let Some(workflow) = &cli.workflow {
-            if cli::workflow_known(&app.new_task_ui.data.workflows, workflow) {
-                app.new_task_ui.draft.source = Some(TaskSource::Workflow {
-                    reference: workflow.clone(),
-                });
-            } else {
-                app.notice = Some(format!("workflow {workflow:?} not found for this project"));
-            }
+        if cli.workflow.is_some() {
+            app.notice =
+                Some("--workflow is no longer supported — start a chat instead".to_owned());
         }
         if let Some(model) = &cli.model {
             app.new_task_ui.draft.model = Some(model.clone());
@@ -913,6 +916,26 @@ fn execute_pending(
                     background_sender,
                     async move { engine_for_task.start_run(&scope, input).await },
                     move |result| BackgroundResult::StartRun { project, result },
+                );
+            }
+            PendingAction::CreateConversation { project, input } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move { engine_for_task.create_conversation(&scope, input).await },
+                    move |result| BackgroundResult::CreateConversation { project, result },
+                );
+            }
+            PendingAction::ActivateConversations { project } => {
+                let scope = Scope::Project(project);
+                let engine_for_task = engine.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move { engine_for_task.activate_conversations(&scope).await },
+                    |result| BackgroundResult::ActivateConversations { result },
                 );
             }
             PendingAction::ActivateRuns { project } => {
@@ -2306,6 +2329,39 @@ fn apply_started_run(
     }
 }
 
+/// Reconcile a New Chat create. The conversation owns the queued first turn, so the composer's
+/// draft is spent only once the engine has durably accepted it.
+fn apply_created_conversation(
+    app: &mut App,
+    project: String,
+    result: Result<coducktor_contract::CreateConversationResponse, coducktor_client::EngineError>,
+    starts_in_flight: &mut HashSet<String>,
+) {
+    starts_in_flight.remove(&project);
+    match result {
+        Ok(response) => {
+            app.pending_start_drafts.remove(&project);
+            app.pending_start_composers.remove(&project);
+            app.pending.push(PendingAction::ActivateConversations {
+                project: project.clone(),
+            });
+            screens::new_task::clear_draft(app);
+            app.queue_pending(PendingAction::RefreshTasks {
+                project: project.clone(),
+            });
+            if matches!(app.route(), app::Route::GlobalTasks) {
+                app.queue_pending(PendingAction::RefreshIndex);
+            }
+            app.request_navigate(app::Route::Tasks { project });
+            app.notice = Some(format!("started {}", response.conversation.title));
+        }
+        Err(error) => {
+            screens::new_task::restore_start_draft(app, &project);
+            app.notice = Some(format!("start failed: {error}"));
+        }
+    }
+}
+
 fn drain_background_results(
     receiver: &BackgroundReceiver<BackgroundResult>,
     app: &mut App,
@@ -2324,6 +2380,14 @@ fn drain_background_results(
             BackgroundResult::AppUpdate(update) => update(app),
             BackgroundResult::StartRun { project, result } => {
                 apply_started_run(app, project, result, starts_in_flight);
+            }
+            BackgroundResult::CreateConversation { project, result } => {
+                apply_created_conversation(app, project, result, starts_in_flight);
+            }
+            BackgroundResult::ActivateConversations { result } => {
+                if let Err(error) = result {
+                    app.notice = Some(format!("start failed: {error}"));
+                }
             }
             BackgroundResult::ActivateRuns { result } => {
                 if let Err(error) = result {
@@ -2860,7 +2924,15 @@ fn drain_background_results(
                 }
                 match result {
                     Ok(response) => {
-                        if let Some(id) = new_task_form::started_run_id(&response) {
+                        let started = match &response {
+                            coducktor_contract::CreateRunResponse::Single(run) => {
+                                Some(run.id.clone())
+                            }
+                            coducktor_contract::CreateRunResponse::Group { runs } => {
+                                runs.first().map(|run| run.id.clone())
+                            }
+                        };
+                        if let Some(id) = started {
                             app.github_ui.queued = Some(id);
                         }
                         app.pending.push(PendingAction::ActivateRuns {
