@@ -598,10 +598,21 @@ impl InProcessEngine {
         // Conversation turns hold their tokens inside their own manager, so signal every open
         // project's in-flight turns — otherwise a confirmed quit abandons a live harness
         // process instead of asking it to stop.
+        //
+        // Parked sessions need the same treatment for a different reason: they belong to idle
+        // conversations, so no worker is going to end them, and each one is still a live child
+        // process. They are collected under the lock and closed outside it, because closing one
+        // waits on a process.
+        let mut parked = Vec::new();
         if let Ok(managers) = self.conversations.lock() {
             for entry in managers.values() {
-                entry.manager.lock().request_shutdown();
+                let mut manager = entry.manager.lock();
+                manager.request_shutdown();
+                parked.extend(manager.take_parked_sessions());
             }
+        }
+        for mut session in parked {
+            session.cancel();
         }
         let deadline = Instant::now() + grace;
         loop {

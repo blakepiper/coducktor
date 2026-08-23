@@ -879,6 +879,19 @@ impl ConversationManager {
         }
     }
 
+    /// Hand back every parked provider session so the caller can close them outside whichever
+    /// mutex owns this manager.
+    ///
+    /// A parked session is a live child process. Nothing else takes it: an idle conversation
+    /// keeps its session precisely so the next message can reuse it, so shutdown is the only
+    /// point at which they must all go.
+    pub fn take_parked_sessions(&mut self) -> Vec<Box<dyn ConversationSession + Send>> {
+        std::mem::take(&mut self.parked)
+            .into_values()
+            .map(|parked| parked.session)
+            .collect()
+    }
+
     fn require(&self, conversation_id: &str) -> io::Result<ConversationRecord> {
         self.conversations
             .get(conversation_id)
@@ -1969,7 +1982,38 @@ mod tests {
         drive_next(&mut manager, &factory);
     }
 
-    /// "Restart" here is Coducktor's own process restarting, not a session restart: ordinary
+    /// An idle conversation keeps its provider session parked so the next message can reuse it,
+    /// which means nothing else will ever end it. Shutdown has to.
+    #[test]
+    fn shutdown_hands_back_every_parked_session_to_be_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true), ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let first = manager.create(new_conversation("first")).unwrap();
+        drive_next(&mut manager, &factory);
+        let second = manager.create(new_conversation("second")).unwrap();
+        drive_next(&mut manager, &factory);
+        assert_eq!(
+            manager.parked.len(),
+            2,
+            "both sessions are parked and alive"
+        );
+
+        let mut parked = manager.take_parked_sessions();
+
+        assert_eq!(parked.len(), 2);
+        assert!(manager.parked.is_empty());
+        for session in parked.iter_mut() {
+            session.cancel();
+        }
+        assert_eq!(factory.counts.cancels.load(Ordering::SeqCst), 2);
+        // Taking the sessions is teardown, not a state change: both chats stay idle on disk.
+        for id in [first.id, second.id] {
+            assert_eq!(manager.get(&id).unwrap().state, ConversationState::Idle);
+        }
+    }
+
+    /// "Restart" here is Coducktor's own process restarting, not a session restart: ordinary    /// "Restart" here is Coducktor's own process restarting, not a session restart: ordinary
     /// resume must still rejoin the provider's session with no transcript replay at all.
     #[test]
     fn a_process_restart_resumes_provider_affinity_without_replaying_transcript() {

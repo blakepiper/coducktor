@@ -79,7 +79,22 @@ pub struct RunCommandOptions {
 
 pub async fn run_command(repo_root: PathBuf, options: RunCommandOptions) -> i32 {
     let engine = InProcessEngine::new(&repo_root, env!("CARGO_PKG_VERSION"));
-    run_command_with_engine(&engine, options).await
+    // Agents run in their own process group, so a Ctrl-C on this command reaches Coducktor and
+    // not them. Catching it here is what keeps that deliberate: the interrupt goes through the
+    // same shutdown a finished run uses, instead of leaving a live agent to notice that its
+    // stdin happened to close.
+    let code = tokio::select! {
+        code = run_command_with_engine(&engine, options) => code,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("\ninterrupted — stopping the harness");
+            130
+        }
+    };
+    // A turn that ends normally leaves its provider session parked and alive, because in the
+    // cockpit the next message reuses it. There is no next message here, so this command owns
+    // closing it — exactly as quitting the TUI does.
+    engine.shutdown(crate::runtime::ENGINE_SHUTDOWN_GRACE);
+    code
 }
 
 async fn run_command_with_engine(engine: &InProcessEngine, options: RunCommandOptions) -> i32 {

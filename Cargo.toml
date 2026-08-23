@@ -52,7 +52,7 @@ portable-pty = "0.9"
 vt100 = "0.15"
 # CLI argument parsing for the TUI binary.
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 async-trait = "0.1"
 futures-core = "0.3"

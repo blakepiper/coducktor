@@ -4,9 +4,17 @@
 //!
 //! Protocol semantics (what to write and how to interpret a line) stay in each backend; this
 //! module only owns the process itself.
+//!
+//! On Unix each child gets its own process group and every stop signal goes to that group. An
+//! agent CLI is often a launcher — `codex` is a Node script that spawns a vendored binary — so
+//! signalling the pid alone kills the launcher and leaves the real agent running, orphaned, with
+//! the write ends of these pipes still open. That both leaks the agent and makes the pipe readers
+//! unreadable-until-forever, which is why teardown also bounds how long it waits on them.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -32,8 +40,17 @@ pub struct SpawnConfig {
 
 /// A spawned agent-CLI child process: piped stdin, a background-thread-fed stdout line channel,
 /// and background-collected stderr.
+/// How long teardown waits for one pipe reader before abandoning it. A reader can only still be
+/// blocked here if something outside this child's process group holds the write end, which is not
+/// a thing teardown can fix — and a safety net that deadlocks is worse than one that gives up.
+const READER_JOIN_GRACE: Duration = Duration::from_millis(500);
+
 pub struct ChildProcess {
     child: Child,
+    /// The child's own pid, kept separately because signalling must stop once the child has been
+    /// reaped: `Child::id` would then name a pid the kernel is free to hand to someone else.
+    pid: u32,
+    reaped: bool,
     stdin: Option<ChildStdin>,
     stdout_rx: Receiver<String>,
     stdout_handle: Option<JoinHandle<()>>,
@@ -81,8 +98,14 @@ impl ChildProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Its own process group, so one signal reaches the launcher and whatever it spawned. It
+        // also keeps the cockpit's own terminal signals away from agents: Coducktor stops them
+        // deliberately, through cancellation, rather than by whatever hits the foreground group.
+        #[cfg(unix)]
+        command.process_group(0);
 
         let mut child = command.spawn()?;
+        let pid = child.id();
         let stdin = match child.stdin.take() {
             Some(stdin) => stdin,
             None => return Err(clean_up_missing_pipe(&mut child, "stdin")),
@@ -119,6 +142,8 @@ impl ChildProcess {
 
         Ok(Self {
             child,
+            pid,
+            reaped: false,
             stdin: Some(stdin),
             stdout_rx: rx,
             stdout_handle: Some(stdout_handle),
@@ -203,18 +228,40 @@ impl ChildProcess {
     }
 
     pub fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        match self.child.try_wait() {
+            Ok(Some(_)) => {
+                // `try_wait` reaps, so the pid is free for reuse from here on.
+                self.reaped = true;
+                true
+            }
+            _ => false,
+        }
     }
 
-    /// Send a graceful stop signal. On Unix this is a real SIGTERM (the CLI installs its own
-    /// handler and can act on it); `std::process::Child::kill` has no SIGTERM concept off Unix,
-    /// so non-Unix targets fall back to the same hard kill `signal_kill` uses — there is no
-    /// softer option there.
+    /// Signal the child's whole process group.
+    ///
+    /// Refuses once the child has been reaped: the pid would then name whichever process the
+    /// kernel handed it to next, and negating it would take out that process's entire group.
+    #[cfg(unix)]
+    fn signal_group(&mut self, signal: libc::c_int) {
+        if self.reaped {
+            return;
+        }
+        unsafe {
+            // The group first — that is the launcher plus the agent it really runs. The direct
+            // pid after it, in case this platform or spawn never established the group.
+            libc::kill(-(self.pid as libc::pid_t), signal);
+            libc::kill(self.pid as libc::pid_t, signal);
+        }
+    }
+
+    /// Send a graceful stop signal. On Unix this is a real SIGTERM to the child's process group
+    /// (the CLI installs its own handler and can act on it); `std::process::Child::kill` has no
+    /// SIGTERM concept off Unix, so non-Unix targets fall back to the same hard kill
+    /// `signal_kill` uses — there is no softer option there.
     pub fn signal_term(&mut self) {
         #[cfg(unix)]
-        unsafe {
-            libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM);
-        }
+        self.signal_group(libc::SIGTERM);
         #[cfg(not(unix))]
         {
             let _ = self.child.kill();
@@ -222,6 +269,8 @@ impl ChildProcess {
     }
 
     pub fn signal_kill(&mut self) {
+        #[cfg(unix)]
+        self.signal_group(libc::SIGKILL);
         let _ = self.child.kill();
     }
 
@@ -243,17 +292,22 @@ impl ChildProcess {
     }
 
     pub fn wait_for_exit(&mut self) -> Option<i32> {
-        self.child.wait().ok().and_then(|status| status.code())
+        let status = self.child.wait().ok();
+        self.reaped = true;
+        status.and_then(|status| status.code())
     }
 
     /// The last (at most) three non-empty stderr lines, joined for an error message's detail
-    /// suffix. Blocks briefly on the stderr-collector thread if it hasn't finished yet — safe to
-    /// call once the child has already exited (its stderr pipe is then closed too).
+    /// suffix. Blocks briefly on the stderr-collector thread if it hasn't finished yet — normally
+    /// called once the child has already exited, so its stderr pipe is closed too. Bounded by
+    /// [`READER_JOIN_GRACE`] because an orphaned grandchild can hold that pipe open, and no error
+    /// message is worth wedging the caller for.
     pub fn take_stderr_tail(&mut self) -> String {
         let Some(handle) = self.stderr_handle.take() else {
             return String::new();
         };
-        let raw: String = handle.join().unwrap_or_default();
+        let raw: String =
+            join_within(handle, Instant::now() + READER_JOIN_GRACE).unwrap_or_default();
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return String::new();
@@ -284,23 +338,32 @@ impl ChildProcess {
         }
     }
 
-    fn join_readers(&mut self) {
+    /// Join both pipe readers, but never wait longer than [`READER_JOIN_GRACE`] on either.
+    ///
+    /// A reader is still blocked at this point only if a process outside this child's group holds
+    /// the write end open, which teardown cannot resolve. Abandoning the thread leaks one blocked
+    /// reader until the process exits; joining it unconditionally would hang teardown forever.
+    fn join_readers_bounded(&mut self) {
+        let deadline = Instant::now() + READER_JOIN_GRACE;
         if let Some(handle) = self.stdout_handle.take() {
-            let _ = handle.join();
+            join_within(handle, deadline);
         }
         if let Some(handle) = self.stdout_discard_handle.take() {
-            let _ = handle.join();
+            join_within(handle, deadline);
         }
-        let _ = self.take_stderr_tail();
+        if let Some(handle) = self.stderr_handle.take() {
+            join_within(handle, deadline);
+        }
     }
 }
 
 impl Drop for ChildProcess {
     /// A best-effort safety net, not a substitute for a backend's own `finish()`/`cancel()`: if
     /// this value is dropped while the child is still running — a panic unwinding past a normal
-    /// teardown call being the main way that happens — request a hard kill so the process doesn't
-    /// outlive the session that owned it. Once the child exits, reap it and join both pipe-reader
-    /// threads so repeated lifecycle churn cannot accumulate detached readers.
+    /// teardown call being the main way that happens — hard-kill its process group so neither the
+    /// child nor anything it spawned outlives the session that owned it. Then reap it and join
+    /// the pipe readers, bounded, so repeated lifecycle churn cannot accumulate detached readers
+    /// and one stuck reader cannot wedge the whole teardown.
     fn drop(&mut self) {
         if !self.has_exited() {
             self.signal_kill();
@@ -308,9 +371,22 @@ impl Drop for ChildProcess {
         }
         if self.has_exited() {
             let _ = self.wait_for_exit();
-            self.join_readers();
         }
+        self.join_readers_bounded();
     }
+}
+
+/// Join `handle` if it finishes before `deadline`, otherwise abandon it. Returns the thread's
+/// value only when it was actually joined.
+fn join_within<T>(handle: JoinHandle<T>, deadline: Instant) -> Option<T> {
+    while !handle.is_finished() {
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10).min(deadline - now));
+    }
+    handle.join().ok()
 }
 
 #[cfg(test)]
@@ -394,6 +470,120 @@ mod tests {
         .unwrap();
         drop(process);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    /// A launcher script that spawns the real agent and waits, mirroring how `codex` runs a
+    /// vendored binary. The grandchild inherits this process's stdout, so if teardown only
+    /// signals the direct child, the grandchild survives and holds the pipe open.
+    fn launcher_config() -> SpawnConfig {
+        SpawnConfig {
+            program: crate::test_node_program(),
+            args: vec![
+                "-e".to_owned(),
+                "const {spawn} = require('node:child_process'); \
+                 const child = spawn(process.execPath, ['-e', \
+                 \"console.log('grandchild ' + process.pid); setInterval(() => {}, 1000)\"], \
+                 {stdio: 'inherit'}); \
+                 child.on('exit', () => process.exit(0)); \
+                 setInterval(() => {}, 1000)"
+                    .to_owned(),
+            ],
+            eof_term_grace: Duration::from_millis(50),
+            eof_kill_grace: Duration::from_millis(50),
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_is_alive(pid: u32) -> bool {
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    /// The regression behind a hung `coducktor run --runner codex`: an agent CLI that is really a
+    /// launcher leaves a grandchild holding these pipes, so signalling the pid alone leaked the
+    /// agent and then deadlocked teardown on a reader that could never see EOF.
+    #[cfg(unix)]
+    #[test]
+    fn teardown_stops_a_grandchild_the_agent_launcher_spawned() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut process = ChildProcess::spawn(
+            &launcher_config(),
+            Runner::Codex,
+            dir.path(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let line = loop {
+            match process.next_line(Some(Instant::now() + Duration::from_secs(10))) {
+                Ok(NextLine::Line(line)) if line.starts_with("grandchild ") => break line,
+                Ok(NextLine::Line(_)) => continue,
+                Ok(NextLine::Closed) => panic!("the launcher exited before spawning"),
+                Err(TimedOut) => panic!("the launcher never reported its grandchild"),
+            }
+        };
+        let grandchild: u32 = line
+            .trim_start_matches("grandchild ")
+            .trim()
+            .parse()
+            .expect("the fixture prints its grandchild pid");
+        assert!(process_is_alive(grandchild));
+
+        let started = Instant::now();
+        drop(process);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "teardown must not block on a reader the grandchild holds open"
+        );
+        // The kill is delivered to the group; give the kernel a moment to reap both.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_is_alive(grandchild) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !process_is_alive(grandchild),
+            "the agent the launcher spawned must not outlive its session"
+        );
+    }
+
+    /// Teardown must stay bounded even when nothing it can signal holds the pipe: here an
+    /// unrelated process outside the child's group keeps the write end open forever.
+    #[cfg(unix)]
+    #[test]
+    fn teardown_abandons_a_reader_no_signal_can_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SpawnConfig {
+            program: crate::test_node_program(),
+            args: vec![
+                "-e".to_owned(),
+                // Hand this process's stdout to a fully detached grandchild, then exit.
+                "const {spawn} = require('node:child_process'); \
+                 spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], \
+                 {stdio: 'inherit', detached: true}).unref(); \
+                 process.exit(0)"
+                    .to_owned(),
+            ],
+            eof_term_grace: Duration::from_millis(50),
+            eof_kill_grace: Duration::from_millis(50),
+        };
+        let mut process = ChildProcess::spawn(
+            &config,
+            Runner::Codex,
+            dir.path(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(process.wait_exited_within(Duration::from_secs(10)));
+
+        let started = Instant::now();
+        drop(process);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "an unfreeable reader is abandoned, never waited on forever"
+        );
     }
 
     #[test]

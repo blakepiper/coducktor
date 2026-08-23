@@ -85,6 +85,14 @@ calling a provider turn, waiting for a child, or running Git. Cancellation is bo
 the provider process. Agent stdout and stderr are captured, never inherited by the cockpit
 terminal.
 
+Each agent child runs in its own process group and every stop signal goes to that group. An agent
+CLI is frequently a launcher that spawns the real binary, so signalling the pid alone would leave
+that binary running and holding the captured pipes. Teardown therefore also bounds how long it
+waits on a pipe reader: a reader still blocked at that point is held by something outside the
+group, which teardown cannot free and must not wait on. Because agents sit outside the cockpit's
+own group, Coducktor stops them deliberately — an idle conversation's parked session is closed at
+shutdown, and an interrupted headless run goes through that same shutdown.
+
 Missing executables, credentials, network access, catalogs, or optional writable state fail only
 the selected capability or turn. They must not prevent the cockpit or unrelated projects from
 opening.

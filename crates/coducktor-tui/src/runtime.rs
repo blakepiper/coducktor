@@ -40,7 +40,7 @@ const BACKGROUND_QUEUE_CAPACITY: usize = 128;
 /// cancellation token and exit on their own before the process moves on regardless. A worker
 /// blocked in `ChildProcess::next_line` reliably notices within tens of milliseconds; this only
 /// bounds the wait for one that never does.
-const ENGINE_SHUTDOWN_GRACE: Duration = Duration::from_millis(750);
+pub(crate) const ENGINE_SHUTDOWN_GRACE: Duration = Duration::from_millis(750);
 
 #[tokio::main]
 pub async fn entry() -> io::Result<()> {

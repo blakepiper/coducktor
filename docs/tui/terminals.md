@@ -53,7 +53,7 @@ and a throwaway Git repository.
 | Claude, managed worktree, autonomous tool use | Pass — ran `Bash` and wrote the requested file with no `--allowedTools` |
 | Claude, three turns in one chat (two interactive) | Pass — native resume, no duplicated output |
 | OpenCode, one turn via `run --format json --auto` | Pass — exact response, exit 0 |
-| Codex, one turn via app-server | Turn passes; see the known issue below |
+| Codex, one turn via app-server | Pass — exact response, exit 0, no leftover child |
 | pi | Still unavailable locally — `pi --list-models` reports no models and asks for `/login` |
 
 The worktree lifecycle was exercised end to end in the cockpit rather than only in tests:
@@ -65,13 +65,22 @@ The worktree lifecycle was exercised end to end in the cockpit rather than only 
 - unarchiving rebuilt the checkout from that branch with the committed file present; and
 - a further turn ran in the rebuilt checkout and read the restored file.
 
-### Known issue, not a regression
+### Fixed during this pass: a hung `coducktor run --runner codex`
 
-`coducktor run --runner codex` prints the harness's response and settles the chat to `idle`, but
-the command does not exit and leaves a `codex app-server` child reparented to init. The binary
-built from `23a05563` — before any of this work — behaves identically, so this is a pre-existing
-gap in the headless teardown path for Codex only. Claude and OpenCode exit 0 and leave no child.
-The interactive cockpit is unaffected; it has its own shutdown path.
+The first sweep found `coducktor run --runner codex` printing its response and settling the chat
+to `idle` without ever exiting, leaving a `codex app-server` child reparented to init. The binary
+built from `23a05563` behaved identically, so it predated this work. It is now fixed — agents run
+in their own process group, teardown signals that group, pipe-reader joins are bounded, and both
+the headless command and a Ctrl-C during one go through the same engine shutdown. Re-verified:
+
+| Harness | Headless run | Leftover agent process |
+| --- | --- | --- |
+| Claude | exit 0 in ~2s | none |
+| Codex | exit 0 in ~5s | none |
+| OpenCode | exit 0 in ~3s | none |
+
+`Ctrl-C` during a live Codex turn now prints `interrupted — stopping the harness`, exits 130, and
+leaves no `codex app-server` behind.
 
 ## Reproduction shape
 
