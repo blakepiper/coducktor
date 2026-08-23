@@ -1744,6 +1744,44 @@ fn send_ask_answer(app: &mut App, ask: &ThreadAsk) {
     if text.trim().is_empty() {
         return;
     }
+    // A conversation answers the exact pending request on the runner-owned path. This continues
+    // the still-pending provider turn rather than starting a second one, so it must never be
+    // delivered as an ordinary message (sections 4.4 and 7.2).
+    if let Some(record) = app.thread_ui.data.conversation().cloned() {
+        let answers = ask
+            .questions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, question)| {
+                let values = app
+                    .thread_ui
+                    .ask_selections
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_default();
+                let question_id = question.id.clone()?;
+                (!values.is_empty())
+                    .then_some(coducktor_contract::ConversationQuestionAnswer {
+                        question_id,
+                        values,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if answers.is_empty() {
+            app.notice = Some("choose an answer first".to_owned());
+            return;
+        }
+        app.pending
+            .push(PendingAction::AnswerConversationQuestion {
+                project: app.thread_ui.data.project.clone(),
+                id: record.id,
+                input: coducktor_contract::AnswerConversationQuestionInput {
+                    request_id: ask.id.clone(),
+                    answers,
+                },
+            });
+        return;
+    }
     let Some(run) = app.thread_ui.data.run().cloned() else {
         return;
     };
@@ -2144,6 +2182,42 @@ mod tests {
             "the composer explains why it is unavailable"
         );
         assert!(!submit_composer(&mut app, "unrelated".to_owned(), Vec::new()));
+    }
+
+    #[test]
+    fn answering_a_question_uses_the_runner_path_not_a_second_message() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::NeedsInput);
+        let ask = crate::screens::thread::reducer::ThreadAsk {
+            id: "req-7".to_owned(),
+            questions: vec![coducktor_protocol::ui_events::UiAskQuestion {
+                id: Some("library".to_owned()),
+                header: "Library".to_owned(),
+                question: "Which one?".to_owned(),
+                options: Vec::new(),
+                multi_select: Some(false),
+            }],
+            resolved: false,
+            answer: None,
+        };
+        app.thread_ui.ask_selections = vec![vec!["serde".to_owned()]];
+        app.pending.clear();
+
+        send_ask_answer(&mut app, &ask);
+
+        let Some(PendingAction::AnswerConversationQuestion { input, .. }) = app.pending.first()
+        else {
+            panic!("the answer travels the runner-owned path: {:?}", app.pending);
+        };
+        assert_eq!(input.request_id, "req-7");
+        assert_eq!(input.answers[0].question_id, "library");
+        assert_eq!(input.answers[0].values, vec!["serde".to_owned()]);
+        assert!(
+            !app.pending.iter().any(|action| matches!(
+                action,
+                PendingAction::SubmitConversationMessage { .. }
+            )),
+            "answering must not open a second provider turn"
+        );
     }
 
     #[test]
