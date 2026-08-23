@@ -20,7 +20,13 @@ not yet confirmed safe — see the remediation plan's evidence notes for what is
 | Question / permission | explicit JSON-RPC decline or durable park | `failed-and-denied` (headless answer seam unsupported) | `permission-request` (permission is explicitly declined; no provider wait) | the question half is handled runner-neutrally via the `DUCK:ASK` marker, tested by `coducktor-core`'s own `runs::ask` unit tests rather than a golden fixture here; the permission half is n/a — no interactive tool-approval RPC exists in pi's protocol |
 | Cancellation / timeout / teardown | app-server mock and `turn-failed` | `stub-ignores-eof-exits-143`, `failed-and-denied` | serve mock and `session-error` | RPC mock lifecycle |
 
-Every `*.ndjson` fixture in this matrix is replayed by
+The conversation-first transport probe also records OpenCode 1.18.18's native two-process
+`run --format json --auto` behavior in `run-json-first-turn` and `run-json-follow-up`. Those fixtures
+prove stable session identity, live text, tool lifecycle, clean native turn end, and `--session`
+resume. See `opencode/RUN_JSON_TRANSPORT.md` for the transport decision and cancellation boundary.
+
+Every normalized-event `*.ndjson` fixture in the table is replayed by
 `crates/coducktor-runners/tests/golden.rs`; the adjacent `*.expected.json` file asserts the
-normalized event sequence. Fixtures contain no credentials, prompts, account names, or raw
-provider captures.
+normalized event sequence. The native OpenCode transport probes are asserted separately by
+`crates/coducktor-runners/tests/opencode_run_transport.rs`. Fixtures contain no credentials,
+prompts, account names, or unsanitized provider captures.
