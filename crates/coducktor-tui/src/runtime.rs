@@ -297,7 +297,7 @@ enum BackgroundResult {
         project: String,
         id: String,
         generation: u64,
-        run: Result<coducktor_contract::ApiRun, coducktor_client::EngineError>,
+        subject: Result<screens::thread::ThreadSubject, coducktor_client::EngineError>,
         history: Result<coducktor_contract::RunHistoryPage, coducktor_client::EngineError>,
     },
     LoadEarlierThread {
@@ -1145,16 +1145,33 @@ fn execute_pending(
                     background_handle,
                     background_sender,
                     async move {
-                        tokio::join!(
-                            engine_for_task.get_run(&scope, &id_for_task),
-                            engine_for_task.run_history(&scope, &id_for_task, None),
-                        )
+                        // The browser hands over an opaque id. A conversation read decides the
+                        // subject; only when no conversation owns that id is it a legacy record.
+                        let subject = match engine_for_task
+                            .get_conversation(&scope, &id_for_task)
+                            .await
+                        {
+                            Ok(record) => Ok(screens::thread::ThreadSubject::Conversation(
+                                Box::new(record),
+                            )),
+                            Err(coducktor_client::EngineError::NotFound) => engine_for_task
+                                .get_run(&scope, &id_for_task)
+                                .await
+                                .map(|run| {
+                                    screens::thread::ThreadSubject::LegacyRun(Box::new(run))
+                                }),
+                            Err(other) => Err(other),
+                        };
+                        let history = engine_for_task
+                            .run_history(&scope, &id_for_task, None)
+                            .await;
+                        (subject, history)
                     },
-                    move |(run, history)| BackgroundResult::LoadThread {
+                    move |(subject, history)| BackgroundResult::LoadThread {
                         project,
                         id,
                         generation,
-                        run,
+                        subject,
                         history,
                     },
                 );
@@ -2577,7 +2594,7 @@ fn drain_background_results(
                 project,
                 id,
                 generation,
-                run,
+                subject,
                 history,
             } => {
                 if !matches!(
@@ -2590,8 +2607,8 @@ fn drain_background_results(
                 {
                     continue;
                 }
-                match (run, history) {
-                    (Ok(run), Ok(history)) => {
+                match (subject, history) {
+                    (Ok(subject), Ok(history)) => {
                         let events = history
                             .events
                             .into_iter()
@@ -2600,14 +2617,14 @@ fn drain_background_results(
                         app.thread_ui.load(
                             project,
                             id,
-                            run,
+                            subject,
                             events,
                             history.as_of_seq as f64,
                             history.older_cursor,
                         );
                     }
                     (Err(error), _) | (_, Err(error)) => {
-                        app.notice = Some(format!("load task failed: {error}"));
+                        app.notice = Some(format!("load chat failed: {error}"));
                     }
                 }
             }
@@ -4105,7 +4122,7 @@ mod tests {
                 project: "main".to_owned(),
                 id: "run".to_owned(),
                 generation: stale_generation,
-                run: Err(coducktor_client::EngineError::Unavailable {
+                subject: Err(coducktor_client::EngineError::Unavailable {
                     reason: "stale request".to_owned(),
                 }),
                 history: Err(coducktor_client::EngineError::Unavailable {
@@ -4908,7 +4925,7 @@ mod tests {
         assert_eq!(
             app.thread_ui
                 .data
-                .run
+                .run()
                 .as_ref()
                 .map(|run| run.record.task.as_str()),
             Some("Show my prompt and what the agent is doing")

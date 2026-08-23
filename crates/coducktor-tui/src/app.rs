@@ -3401,7 +3401,7 @@ impl App {
             self.notice = Some(unavailable.to_owned());
             return;
         }
-        let Some(run) = self.thread_ui.data.run.as_ref() else {
+        let Some(run) = self.thread_ui.data.run() else {
             self.notice = Some(unavailable.to_owned());
             return;
         };

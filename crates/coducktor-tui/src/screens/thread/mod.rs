@@ -90,12 +90,78 @@ pub enum ThreadFocus {
     Ask,
 }
 
+/// What the thread is showing. A conversation is interactive; a legacy run record is rendered
+/// read-only (section 4.3) and never passes through the conversation runtime, so the two are
+/// distinguished by type rather than by convention.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThreadSubject {
+    Conversation(Box<coducktor_contract::ConversationRecord>),
+    LegacyRun(Box<ApiRun>),
+}
+
 /// Engine-fetched state for the currently open thread.
-#[derive(Default)]
+impl ThreadSubject {
+    pub fn conversation(&self) -> Option<&coducktor_contract::ConversationRecord> {
+        match self {
+            Self::Conversation(record) => Some(record),
+            Self::LegacyRun(_) => None,
+        }
+    }
+
+    pub fn legacy_run(&self) -> Option<&ApiRun> {
+        match self {
+            Self::LegacyRun(run) => Some(run),
+            Self::Conversation(_) => None,
+        }
+    }
+
+    /// Whether the user may act on this thread at all. Legacy records are historical.
+    pub fn is_interactive(&self) -> bool {
+        matches!(self, Self::Conversation(_))
+    }
+
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Conversation(record) => &record.title,
+            Self::LegacyRun(run) => &run.record.title,
+        }
+    }
+}
+
+impl ThreadData {
+    /// The legacy run record, when this thread is showing one. Conversation threads return
+    /// `None` — they are not run-shaped and must not be rendered through run-only controls.
+    pub fn run(&self) -> Option<&ApiRun> {
+        self.subject.as_ref().and_then(ThreadSubject::legacy_run)
+    }
+
+    /// The conversation record, when this thread is showing one.
+    pub fn conversation(&self) -> Option<&coducktor_contract::ConversationRecord> {
+        self.subject.as_ref().and_then(ThreadSubject::conversation)
+    }
+
+    /// The conversation's current state, which drives composer availability.
+    pub fn conversation_state(&self) -> Option<coducktor_contract::ConversationState> {
+        self.conversation().map(|record| record.state)
+    }
+
+    /// Whether provider I/O is active right now, for either kind of subject.
+    pub fn turn_is_running(&self) -> bool {
+        match &self.subject {
+            Some(ThreadSubject::Conversation(record)) => {
+                record.state == coducktor_contract::ConversationState::Running
+            }
+            Some(ThreadSubject::LegacyRun(run)) => run.record.status == RunStatus::Running,
+            None => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadData {
     pub project: String,
     pub run_id: String,
-    pub run: Option<ApiRun>,
+    pub subject: Option<ThreadSubject>,
     pub events: Vec<RunEvent>,
     pub as_of_seq: f64,
     pub older_cursor: Option<String>,
@@ -190,12 +256,12 @@ impl ThreadUi {
         self.load_revision
     }
 
-    /// Called on thread entry, from a fresh run record and the first history page.
+    /// Called on thread entry, from a fresh subject record and the first history page.
     pub fn load(
         &mut self,
         project: String,
         run_id: String,
-        run: ApiRun,
+        subject: ThreadSubject,
         events: Vec<RunEvent>,
         as_of_seq: f64,
         older_cursor: Option<String>,
@@ -204,7 +270,7 @@ impl ThreadUi {
         self.data = ThreadData {
             project,
             run_id,
-            run: Some(run),
+            subject: Some(subject),
             events,
             as_of_seq,
             older_cursor,
@@ -284,18 +350,27 @@ impl ThreadUi {
         self.refresh_projection(0, Duration::ZERO);
     }
 
-    /// Replace the loaded run record (a fresh engine read or a workspace run event
-    /// for the currently-open thread).
-    pub fn set_run(&mut self, run: ApiRun) {
-        self.data.run = Some(run);
+    /// Replace the loaded subject (a fresh engine read, or a live event for the open thread).
+    pub fn set_subject(&mut self, subject: ThreadSubject) {
+        self.data.subject = Some(subject);
         self.refresh_projection(0, Duration::ZERO);
+    }
+
+    /// Replace the loaded legacy run record.
+    pub fn set_run(&mut self, run: ApiRun) {
+        self.set_subject(ThreadSubject::LegacyRun(Box::new(run)));
+    }
+
+    /// Replace the loaded conversation record.
+    pub fn set_conversation(&mut self, record: coducktor_contract::ConversationRecord) {
+        self.set_subject(ThreadSubject::Conversation(Box::new(record)));
     }
 
     pub fn clear_if_matches(&mut self, project: &str, run_id: &str) {
         if self.data.project != project || self.data.run_id != run_id {
             return;
         }
-        self.data.run = None;
+        self.data.subject = None;
         self.data.events.clear();
         self.data.state = ThreadState::default();
         self.data.view_model = ThreadViewModel::default();
@@ -340,11 +415,7 @@ impl ThreadUi {
         let accepted_len = self.data.events.len().saturating_sub(first_new);
         result.accepted = accepted_len;
         if accepted_len > 0 {
-            let active_turn = self
-                .data
-                .run
-                .as_ref()
-                .is_some_and(|run| run.record.status == RunStatus::Running);
+            let active_turn = self.data.turn_is_running();
             let started = Instant::now();
             reduce_thread_incremental(
                 &mut self.data.state,
@@ -387,7 +458,7 @@ impl ThreadUi {
     fn rebuild_full(&mut self) {
         let active_turn = self
             .data
-            .run
+            .run()
             .as_ref()
             .is_some_and(|run| run.record.status == RunStatus::Running);
         let started = Instant::now();
@@ -402,7 +473,7 @@ impl ThreadUi {
         // then let that event replace it without briefly hiding what the agent is working on.
         let queued_prompt_is_durable = self.pending_prompt_queued
             && self.pending_prompt.as_deref().is_some_and(|prompt| {
-                self.data.run.as_ref().is_some_and(|run| {
+                self.data.run().is_some_and(|run| {
                     run.record
                         .queued_messages
                         .iter()
@@ -432,7 +503,8 @@ impl ThreadUi {
             self.pending_composer = None;
             self.delivery_error = false;
         }
-        if let Some(run) = &self.data.run {
+        if let Some(run) = self.data.run().cloned() {
+            let run = &run;
             self.data.view_model = projection::project_thread_with_root(
                 run,
                 &self.data.state,
@@ -824,7 +896,7 @@ pub fn open(app: &mut App, project: &str, id: &str) {
         app.thread_ui.load(
             project.to_owned(),
             id.to_owned(),
-            run,
+            ThreadSubject::LegacyRun(Box::new(run)),
             Vec::new(),
             -1.0,
             None,
@@ -859,10 +931,10 @@ pub fn open_started(app: &mut App, project: &str, run: coducktor_contract::RunRe
     app.thread_ui.load(
         project.to_owned(),
         id.clone(),
-        ApiRun {
+        ThreadSubject::LegacyRun(Box::new(ApiRun {
             record: run,
             usage: None,
-        },
+        })),
         Vec::new(),
         -1.0,
         None,
@@ -895,7 +967,7 @@ pub fn handle_scroll(app: &mut App, up: bool) {
 }
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
-    let Some(run) = app.thread_ui.data.run.clone() else {
+    let Some(run) = app.thread_ui.data.run().cloned() else {
         frame.render_widget(
             Paragraph::new("Loading…").style(Style::default().fg(app.theme.palette.soft_fg)),
             area,
@@ -1237,7 +1309,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 let action = app
                     .thread_ui
                     .data
-                    .run
+                    .run()
                     .as_ref()
                     .and_then(|run| widgets::header_actions(run).get(index).cloned())
                     .map(|(_, action)| action);
@@ -1307,7 +1379,7 @@ fn cycle_header_action(app: &mut App, forward: bool) -> bool {
     let count = app
         .thread_ui
         .data
-        .run
+        .run()
         .as_ref()
         .map(|run| widgets::header_actions(run).len())
         .unwrap_or_default();
@@ -1410,7 +1482,7 @@ fn submit_composer(app: &mut App, text: String, images: Vec<ImageInput>) -> bool
         app.notice = Some("a message is already being delivered".to_owned());
         return false;
     }
-    let Some(run) = app.thread_ui.data.run.clone() else {
+    let Some(run) = app.thread_ui.data.run().cloned() else {
         return false;
     };
     let project = app.thread_ui.data.project.clone();
@@ -1554,7 +1626,7 @@ fn send_ask_answer(app: &mut App, ask: &ThreadAsk) {
     if text.trim().is_empty() {
         return;
     }
-    let Some(run) = app.thread_ui.data.run.clone() else {
+    let Some(run) = app.thread_ui.data.run().cloned() else {
         return;
     };
     let project = app.thread_ui.data.project.clone();
@@ -1629,7 +1701,7 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
 }
 
 fn apply_action(app: &mut App, action: ThreadAction) {
-    let Some(run) = app.thread_ui.data.run.clone() else {
+    let Some(run) = app.thread_ui.data.run().cloned() else {
         return;
     };
     let project = app.thread_ui.data.project.clone();
@@ -1816,7 +1888,7 @@ mod tests {
         app.thread_ui.load(
             "main".to_owned(),
             "run-1".to_owned(),
-            run(status, "Ship the shell"),
+            ThreadSubject::LegacyRun(Box::new(run(status, "Ship the shell"))),
             Vec::new(),
             -1.0,
             None,
@@ -1901,7 +1973,7 @@ mod tests {
         app.thread_ui.load(
             "main".to_owned(),
             "run-1".to_owned(),
-            run(RunStatus::Running, "Ship the shell"),
+            ThreadSubject::LegacyRun(Box::new(run(RunStatus::Running, "Ship the shell"))),
             durable[..2].to_vec(),
             2.0,
             None,
@@ -1916,7 +1988,7 @@ mod tests {
         app.thread_ui.load(
             "main".to_owned(),
             "run-1".to_owned(),
-            run(RunStatus::Running, "Ship the shell"),
+            ThreadSubject::LegacyRun(Box::new(run(RunStatus::Running, "Ship the shell"))),
             durable,
             4.0,
             None,
@@ -2068,8 +2140,7 @@ mod tests {
         assert_eq!(
             app.thread_ui
                 .data
-                .run
-                .as_ref()
+                .run()
                 .map(|run| run.record.task.as_str()),
             Some("Fix the task experience")
         );
@@ -2311,11 +2382,11 @@ mod tests {
 
         app.thread_ui.focus = ThreadFocus::Transcript;
         app.thread_ui.composer.blur();
-        let current = app.thread_ui.data.run.clone().unwrap();
+        let current = app.thread_ui.data.run().cloned().unwrap();
         app.thread_ui.load(
             "main".to_owned(),
             "run-1".to_owned(),
-            current,
+            ThreadSubject::LegacyRun(Box::new(current)),
             Vec::new(),
             -1.0,
             None,
@@ -2423,7 +2494,7 @@ mod tests {
         assert!(pending.contains("Queueing…"));
         assert!(pending.contains("QUEUEING"));
 
-        let mut durable = app.thread_ui.data.run.clone().unwrap();
+        let mut durable = app.thread_ui.data.run().cloned().unwrap();
         durable.record.queued_messages = Some(vec![coducktor_contract::QueuedMessage {
             id: "queued-1".to_owned(),
             text: "check the compact layout".to_owned(),
@@ -2726,14 +2797,14 @@ mod tests {
         app.thread_ui
             .push_event(1.0, event(1.0, "text", json!({"text": "earlier output"})));
         app.thread_ui.set_pending_prompt("follow up".to_owned());
-        let run = app.thread_ui.data.run.clone().unwrap();
+        let run = app.thread_ui.data.run().cloned().unwrap();
 
         // A compact history page can omit the just-written user event while its watermark still
         // includes it. That must acknowledge the optimistic composer state.
         app.thread_ui.load(
             "main".to_owned(),
             "run-1".to_owned(),
-            run,
+            ThreadSubject::LegacyRun(Box::new(run)),
             vec![event(1.0, "text", json!({"text": "earlier output"}))],
             2.0,
             None,

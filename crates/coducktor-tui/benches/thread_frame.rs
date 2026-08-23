@@ -112,7 +112,7 @@ fn prepare_thread(event_count: usize) -> (ThreadUi, Theme) {
     thread.load(
         "main".to_owned(),
         "frame-bench".to_owned(),
-        run(),
+        coducktor_tui::screens::thread::ThreadSubject::LegacyRun(Box::new(run())),
         Vec::new(),
         0.0,
         None,
