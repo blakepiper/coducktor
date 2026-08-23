@@ -85,6 +85,12 @@ pub fn discover_skills(repo_root: &Path, env: &dyn EnvSource) -> Vec<Skill> {
     merged
 }
 
+/// Read the exact instruction body a discovered Markdown skill contributes to a provider turn.
+/// Frontmatter is catalog metadata and is deliberately excluded, matching discovery.
+pub fn read_skill_body(path: &Path) -> std::io::Result<String> {
+    fs::read_to_string(path).map(|raw| parse_frontmatter(&raw).1)
+}
+
 /// Walk a skills dir for entrypoints, following directory symlinks. Once a directory
 /// contains `SKILL.md`, it is one directory-based skill and its supporting Markdown (for
 /// example `references/*.md`) is not scanned. Other directories retain the legacy recursive

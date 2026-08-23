@@ -117,6 +117,7 @@ pub trait ConversationSession: Send {
         &mut self,
         request_id: &str,
         answers: &[ConversationQuestionAnswer],
+        cancellation: &TurnCancellation,
         on_event: &mut dyn FnMut(ConversationEventInput) -> io::Result<()>,
     ) -> Result<TurnOutcome, String>;
 

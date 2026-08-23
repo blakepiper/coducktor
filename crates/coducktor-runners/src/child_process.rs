@@ -13,10 +13,12 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use coducktor_contract::Runner;
-use coducktor_core::workflows::run::CancellationToken;
-
 use crate::agent_env::{self, BuildChildEnvOptions};
+use crate::agent_runner::AgentCancellation;
+use coducktor_contract::Runner;
+
+#[cfg(test)]
+use coducktor_core::workflows::run::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {
@@ -39,7 +41,7 @@ pub struct ChildProcess {
     stderr_handle: Option<JoinHandle<String>>,
     eof_term_grace: Duration,
     eof_kill_grace: Duration,
-    cancellation: Option<CancellationToken>,
+    cancellation: Option<AgentCancellation>,
 }
 
 pub enum NextLine {
@@ -128,14 +130,14 @@ impl ChildProcess {
         })
     }
 
-    pub fn set_cancellation(&mut self, cancellation: CancellationToken) {
-        self.cancellation = Some(cancellation);
+    pub fn set_cancellation(&mut self, cancellation: impl Into<AgentCancellation>) {
+        self.cancellation = Some(cancellation.into());
     }
 
     fn cancellation_requested(&self) -> bool {
         self.cancellation
             .as_ref()
-            .is_some_and(CancellationToken::is_requested)
+            .is_some_and(AgentCancellation::is_requested)
     }
 
     pub fn write_line(&mut self, line: &str) -> Result<(), String> {

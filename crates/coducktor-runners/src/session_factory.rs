@@ -90,6 +90,10 @@ impl AgentSession for RegisteredSession {
 }
 
 impl DefaultSessionFactory {
+    pub(crate) fn host_env(&self) -> &BTreeMap<String, String> {
+        &self.host_env
+    }
+
     /// Captures the current process environment once — every backend spawn reads from this
     /// snapshot rather than re-querying `std::env` per session, matching how every backend's own
     /// test suite already passes a fixed `host_env` map rather than the live environment.
@@ -119,7 +123,7 @@ impl DefaultSessionFactory {
         )
     }
 
-    fn claude_config(&self, repo_root: &Path) -> ClaudeSpawnConfig {
+    pub(crate) fn claude_config(&self, repo_root: &Path) -> ClaudeSpawnConfig {
         let mut config = ClaudeSpawnConfig::default();
         if let Some(bin) = self.host_env.get("DUCK_CLAUDE_BIN") {
             config.program = bin.clone();
@@ -131,7 +135,7 @@ impl DefaultSessionFactory {
         config
     }
 
-    fn codex_config(&self) -> CodexSpawnConfig {
+    pub(crate) fn codex_config(&self) -> CodexSpawnConfig {
         let mut config = CodexSpawnConfig::default();
         if let Some(bin) = self.host_env.get("DUCK_CODEX_BIN") {
             config.program = bin.clone();
@@ -139,7 +143,7 @@ impl DefaultSessionFactory {
         config
     }
 
-    fn opencode_config(&self) -> OpencodeSpawnConfig {
+    pub(crate) fn opencode_config(&self) -> OpencodeSpawnConfig {
         let mut config = OpencodeSpawnConfig::default();
         if let Some(bin) = self.host_env.get("DUCK_OPENCODE_BIN") {
             config.program = bin.clone();
@@ -147,7 +151,7 @@ impl DefaultSessionFactory {
         config
     }
 
-    fn pi_config(&self, repo_root: &Path) -> PiSpawnConfig {
+    pub(crate) fn pi_config(&self, repo_root: &Path) -> PiSpawnConfig {
         let mut config = PiSpawnConfig::default();
         if let Some(bin) = self.host_env.get("DUCK_PI_BIN") {
             config.program = bin.clone();
@@ -181,7 +185,8 @@ fn resolve_runner(selection: RunnerSelection) -> Runner {
 
 fn to_agent_run_spec(request: &SessionRequest) -> AgentRunSpec {
     AgentRunSpec {
-        cancellation: request.cancellation.clone(),
+        cancellation: request.cancellation.clone().into(),
+        autonomous: false,
         system_prompt: request.system_prompt.clone(),
         user_prompt: request.prompt.clone(),
         images: request
@@ -202,6 +207,7 @@ fn to_agent_run_spec(request: &SessionRequest) -> AgentRunSpec {
         env: request.env.clone(),
         model: request.model.clone(),
         reasoning_effort: request.reasoning_effort,
+        reasoning: None,
         session_id: request.session_id.clone(),
         resume: request.continuation,
     }

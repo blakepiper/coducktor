@@ -53,7 +53,7 @@ use coducktor_core::workflows::run::{
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::agent_runner::{AgentRunSpec, ContentBlock, reasoning_effort_str};
+use crate::agent_runner::{AgentRunSpec, ContentBlock, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
 use crate::claude_runner::EOF_KILL_GRACE_MS;
 use crate::model_identity::parse_model_identity;
@@ -343,8 +343,8 @@ impl OpencodeSession {
             "parts".to_owned(),
             Value::Array(opencode_parts(text, images)),
         );
-        if include_variant && let Some(effort) = self.spec.reasoning_effort {
-            body.insert("variant".to_owned(), json!(reasoning_effort_str(effort)));
+        if include_variant && let Some(effort) = selected_reasoning(&self.spec) {
+            body.insert("variant".to_owned(), json!(effort));
         }
         if let Some(system_prompt) = system_prompt.filter(|prompt| !prompt.is_empty()) {
             body.insert("system".to_owned(), json!(system_prompt));
@@ -424,15 +424,15 @@ impl OpencodeSession {
         // selected model doesn't advertise. Retry once with the provider default instead of
         // turning a valid task into a hard failure.
         let result = match result {
-            Err(message) if is_model_variant_error(&message) => {
-                let Some(effort) = self.spec.reasoning_effort else {
+            Err(message) if !self.spec.autonomous && is_model_variant_error(&message) => {
+                let Some(effort) = selected_reasoning(&self.spec) else {
                     return Err(message);
                 };
                 on_event(EventInput::new("note").field(
                     "message",
                     format!(
                         "opencode: reasoning variant \"{}\" is unavailable; using the model default",
-                        reasoning_effort_str(effort)
+                        effort
                     ),
                 ))
                 .map_err(|error| error.to_string())?;

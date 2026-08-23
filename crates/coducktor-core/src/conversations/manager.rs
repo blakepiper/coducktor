@@ -76,6 +76,10 @@ impl PendingConversationAnswer {
     pub fn session_mut(&mut self) -> &mut (dyn ConversationSession + Send + 'static) {
         self.session.as_mut()
     }
+
+    pub fn cancellation(&self) -> TurnCancellation {
+        self.cancellation.clone()
+    }
 }
 
 /// Immediate cancellation result. A parked session is returned so the caller can cancel it
@@ -1061,6 +1065,7 @@ mod tests {
             &mut self,
             request_id: &str,
             _answers: &[ConversationQuestionAnswer],
+            _cancellation: &TurnCancellation,
             _on_event: &mut dyn FnMut(ConversationEventInput) -> io::Result<()>,
         ) -> Result<TurnOutcome, String> {
             self.counts.answers.fetch_add(1, Ordering::SeqCst);
@@ -1230,9 +1235,11 @@ mod tests {
             .unwrap();
         let request_id = pending.request_id.clone();
         let answers = pending.answers.clone();
-        let result = pending
-            .session_mut()
-            .answer(&request_id, &answers, &mut |_| Ok(()));
+        let cancellation = pending.cancellation();
+        let result =
+            pending
+                .session_mut()
+                .answer(&request_id, &answers, &cancellation, &mut |_| Ok(()));
         let ended = manager.apply_answer_result(pending, result).unwrap();
 
         assert_eq!(ended.state, ConversationState::Idle);

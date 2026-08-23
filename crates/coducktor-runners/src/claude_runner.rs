@@ -19,7 +19,7 @@ use coducktor_core::workflows::run::{
 };
 use serde_json::{Map, Value};
 
-use crate::agent_runner::{AgentRunSpec, ContentBlock, prompt_content, reasoning_effort_str};
+use crate::agent_runner::{AgentRunSpec, ContentBlock, prompt_content, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
 use crate::claude::{stringify_tool_result_content, tool_result_image_blocks};
 use crate::usage::{self, RawUsage};
@@ -42,7 +42,9 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
         "--verbose".to_owned(),
         "--forward-subagent-text".to_owned(),
         "--permission-mode".to_owned(),
-        if env.get("DUCK_APPROVAL_GATE").map(String::as_str) == Some("1") {
+        if spec.autonomous {
+            "auto".to_owned()
+        } else if env.get("DUCK_APPROVAL_GATE").map(String::as_str) == Some("1") {
             "acceptEdits".to_owned()
         } else {
             "dontAsk".to_owned()
@@ -66,7 +68,11 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
         );
         args.push(session_id.clone());
     }
-    let allowed = build_allowed_tools(&spec.allowed_tools, &spec.bash_allowlist);
+    let allowed = if spec.autonomous {
+        Vec::new()
+    } else {
+        build_allowed_tools(&spec.allowed_tools, &spec.bash_allowlist)
+    };
     if !allowed.is_empty() {
         args.push("--allowedTools".to_owned());
         args.push(allowed.join(","));
@@ -75,9 +81,9 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
         args.push("--model".to_owned());
         args.push(model.clone());
     }
-    if let Some(effort) = spec.reasoning_effort {
+    if let Some(effort) = selected_reasoning(spec) {
         args.push("--effort".to_owned());
-        args.push(reasoning_effort_str(effort).to_owned());
+        args.push(effort.to_owned());
     }
     for dir in &spec.additional_directories {
         args.push("--add-dir".to_owned());
@@ -658,6 +664,30 @@ mod tests {
             .position(|arg| arg == "--permission-mode")
             .unwrap();
         assert_eq!(args[idx + 1], "acceptEdits");
+    }
+
+    #[test]
+    fn conversation_args_use_auto_and_do_not_narrow_native_tools() {
+        let spec = AgentRunSpec {
+            autonomous: true,
+            allowed_tools: vec!["Read".to_owned()],
+            bash_allowlist: vec!["cargo test".to_owned()],
+            reasoning: Some("exact-native-effort".to_owned()),
+            ..Default::default()
+        };
+        let env = BTreeMap::from([("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned())]);
+        let args = build_claude_args(&spec, &env);
+        let permission = args
+            .iter()
+            .position(|arg| arg == "--permission-mode")
+            .expect("permission mode should be explicit");
+        let effort = args
+            .iter()
+            .position(|arg| arg == "--effort")
+            .expect("exact effort should be present");
+        assert_eq!(args[permission + 1], "auto");
+        assert_eq!(args[effort + 1], "exact-native-effort");
+        assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
     #[test]

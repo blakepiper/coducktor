@@ -47,7 +47,7 @@ use coducktor_core::workflows::run::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::agent_runner::{AgentRunSpec, ContentBlock, prompt_content, reasoning_effort_str};
+use crate::agent_runner::{AgentRunSpec, ContentBlock, prompt_content, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
 use crate::claude_runner::{EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS};
 use crate::usage::{self, RawUsage};
@@ -139,6 +139,9 @@ pub fn open_pi_session(
 /// Build the arguments for a Pi RPC session.
 pub fn build_pi_args(spec: &AgentRunSpec) -> Vec<String> {
     let mut args = vec!["--mode".to_owned(), "rpc".to_owned()];
+    if spec.autonomous {
+        args.push("--approve".to_owned());
+    }
     if let Some(session_id) = &spec.session_id {
         args.push(
             if spec.resume {
@@ -158,11 +161,15 @@ pub fn build_pi_args(spec: &AgentRunSpec) -> Vec<String> {
         args.push("--model".to_owned());
         args.push(model.clone());
     }
-    if let Some(effort) = spec.reasoning_effort {
+    if let Some(effort) = selected_reasoning(spec) {
         args.push("--thinking".to_owned());
-        args.push(reasoning_effort_str(effort).to_owned());
+        args.push(effort.to_owned());
     }
-    let tools = pi_tools(&spec.allowed_tools, &spec.bash_allowlist);
+    let tools = if spec.autonomous {
+        Vec::new()
+    } else {
+        pi_tools(&spec.allowed_tools, &spec.bash_allowlist)
+    };
     if !tools.is_empty() {
         args.push("--tools".to_owned());
         args.push(tools.join(","));
@@ -645,6 +652,24 @@ mod tests {
         let args = build_pi_args(&spec);
         assert!(args.iter().any(|arg| arg == "--thinking"));
         assert!(args.iter().any(|arg| arg == "xhigh"));
+    }
+
+    #[test]
+    fn conversation_args_approve_trust_and_keep_all_native_tools() {
+        let spec = AgentRunSpec {
+            autonomous: true,
+            allowed_tools: vec!["Read".to_owned()],
+            reasoning: Some("exact-thinking-value".to_owned()),
+            ..Default::default()
+        };
+        let args = build_pi_args(&spec);
+        assert!(args.iter().any(|arg| arg == "--approve"));
+        assert!(!args.iter().any(|arg| arg == "--tools"));
+        let thinking = args
+            .iter()
+            .position(|arg| arg == "--thinking")
+            .expect("thinking value should be present");
+        assert_eq!(args[thinking + 1], "exact-thinking-value");
     }
 
     #[test]

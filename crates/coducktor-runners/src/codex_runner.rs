@@ -40,9 +40,7 @@ use coducktor_core::workflows::run::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::agent_runner::{
-    AgentRunSpec, ContentBlock, prepend_system_prompt, reasoning_effort_str,
-};
+use crate::agent_runner::{AgentRunSpec, ContentBlock, prepend_system_prompt, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
 use crate::claude_runner::{EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS};
 use crate::v1_text_coalescer::V1TextCoalescer;
@@ -176,9 +174,14 @@ pub fn open_codex_session(
     .map_err(|error| wrap_spawn_error(&error, &config.program))?;
     process.set_cancellation(spec.cancellation.clone());
 
-    let sandbox = resolve_sandbox(host_env);
+    let sandbox = if spec.autonomous {
+        "danger-full-access"
+    } else {
+        resolve_sandbox(host_env)
+    };
     let reasoning_summary = resolve_reasoning_summary(host_env);
 
+    let approval_gate = !spec.autonomous && resolve_approval_policy(host_env) == "on-request";
     Ok(CodexSession {
         process,
         spec,
@@ -190,7 +193,7 @@ pub fn open_codex_session(
         open: true,
         sandbox,
         reasoning_summary,
-        approval_gate: resolve_approval_policy(host_env) == "on-request",
+        approval_gate,
     })
 }
 
@@ -590,6 +593,15 @@ impl CodexSession {
                 }
                 let (_, response) = approval_response(&pending, "reject");
                 self.write_response(pending.rpc_id, response)?;
+                if self.spec.autonomous {
+                    let message = format!(
+                        "Codex requested permission {} despite approvalPolicy=never",
+                        pending.request_id
+                    );
+                    on_event(EventInput::new("error").field("message", &message))
+                        .map_err(|error| error.to_string())?;
+                    return Err(message);
+                }
                 continue;
             }
             if let Some(id) = id.clone()
@@ -600,6 +612,14 @@ impl CodexSession {
                     ))
             {
                 self.write_response_error(id, -32601, "unsupported approval request")?;
+                if self.spec.autonomous {
+                    let message = format!(
+                        "Codex sent unsupported permission request {method} despite approvalPolicy=never"
+                    );
+                    on_event(EventInput::new("error").field("message", &message))
+                        .map_err(|error| error.to_string())?;
+                    return Err(message);
+                }
                 on_event(
                     EventInput::new("error")
                         .field(
@@ -850,8 +870,8 @@ impl CodexSession {
         if let Some(model) = &self.spec.model {
             overrides.insert("model".to_owned(), json!(model));
         }
-        if let Some(effort) = self.spec.reasoning_effort {
-            overrides.insert("effort".to_owned(), json!(reasoning_effort_str(effort)));
+        if let Some(effort) = selected_reasoning(&self.spec) {
+            overrides.insert("effort".to_owned(), json!(effort));
         }
         overrides.insert("cwd".to_owned(), json!(self.spec.cwd.to_string_lossy()));
         overrides.insert("sandbox".to_owned(), json!(self.sandbox));
@@ -1180,6 +1200,50 @@ mod tests {
         assert_eq!(resolve_approval_policy(&env), "on-request");
         env.insert("DUCK_APPROVAL_GATE".to_owned(), "true".to_owned());
         assert_eq!(resolve_approval_policy(&env), "never");
+    }
+
+    #[test]
+    fn conversation_session_ignores_legacy_permission_and_sandbox_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = AgentRunSpec {
+            autonomous: true,
+            reasoning: Some("exact-native-effort".to_owned()),
+            cwd: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let env = BTreeMap::from([
+            ("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned()),
+            ("DUCK_CODEX_NETWORK".to_owned(), "0".to_owned()),
+        ]);
+        let session = open_codex_session(&node_config(), spec, &env).unwrap();
+        assert_eq!(session.sandbox, "danger-full-access");
+        assert!(!session.approval_gate);
+        assert_eq!(
+            selected_reasoning(&session.spec),
+            Some("exact-native-effort")
+        );
+    }
+
+    #[test]
+    fn unexpected_conversation_permission_request_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = AgentRunSpec {
+            autonomous: true,
+            user_prompt: "mock:approval".to_owned(),
+            cwd: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let mut session = open_codex_session(&node_config(), spec, &BTreeMap::new()).unwrap();
+        let (outcome, events) = run_turn(&mut session);
+        assert!(outcome.is_err_and(|message| message.contains("approvalPolicy=never")));
+        assert!(events.iter().any(|event| {
+            event.event_type == "error"
+                && event
+                    .extra
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("approvalPolicy=never"))
+        }));
     }
 
     #[test]

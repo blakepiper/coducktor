@@ -3,8 +3,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use coducktor_contract::ConcreteReasoningEffort;
+use coducktor_core::conversations::TurnCancellation;
 use coducktor_core::workflows::run::{CancellationToken, PromptImage};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +14,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentRunSpec {
     /// Set by the engine's out-of-band cancellation path while a manager-owned turn is blocked.
-    pub cancellation: CancellationToken,
+    pub cancellation: AgentCancellation,
+    /// Conversation turns use each harness's native autonomous permission preset. Legacy
+    /// workflow sessions retain their compatibility allowlist behavior while they remain
+    /// readable and executable through the old runtime.
+    pub autonomous: bool,
     /// Appended to the CLI's default system prompt (`--append-system-prompt` for Claude), sent
     /// through OpenCode's native `system` field, or prepended to the opening message for
     /// backends with no dedicated channel.
@@ -35,11 +41,66 @@ pub struct AgentRunSpec {
     pub model: Option<String>,
     /// Concrete reasoning level for this session — the run manager resolves `auto` before spawn.
     pub reasoning_effort: Option<ConcreteReasoningEffort>,
+    /// Exact harness-native reasoning value for a conversation. This deliberately bypasses the
+    /// legacy globally normalized reasoning enum.
+    pub reasoning: Option<String>,
     /// Stable session id (UUID) so the user can take over interactively later.
     pub session_id: Option<String>,
     /// Spawn with `--resume <sessionId>` instead of starting a fresh session — picks up the
     /// on-disk conversation (used by "Continue" after a run ends).
     pub resume: bool,
+}
+
+/// Cancellation shared by the compatibility workflow runtime and the conversation runtime.
+#[derive(Debug, Clone)]
+pub enum AgentCancellation {
+    Workflow(CancellationToken),
+    Conversation(Arc<Mutex<TurnCancellation>>),
+}
+
+impl Default for AgentCancellation {
+    fn default() -> Self {
+        Self::Workflow(CancellationToken::default())
+    }
+}
+
+impl AgentCancellation {
+    pub fn is_requested(&self) -> bool {
+        match self {
+            Self::Workflow(token) => token.is_requested(),
+            Self::Conversation(token) => token.lock().is_ok_and(|current| current.is_requested()),
+        }
+    }
+
+    pub fn replace_conversation(&self, replacement: TurnCancellation) {
+        if let Self::Conversation(current) = self
+            && let Ok(mut current) = current.lock()
+        {
+            *current = replacement;
+        }
+    }
+}
+
+impl PartialEq for AgentCancellation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Workflow(left), Self::Workflow(right)) => left == right,
+            (Self::Conversation(left), Self::Conversation(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl From<CancellationToken> for AgentCancellation {
+    fn from(value: CancellationToken) -> Self {
+        Self::Workflow(value)
+    }
+}
+
+impl From<TurnCancellation> for AgentCancellation {
+    fn from(value: TurnCancellation) -> Self {
+        Self::Conversation(Arc::new(Mutex::new(value)))
+    }
 }
 
 /// The wire spelling each backend's CLI/app-server expects for a reasoning-effort override
@@ -52,6 +113,13 @@ pub fn reasoning_effort_str(effort: ConcreteReasoningEffort) -> &'static str {
         ConcreteReasoningEffort::High => "high",
         ConcreteReasoningEffort::XHigh => "xhigh",
     }
+}
+
+/// Prefer the exact conversation value; fall back to the compatibility workflow value.
+pub fn selected_reasoning(spec: &AgentRunSpec) -> Option<&str> {
+    spec.reasoning
+        .as_deref()
+        .or_else(|| spec.reasoning_effort.map(reasoning_effort_str))
 }
 
 /// One content block of a user message — mirrors the Anthropic wire format so it can be
@@ -203,6 +271,19 @@ mod tests {
                 "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" }
             })
         );
+    }
+
+    #[test]
+    fn conversation_cancellation_handle_tracks_each_new_turn_token() {
+        let first = TurnCancellation::default();
+        let cancellation = AgentCancellation::from(first.clone());
+        first.deactivate();
+        assert!(!cancellation.is_requested());
+
+        let second = TurnCancellation::default();
+        cancellation.replace_conversation(second.clone());
+        assert!(second.request());
+        assert!(cancellation.is_requested());
     }
 
     struct ScriptedChild {
