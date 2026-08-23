@@ -6,6 +6,7 @@
 pub mod agent_config;
 pub mod agent_profiles;
 pub mod compat;
+pub mod conversations;
 pub mod events;
 pub mod github;
 pub mod health;
@@ -22,6 +23,7 @@ pub mod workspace;
 
 pub use agent_config::*;
 pub use agent_profiles::*;
+pub use conversations::*;
 pub use events::*;
 pub use github::*;
 pub use health::*;
