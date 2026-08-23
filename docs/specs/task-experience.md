@@ -1,61 +1,51 @@
-# Task experience
+# Chat experience
 
-Status: current product specification. This replaces the task-list and thread presentation in
-`task-scope-and-agent-thread-ux.md` without changing its project-scoping or durable-event rules.
+Status: current product summary (2026-08-23). The authoritative implementation contract is the
+[conversation-first harness cockpit](conversation-first-harness-cockpit.md).
 
-## Task browser
+## Chat browser
 
-Project Tasks and workspace All Tasks use the same card-list language. `Current` contains every
-unarchived task and `Archived` contains explicitly archived tasks. Current cards are grouped as:
+Project Chats and workspace All Chats use the same card language. Current chats are grouped by
+their projected conversation state:
 
-- `Needs you`: waiting, review, and unseen terminal outcomes;
-- `Working`: queued and running;
-- `Recent`: seen done, failed, and cancelled outcomes.
+- **Needs you**: a native structured question, or an unseen failed/cancelled turn;
+- **Working**: queued or running; and
+- **Recent**: idle chats and seen failures/cancellations.
 
-Groups and cards use the most recent meaningful activity. Archive ordering uses `archivedAt`.
-Legacy records fall back through finished, started, and created timestamps. Marking a task read
-does not change meaningful activity. Each bounded card shows status, readable title, up to two
-wrapped lines from the exact initial request, relative activity time, and only metadata that is
-available. All Tasks also names the project. Search covers title, prompt, project, workflow,
-branch, and reference metadata.
+Archived contains only explicitly archived conversations. Provider prose never marks a chat done
+or archived. Cards preserve project-qualified identity, unread state, exact prompt previews, and
+meaningful activity timestamps. Search and filters are independent between project Chats and All
+Chats.
 
-Cards have visible borders and a distinct selection marker. The browser keeps keyboard and mouse
-open, search, archive/read/delete, and PR actions. It has no table columns, horizontal scrolling,
-folding, or arbitrary sort mode. Selection and scroll are scoped independently to each project;
-All Tasks owns separate state. The sidebar contains project navigation, project Tasks, All Tasks,
-workspace Settings, attention counts, and notifications, but no duplicate task filters or task
-snippets.
+Legacy task records remain visible as read-only history with their historical states and metadata.
+They can be archived or deleted, but cannot be resumed, finished, continued, reviewed, compared,
+or sent through the conversation runtime.
 
-## Session timeline
+## New Chat
 
-A task has one virtualized chronological timeline. There is no Conversation/Activity mode.
-Initial requests and follow-up prompts are exact durable user messages. Assistant commentary is
-muted progress and cannot be presented as a final response. Provider-visible reasoning is
-collapsed. Tool calls are semantic rows with pending, running, successful, failed, or declined
-state; details can be expanded with mouse or keyboard. Plans and subagents appear compactly in
-the timeline. Final assistant messages use the Markdown message renderer and outcomes explicitly
-name completion, failure, interruption, or an unobserved legacy outcome.
+The focus order is Message, Harness, Model, Reasoning, Skills, Base branch, Worktree, and Git mode.
+Harness is always a concrete Claude, Codex, OpenCode, or pi selection. Model and reasoning each
+offer Default when catalog discovery is absent. Skills attach additively to the current message.
 
-Routine tool and reasoning details default closed after completion. Failures remain visible in
-their row even while details are closed. The active turn exposes its current phase, elapsed time,
-token count, and running tool directly above the composer. A persistent composer says `FOLLOW UP`
-for active and follow-up-capable runs or `ANSWER` when waiting for input, with explicit queueing,
-sending, and retry states. A durable question or review action places its focused controls
-directly above the composer.
+Harness, model, reasoning, base branch, and working directory become immutable when the chat
+starts. Git auto requires a managed worktree. Without Git, branch/worktree controls are disabled;
+with worktree off, the harness uses the repository's current checkout without switching it.
 
-Scrolling up disengages live-tail following. `G` returns to the tail and clears its unseen count.
-`Tab` and `BackTab` select expandable reasoning/tool items and `Enter` toggles the selected item.
-Mouse clicks select and toggle the same items.
+## Conversation timeline
 
-## Complete history
+The timeline presents exact user messages, assistant text, compact harness activity, native
+structured questions, errors, usage, and turn boundaries. Completed tool activity collapses by
+default; unknown events degrade to a bounded generic activity row. The view follows live output
+only while the user remains at the bottom.
 
-Opening a task loads the newest history page and retains its older cursor. Reaching the top or
-pressing `R` requests the previous page. Pages merge by event sequence, deduplicate, and preserve
-the visible top-item anchor. Loading and failure are explicit timeline rows; a failure offers a
-retry and never implies that the visible history is complete.
+An idle composer sends one ordinary user message as one native provider turn. While queued or
+running, the user may edit and retain a draft but cannot submit it. `Esc` cancels the active turn
+without discarding the draft. After ended, failed, or cancelled, the composer is available again.
 
-`RunRecord.updatedAt` records meaningful activity such as event append or lifecycle mutation;
-`archivedAt` remains separate. `RunIndexEntry` carries those optional timestamps and a locally
-generated `promptPreview`. The preview collapses whitespace and is bounded to 240 Unicode scalar
-values; it is not an AI summary. All fields are optional for compatibility, and existing v1/v2
-event reduction remains the transcript boundary.
+Only a provider-native structured question creates Needs you controls. Answering it continues the
+same pending turn. A question in ordinary assistant prose ends normally and the user's reply is a
+new turn.
+
+Changes, Files, Commits, GitHub references, archive/delete, and read/unread behavior remain
+available. There are no workflow, variant, compare, review, finish, continue, task-mode,
+provider-routing, or native-harness takeover controls for current chats.

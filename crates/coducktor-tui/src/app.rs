@@ -298,13 +298,13 @@ impl Route {
 
     fn title(&self) -> &'static str {
         match self {
-            Self::Tasks { .. } => "TASKS",
-            Self::GlobalTasks => "GLOBAL TASKS",
+            Self::Tasks { .. } => "CHATS",
+            Self::GlobalTasks => "ALL CHATS",
             Self::GlobalSettings => "GLOBAL SETTINGS",
-            Self::NewTask { .. } => "NEW TASK",
+            Self::NewTask { .. } => "NEW CHAT",
             Self::Scratchpad { .. } => "SCRATCHPAD",
-            Self::Thread { .. } => "TASK THREAD",
-            Self::TaskGit { .. } => "TASK GIT",
+            Self::Thread { .. } => "CHAT",
+            Self::TaskGit { .. } => "CHAT GIT",
             Self::Ide { .. } => "IDE",
             Self::Terminal { .. } => "TERMINAL",
             Self::Github { .. } => "GITHUB",
@@ -407,14 +407,13 @@ enum CommandId {
     Help,
     Sidebar,
     Stop,
-    Finish,
     Archive,
     Delete,
     Quit,
 }
 
 impl CommandId {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 12] = [
         Self::Open,
         Self::Back,
         Self::Forward,
@@ -424,7 +423,6 @@ impl CommandId {
         Self::Help,
         Self::Sidebar,
         Self::Stop,
-        Self::Finish,
         Self::Archive,
         Self::Delete,
         Self::Quit,
@@ -441,7 +439,6 @@ impl CommandId {
             "help" => Some(Self::Help),
             "sidebar" => Some(Self::Sidebar),
             "stop" => Some(Self::Stop),
-            "finish" => Some(Self::Finish),
             "archive" => Some(Self::Archive),
             "delete" => Some(Self::Delete),
             "q" | "quit" => Some(Self::Quit),
@@ -460,7 +457,6 @@ impl CommandId {
             Self::Help => ":help",
             Self::Sidebar => ":sidebar",
             Self::Stop => ":stop",
-            Self::Finish => ":finish",
             Self::Archive => ":archive",
             Self::Delete => ":delete",
             Self::Quit => ":q",
@@ -473,14 +469,13 @@ impl CommandId {
             Self::Back => "go back",
             Self::Forward => "go forward",
             Self::Theme => "switch theme",
-            Self::New => "new task",
+            Self::New => "new chat",
             Self::ClearScratchpad => "clear the current scratchpad",
             Self::Help => "open this help",
             Self::Sidebar => "toggle sidebar",
-            Self::Stop => "stop the current task",
-            Self::Finish => "finish the current task",
-            Self::Archive => "archive the current task",
-            Self::Delete => "delete the current task",
+            Self::Stop => "stop the current chat turn",
+            Self::Archive => "archive the current chat",
+            Self::Delete => "delete the current chat",
             Self::Quit => "quit",
         }
     }
@@ -1836,7 +1831,7 @@ impl App {
             return String::new();
         }
         format!(
-            "Showing the newest {} tasks per project — older ones in {} are only in that project's Tasks page.",
+            "Showing the newest {} chats per project — older ones in {} are only in that project's Chats page.",
             index.per_project_limit,
             index.truncated.join(", ")
         )
@@ -1866,6 +1861,14 @@ impl App {
     pub fn apply_workspace_event(&mut self, event: WorkspaceEvent) {
         match event {
             WorkspaceEvent::Conversation { project, record } => {
+                let open_chat_settled = self.thread_ui.data.project == project
+                    && self.thread_ui.data.run_id == record.id
+                    && self
+                        .thread_ui
+                        .data
+                        .conversation_state()
+                        .is_some_and(coducktor_contract::ConversationState::is_active)
+                    && !record.state.is_active();
                 let entry = coducktor_client::conversation_index_entry(&project, &record);
                 let state = self.project_tasks.entry(project.clone()).or_default();
                 if let Some(existing) = state
@@ -1885,7 +1888,7 @@ impl App {
                     {
                         *existing = entry.clone();
                     } else {
-                        index.conversations.insert(0, entry);
+                        index.conversations.insert(0, entry.clone());
                     }
                 }
                 // The open thread needs the new state immediately: it is what re-enables the
@@ -1893,6 +1896,15 @@ impl App {
                 if self.thread_ui.data.project == project && self.thread_ui.data.run_id == record.id
                 {
                     self.thread_ui.set_conversation(*record);
+                }
+                // A settled native turn is the durable synchronization boundary. Reload its
+                // history once so a missed/racing user-message event cannot merge the next
+                // assistant response into the preceding turn.
+                if open_chat_settled {
+                    self.queue_pending(PendingAction::LoadThread {
+                        project: project.clone(),
+                        id: entry.id.clone(),
+                    });
                 }
                 if self.current_project() == project {
                     self.sync_active_project_tasks();
@@ -3228,19 +3240,15 @@ impl App {
             CommandId::Sidebar => self.toggle_sidebar(),
             CommandId::Stop => self.apply_thread_command(
                 crate::screens::thread::ThreadAction::Cancel,
-                ":stop requires an open task session",
-            ),
-            CommandId::Finish => self.apply_thread_command(
-                crate::screens::thread::ThreadAction::Finish,
-                ":finish requires an open task session",
+                ":stop requires an open chat",
             ),
             CommandId::Archive => self.apply_thread_command(
                 crate::screens::thread::ThreadAction::Archive,
-                ":archive requires an open task session",
+                ":archive requires an open chat",
             ),
             CommandId::Delete => self.apply_thread_command(
                 crate::screens::thread::ThreadAction::Delete,
-                ":delete requires an open task session or removable settings row",
+                ":delete requires an open chat or removable settings row",
             ),
             CommandId::Quit => self.request_quit(),
         }
@@ -3261,6 +3269,10 @@ impl App {
             self.notice = Some(unavailable.to_owned());
             return;
         }
+        if self.thread_ui.data.conversation().is_some() {
+            crate::screens::thread::apply_hit(self, action);
+            return;
+        }
         let Some(run) = self.thread_ui.data.run() else {
             self.notice = Some(unavailable.to_owned());
             return;
@@ -3275,7 +3287,7 @@ impl App {
         };
         if !allowed {
             self.notice = Some(format!(
-                "{} is not available for this task",
+                "{} is not available for this historical task",
                 action.command_name()
             ));
             return;
@@ -3794,7 +3806,7 @@ impl App {
             });
         } else if self.running_count() > 0 {
             self.confirm = Some(ConfirmRequest {
-                text: "Live tasks are still running. Quit anyway?".to_owned(),
+                text: "Live chats are still running. Quit anyway?".to_owned(),
                 action: PendingAction::Quit,
             });
         } else {
@@ -3825,12 +3837,12 @@ impl App {
         }
         match self.route() {
             Route::Tasks { .. } | Route::GlobalTasks => {
-                ("TASKS", "j/k choose task · Enter open · :new")
+                ("CHATS", "j/k choose chat · Enter open · :new")
             }
             Route::NewTask { .. } if self.new_task_ui.composer_focused => {
                 ("COMPOSER", "type prompt · Esc normal · Ctrl-W h sidebar")
             }
-            Route::NewTask { .. } => ("NEW TASK", "i edit prompt · Ctrl-W h sidebar"),
+            Route::NewTask { .. } => ("NEW CHAT", "i edit prompt · Ctrl-W h sidebar"),
             Route::Scratchpad { .. } => (
                 "SCRATCHPAD",
                 "type notes · Shift+arrows select · Ctrl+K clear",
@@ -3846,7 +3858,7 @@ impl App {
             },
             Route::RepoGit { .. } => ("GIT DETAIL", "j/k scroll · Ctrl-W h list · gt tabs"),
             Route::TaskGit { .. } if self.current_screen_pane() == 0 => {
-                ("TASK FILES", "↑↓ browse · Enter open")
+                ("CHAT FILES", "↑↓ browse · Enter open")
             }
             Route::TaskGit { .. } => ("TASK DIFF", "j/k scroll · Ctrl-W h files · gt tabs"),
             Route::Github { .. } if self.current_screen_pane() == 0 => {
@@ -3985,7 +3997,7 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
             if let Some(url) = url {
                 app.open_url(&url);
             } else {
-                app.notice = Some("no PR or issue URL on this task".to_owned());
+                app.notice = Some("no PR or issue URL on this chat".to_owned());
             }
         }
         MenuAction::CopyBranch => {
@@ -3993,7 +4005,7 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
             if let Some(branch) = branch {
                 app.copy_text(&branch);
             } else {
-                app.notice = Some("this task has no branch".to_owned());
+                app.notice = Some("this chat has no branch".to_owned());
             }
         }
     }
@@ -4143,7 +4155,7 @@ impl UppercaseTitle for NavItem {
     fn uppercase_title(self) -> &'static str {
         match self {
             Self::NewTask => "NEW TASK",
-            Self::Tasks => "TASKS",
+            Self::Tasks => "CHATS",
             Self::Scratchpad => "SCRATCHPAD",
             Self::Ide => "IDE",
             Self::Terminal => "TERMINAL",

@@ -66,20 +66,24 @@ pub fn repair_runs_command(repo_root: &Path) -> i32 {
 
 /// `coducktor run "<message>"` — create one conversation, run exactly one native harness turn,
 /// print its normalized output, and return success only when the turn ended normally.
-pub async fn run_command(
-    repo_root: PathBuf,
-    message: String,
-    harness: Runner,
-    model: Option<String>,
-    reasoning: Option<String>,
-    skills: Vec<String>,
-    base_branch: Option<String>,
-    worktree: bool,
-    git_mode: ConversationGitMode,
-) -> i32 {
+pub struct RunCommandOptions {
+    pub message: String,
+    pub harness: Runner,
+    pub model: Option<String>,
+    pub reasoning: Option<String>,
+    pub skills: Vec<String>,
+    pub base_branch: Option<String>,
+    pub worktree: bool,
+    pub git_mode: ConversationGitMode,
+}
+
+pub async fn run_command(repo_root: PathBuf, options: RunCommandOptions) -> i32 {
     let engine = InProcessEngine::new(&repo_root, env!("CARGO_PKG_VERSION"));
-    run_command_with_engine(
-        &engine,
+    run_command_with_engine(&engine, options).await
+}
+
+async fn run_command_with_engine(engine: &InProcessEngine, options: RunCommandOptions) -> i32 {
+    let RunCommandOptions {
         message,
         harness,
         model,
@@ -88,22 +92,7 @@ pub async fn run_command(
         base_branch,
         worktree,
         git_mode,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_command_with_engine(
-    engine: &InProcessEngine,
-    message: String,
-    harness: Runner,
-    model: Option<String>,
-    reasoning: Option<String>,
-    skills: Vec<String>,
-    base_branch: Option<String>,
-    worktree: bool,
-    git_mode: ConversationGitMode,
-) -> i32 {
+    } = options;
     if message.trim().is_empty() {
         eprintln!("usage: coducktor run [OPTIONS] \"<message>\"");
         return 1;
@@ -686,14 +675,16 @@ mod tests {
         let engine = dry_run_engine(repo.path());
         let code = run_command_with_engine(
             &engine,
-            "investigate the login redirect bug mock:done".to_owned(),
-            Runner::Claude,
-            None,
-            None,
-            Vec::new(),
-            None,
-            false,
-            ConversationGitMode::Manual,
+            RunCommandOptions {
+                message: "investigate the login redirect bug mock:done".to_owned(),
+                harness: Runner::Claude,
+                model: None,
+                reasoning: None,
+                skills: Vec::new(),
+                base_branch: None,
+                worktree: false,
+                git_mode: ConversationGitMode::Manual,
+            },
         )
         .await;
         assert_eq!(code, 0);
@@ -705,14 +696,16 @@ mod tests {
         let engine = dry_run_engine(repo.path());
         let code = run_command_with_engine(
             &engine,
-            "   ".to_owned(),
-            Runner::Claude,
-            None,
-            None,
-            Vec::new(),
-            None,
-            false,
-            ConversationGitMode::Manual,
+            RunCommandOptions {
+                message: "   ".to_owned(),
+                harness: Runner::Claude,
+                model: None,
+                reasoning: None,
+                skills: Vec::new(),
+                base_branch: None,
+                worktree: false,
+                git_mode: ConversationGitMode::Manual,
+            },
         )
         .await;
         assert_eq!(code, 1);

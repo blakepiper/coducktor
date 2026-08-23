@@ -76,7 +76,7 @@ impl ThreadAction {
             Self::Finish => ":finish",
             Self::Archive => ":archive",
             Self::Delete => ":delete",
-            _ => "task action",
+            _ => "chat action",
         }
     }
 }
@@ -125,6 +125,57 @@ impl ThreadSubject {
             Self::Conversation(record) => &record.title,
             Self::LegacyRun(run) => &run.record.title,
         }
+    }
+}
+
+/// Adapt conversation metadata to the mature transcript projection without making the
+/// conversation runtime run-shaped. The adapter exists only inside the renderer; Engine and
+/// persistence continue to use the conversation-native contract.
+fn conversation_projection_run(record: &coducktor_contract::ConversationRecord) -> ApiRun {
+    use coducktor_contract::ConversationState;
+
+    let status = match record.state {
+        ConversationState::Idle => RunStatus::Idle,
+        ConversationState::Queued => RunStatus::Queued,
+        ConversationState::Running => RunStatus::Running,
+        ConversationState::NeedsInput => RunStatus::Waiting,
+        ConversationState::Failed => RunStatus::Failed,
+        ConversationState::Cancelled => RunStatus::Cancelled,
+    };
+    ApiRun {
+        record: coducktor_contract::RunRecord {
+            id: record.id.clone(),
+            title: record.title.clone(),
+            workflow: String::new(),
+            task: record.initial_message.text.clone(),
+            model: record.model.clone(),
+            runner: Some(record.harness),
+            status,
+            created_at: record.created_at.clone(),
+            updated_at: Some(record.updated_at.clone()),
+            started_at: record
+                .active_turn
+                .as_ref()
+                .or(record.latest_turn.as_ref())
+                .and_then(|turn| turn.started_at.clone()),
+            finished_at: record
+                .latest_turn
+                .as_ref()
+                .and_then(|turn| turn.finished_at.clone()),
+            tokens_used: record.tokens_used,
+            input_tokens: record.input_tokens,
+            output_tokens: record.output_tokens,
+            cost_usd: record.cost_usd,
+            worktree: Some(record.worktree),
+            worktree_path: record.worktree_path.clone(),
+            branch: record.branch.clone(),
+            archived: record.archived,
+            archived_at: record.archived_at.clone(),
+            seen_at: record.seen_at.clone(),
+            error: record.last_error.clone(),
+            ..Default::default()
+        },
+        usage: None,
     }
 }
 
@@ -456,11 +507,7 @@ impl ThreadUi {
     }
 
     fn rebuild_full(&mut self) {
-        let active_turn = self
-            .data
-            .run()
-            .as_ref()
-            .is_some_and(|run| run.record.status == RunStatus::Running);
+        let active_turn = self.data.turn_is_running();
         let started = Instant::now();
         self.data.state = reduce_thread(&self.data.events, ThreadReduceOptions { active_turn });
         self.refresh_projection(self.data.events.len(), started.elapsed());
@@ -503,7 +550,14 @@ impl ThreadUi {
             self.pending_composer = None;
             self.delivery_error = false;
         }
-        if let Some(run) = self.data.run().cloned() {
+        let projection_run = match self.data.subject.as_ref() {
+            Some(ThreadSubject::LegacyRun(run)) => Some((**run).clone()),
+            Some(ThreadSubject::Conversation(record)) => {
+                Some(conversation_projection_run(record.as_ref()))
+            }
+            None => None,
+        };
+        if let Some(run) = projection_run {
             let run = &run;
             self.data.view_model = projection::project_thread_with_root(
                 run,
@@ -1262,12 +1316,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 cycle_header_action(app, false);
             }
             KeyCode::Enter => {
-                let action = app
-                    .thread_ui
-                    .data
-                    .run()
-                    .as_ref()
-                    .and_then(|run| widgets::header_actions(run).get(index).cloned())
+                let action = thread_header_actions(app)
+                    .get(index)
+                    .cloned()
                     .map(|(_, action)| action);
                 app.thread_ui.header_action_focus = None;
                 if let Some(action) = action {
@@ -1280,6 +1331,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 return false;
             }
         }
+        return true;
+    }
+    if key.code == KeyCode::Esc
+        && let Some(record) = app.thread_ui.data.conversation().cloned()
+        && record.state.is_active()
+    {
+        apply_conversation_action(app, &record, ThreadAction::Cancel);
         return true;
     }
     if key.code == KeyCode::Esc && app.thread_ui.focus == ThreadFocus::Composer {
@@ -1332,13 +1390,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
 }
 
 fn cycle_header_action(app: &mut App, forward: bool) -> bool {
-    let count = app
-        .thread_ui
-        .data
-        .run()
-        .as_ref()
-        .map(|run| widgets::header_actions(run).len())
-        .unwrap_or_default();
+    let count = thread_header_actions(app).len();
     if count == 0 {
         app.thread_ui.header_action_focus = None;
         return false;
@@ -1353,6 +1405,16 @@ fn cycle_header_action(app: &mut App, forward: bool) -> bool {
     app.thread_ui.focus = ThreadFocus::Transcript;
     app.thread_ui.header_action_focus = Some(next);
     true
+}
+
+fn thread_header_actions(app: &App) -> Vec<(&'static str, ThreadAction)> {
+    if let Some(record) = app.thread_ui.data.conversation() {
+        widgets::conversation_header_actions(record)
+    } else if let Some(run) = app.thread_ui.data.run() {
+        widgets::header_actions(run)
+    } else {
+        Vec::new()
+    }
 }
 
 /// Deliver a bracketed-paste chunk to the focused composer.
@@ -2279,8 +2341,13 @@ mod tests {
         );
         assert!(
             can_send_followup(&app),
-            "turn end alone makes the composer available — no reload, no user decision"
+            "turn end alone makes the composer available — no user decision"
         );
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::LoadThread { project, id }
+                if project == "main" && id == "chat-1"
+        )));
         assert!(
             app.project_tasks
                 .get("main")
@@ -2685,6 +2752,35 @@ mod tests {
     }
 
     #[test]
+    fn escape_cancels_a_live_conversation_without_dropping_its_draft() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Running);
+        app.thread_ui.composer.set_text("keep this draft");
+
+        assert!(handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        ));
+
+        assert!(app.thread_ui.cancel_pending);
+        assert_eq!(app.thread_ui.composer.text, "keep this draft");
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::CancelConversationTurn { project, id }
+                if project == "main" && id == "chat-1"
+        )));
+    }
+
+    #[test]
+    fn conversation_header_actions_are_keyboard_reachable() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        assert!(handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+        ));
+        assert_eq!(app.thread_ui.header_action_focus, Some(0));
+    }
+
+    #[test]
     fn idle_escape_only_drops_focus_and_bare_archive_finish_keys_are_inert() {
         let mut app = app_with_run(RunStatus::Idle);
         assert!(handle_key(
@@ -2766,6 +2862,10 @@ mod tests {
                 "git mode is shown in the header"
             );
             assert!(screen.contains("worktree"));
+            assert!(
+                screen.contains("On it."),
+                "conversation assistant output is visible at {width}x{height}"
+            );
             // Scan only for strings the thread itself would draw. "Terminal" is excluded here
             // because the workspace sidebar legitimately offers an embedded terminal tab; the
             // thread's own control set is asserted exactly below instead.

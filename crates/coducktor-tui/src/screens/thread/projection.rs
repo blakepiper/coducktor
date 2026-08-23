@@ -162,7 +162,10 @@ pub fn project_thread_with_root(
     // Keep activity that precedes the first v1 user-message in this opening turn.
     if !run.record.task.is_empty() {
         if let Some(first) = state.turns.first()
-            && first.user_message.is_none()
+            && first
+                .user_message
+                .as_ref()
+                .is_none_or(|message| message.text == run.record.task)
         {
             initial_activity_turn = Some(first.id.clone());
             turns.push(build_turn(

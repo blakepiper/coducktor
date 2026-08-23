@@ -80,6 +80,10 @@ impl OpencodeRunSession {
         )
         .map_err(|error| wrap_spawn_error(&error, &self.config.program))?;
         process.set_cancellation(request.cancellation.clone());
+        // `opencode run` waits for piped stdin to reach EOF before it begins the argument-supplied
+        // prompt. Coducktor never sends protocol data on this transport, so retaining the pipe
+        // makes a real interactive launch wait forever even though fixture processes exit.
+        process.close_stdin();
 
         let mut state = RunState::default();
         loop {

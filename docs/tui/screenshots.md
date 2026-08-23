@@ -1,84 +1,20 @@
-# Screenshots
+# TUI visual references
 
-coducktor is a headless-CI-built Rust TUI — there is no real terminal in this
-sandbox to screenshot (see the same caveat in `terminals.md`). Rather than
-fabricate images, these are honest **plain-text renders** pulled straight from
-the app's own `insta` snapshot tests (`ratatui::backend::TestBackend` — the
-same mechanism used for the primary UI verification tool), which
-exercise the real render pipeline deterministically. Colors are not shown; the
-actual TUI runs in full theme color per `docs/tui/terminals.md`.
+The committed `insta` snapshots under `crates/coducktor-tui/src/screens/**/snapshots/` are the
+source of truth for rendered cockpit frames. They cover 80×24, 120×40, and 200×60 layouts for New
+Chat, Chats, chat timelines, GitHub, Settings, and the remaining supporting screens.
 
-Source: `crates/coducktor-tui/src/snapshots/coducktor_tui__app__tests__tasks_*.snap`.
-Regenerate these excerpts after any UI change with `cargo insta test`.
+Review changed snapshots explicitly with `cargo insta review`; do not accept them as a batch
+without checking that:
 
-## Tasks screen, 120×40 (sidebar visible)
+- New Chat exposes only Message, Harness, Model, Reasoning, Skills, Base branch, Worktree, and Git
+  mode;
+- Chats and All Chats use Needs you, Working, Recent, and Archived groupings;
+- active conversations retain their draft while Send is disabled;
+- current screens contain no workflow, variant, compare, review, finish, continue, task-mode, or
+  provider-routing controls; and
+- narrow layouts remain keyboard- and mouse-reachable.
 
-```text
- [=] coducktor / main /p/main  [running 0] [needs 0]
-  PROJECTS                   Tasks Archived 0    /                                                                      
-  - main                    ┌TASKS — main──────────────────────────────────────────────────────────────────────────────┐
-  > Tasks                   │No tasks in this project. Press n for New task.                                           │
-    Scratchpad              │                                                                                          │
-    IDE                     │                                                                                          │
-    Terminal                │                                                                                          │
-    Git                     │                                                                                          │
-    GitHub                  │                                                                                          │
-    Skills                  │                                                                                          │
-    Workflows               │                                                                                          │
-    Settings                │                                                                                          │
-                            │                                                                                          │
-  WORKSPACE                 │                                                                                          │
-    All tasks               │                                                                                          │
-                            │                                                                                          │
-    Settings                │                                                                                          │
-  NEEDS YOU                 │                                                                                          │
-  WORKING                   │                                                                                          │
-  DONE                      │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            │                                                                                          │
-                            └──────────────────────────────────────────────────────────────────────────────────────────┘
- NORMAL  FOCUS: SIDEBAR — ↑↓ choose project or view · Enter open  ·  main  lazyvim  v0.1.0  [providers --]  ? help
-```
-
-## Tasks screen, 80×24 (sidebar auto-collapsed below the 100-column breakpoint)
-
-```text
- [=] coducktor / main /p/main  [running 0] [needs 0]
- Tasks Archived 0    /                                                          
-┌TASKS — main──────────────────────────────────────────────────────────────────┐
-│STATUS TASK WORKFLOW br ± REF        IN/OUT     COST                          │
-│No tasks yet. Describe a task to get started.                                 │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-NORMAL  FOCUS: TASKS — ↑↓ choose task · Enter open · c new  ·  main  lazyvim  v0.1.0  [providers --]  ? help
-```
+Static copies of rendered frames are intentionally not duplicated here because they drift from
+the executable snapshots. Real terminal behavior and harness runs are recorded in
+[`terminals.md`](terminals.md).

@@ -1,5 +1,9 @@
 # Intelligent automatic routing and usage-aware recovery
 
+> Superseded on 2026-08-23 by the
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). Coducktor now uses
+> an explicit concrete harness and does not route, fail over, or auto-resume provider turns.
+
 Status: implementation specification and delivery plan
 
 Audience: product, contract, core, client, runner, and TUI implementers

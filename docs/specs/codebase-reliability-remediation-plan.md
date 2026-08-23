@@ -1,5 +1,9 @@
 # Codebase reliability remediation — remaining-work implementation specification
 
+> Superseded for current product behavior on 2026-08-23 by the
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). Retained as a
+> historical reliability plan; workflow lifecycle descriptions are not current behavior.
+
 Status: ready for one autonomous implementation session (rewritten 2026-08-19)
 
 Audience: the next implementation agent. Work directly on `main`, preserve unrelated changes,

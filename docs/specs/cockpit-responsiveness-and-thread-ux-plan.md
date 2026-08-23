@@ -1,5 +1,9 @@
 # Cockpit responsiveness and thread UX — implementation specification
 
+> Superseded for current product behavior on 2026-08-23 by the
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). Its performance and
+> lock-discipline evidence remains historical context.
+
 Status: Phases 1–6 implemented (written 2026-08-22, updated 2026-08-22)
 
 Audience: the next implementation agent. Work directly on `main`, preserve unrelated changes,

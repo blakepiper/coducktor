@@ -1,90 +1,81 @@
-# AGENT_PROTOCOL.md — Coducktor agent protocol
+# Agent harness protocol
 
-Coducktor runs coding-agent CLIs behind one backend-agnostic Rust seam and persists a normalized
-event stream. This document is the operational contract for a runner: its input, session
-lifecycle, event mapping, teardown behavior and test obligations.
+Coducktor is a conversation manager around native coding-agent harnesses. The boundary is one
+ordinary user submission to one native provider turn. Coducktor owns durable chat state,
+admission, cancellation, working-directory placement, bounded event delivery, and presentation;
+the selected harness owns its model loop, tools, delegation, context management, and decision to
+end the turn.
 
-The implementation lives in `crates/coducktor-runners/src/`; the durable event shapes live in
-`crates/coducktor-contract/src/events.rs` and the normalized UI vocabulary in
-`crates/coducktor-protocol/src/ui_events.rs`. Golden fixtures live under `fixtures/` and are
-checked by `crates/coducktor-runners/tests/golden.rs` and `tests/ui_parity.rs`.
+## Turn request
 
-## Runner seam
+The backend-neutral conversation request carries:
 
-Every backend is selected through `SessionFactory` and implements the session contract used by
-`coducktor-core::workflows::run`. Backend-specific command-line and wire details stay inside the
-runner crate.
+- exact user-authored text and any supported image attachments;
+- a concrete harness, optional model, and optional provider-native reasoning value;
+- bounded, explicitly delimited skill context for that message;
+- the conversation working directory and autonomous permission policy; and
+- a native provider session ID when resuming.
 
-The supported backends are Claude, Codex, OpenCode and pi. The factory resolves their executable
-overrides from the `DUCK_*_BIN` environment variables, while `DUCK_DRY_RUN=1` selects the bundled
-offline fixtures where that backend's contract supports it. The child environment is assembled
-by `agent_env`; it is an explicit least-privilege allowlist, not an accidental copy of the host
-environment.
+Omitting model or reasoning means the harness default. Coducktor does not add completion markers,
+continuation prompts, plan handoffs, review prompts, context-refresh prompts, or model-written Git
+requests. Skill context augments the provider request but never changes the durable user message.
 
-Each session accepts a backend-neutral request containing the prompt, optional system prompt,
-working directory, model, reasoning preference, tool policy, timeout and session/resume data.
-It returns turn-scoped reports and emits live v1 and v2 events through the engine's in-process
-event bus. A runner must preserve the session id, stream partial content, surface tool activity,
-report usage/cost when the backend provides it, and distinguish an agent failure from a teardown
-the runner initiated.
+## Native mappings
 
-## Event layers
+- **Claude Code** uses streaming JSON for the first turn and its native resume form for later
+  turns. Autonomous non-interactive execution is requested explicitly.
+- **Codex** uses app-server JSON-RPC. A conversation maps to one Codex thread; each user message
+  starts one turn on that thread.
+- **OpenCode** uses its JSON event stream and resumes by native session identifier. Autonomous
+  execution is explicit.
+- **pi** uses its RPC mode; each message is one native prompt on the retained or resumed session.
 
-The v1 flat stream remains readable for existing NDJSON recordings. Its event kinds are text,
-tool call, tool result, image, token usage, cost, session, turn end, note, done and error. Do not
-rename or remove an existing kind.
+Provider command lines and wire types remain private to `coducktor-runners`. They are translated
+to the small normalized event vocabulary before reaching core or the UI.
 
-The v2 stream is item-oriented and is defined by the Rust protocol crate. It includes:
+## Events and outcomes
 
-- session started, ended and error;
-- turn started and completed;
-- item started, delta, updated and completed for messages, reasoning and tools;
-- complete plan replacement snapshots;
-- cumulative usage updates and images;
-- structured user questions and the reserved permission events.
+The normalized stream preserves assistant text, compact reasoning/activity when exposed, tool
+lifecycle, structured questions, errors, usage, provider session identity, and native turn end.
+Unknown or malformed provider frames degrade to bounded diagnostics; they do not become synthetic
+user turns.
 
-Stable item ids are required. Child work is nested with `parent_item_id`. Token fields remain raw
-provider values; weighting belongs to presentation. A backend may omit a capability only when its
-wire cannot provide it, and the UI must degrade that capability rather than the whole backend.
+A native turn ends as `ended`, `failed`, or `cancelled`. Coducktor does not inspect prose,
+question marks, markers, token-limit wording, or plan state to decide whether to send again. Empty
+or question-shaped final text still ends the ordinary turn.
 
-Provider-native delegation stays inside the backend process; Coducktor observes and nests the
-reported child work but does not start its own subagent runtime. Agent command tools are headless
-and never borrow the user-controlled Terminal tab's PTY.
+Only a provider-native structured question may suspend a turn. It carries a stable request ID and
+a bounded answer shape; the user's answer is delivered through the exact pending provider
+response path. An ordinary question in assistant prose ends the turn and is answered with the
+next ordinary user message. Permission approval requests are not a portable conversation feature:
+an unexpected one fails closed and visibly.
 
-`DUCK_APPROVAL_GATE=1` opts supported backends into recoverable tool approvals. A runner that
-receives an approval RPC it can answer emits `permission.requested`, returns a waiting outcome
-without closing the provider session, translates the user's selected option back to that exact
-RPC, and emits `permission.resolved` before it resumes reading the turn. Unsupported approval
-shapes fail closed and must never leave the provider blocked on an unanswered request.
+## Sessions and recovery
 
-## Teardown and timeouts
+The provider session ID belongs to the durable conversation. A live session may be parked between
+turns; after process or application restart Coducktor asks the same harness to resume that native
+session without replaying the transcript. If native resume cannot be re-established, the turn
+fails and recovery requires an explicit user action.
 
-The shared child-process helper owns stdin closure, stdout line delivery, stderr collection and
-best-effort termination escalation. Cooperative finish closes input and waits briefly; a stuck
-child receives termination and then a hard kill. Cancellation and timeout are reported according
-to the run lifecycle, not as a fabricated provider failure. Every process is dropped safely even
-if a test or caller abandons a session.
+An admitted message is persisted before provider I/O. Startup never silently resends a queued or
+running message. A structured request that existed only in a dead process is recorded as
+interrupted rather than fabricated after restart.
 
-The Rust session API is turn-scoped. Claude, Codex, OpenCode and pi each document the small
-transport differences in their module docs; those differences must not leak into core lifecycle
-or TUI code.
+## Concurrency and process safety
 
-## Compatibility markers
+Conversation admission is bounded globally. Managed worktrees isolate concurrent chats; in-place
+turns sharing a repository root are serialized. No manager lock is held while opening a session,
+calling a provider turn, waiting for a child, or running Git. Cancellation is bounded and reaps
+the provider process. Agent stdout and stderr are captured, never inherited by the cockpit
+terminal.
 
-New prompts and fixtures emit the current marker vocabulary. The parser retains a permanent
-dual-read compatibility regex for the previous marker spelling because already-running agents
-and old skills can still send it. The same rule applies to task branches: writers create the
-current prefix and readers accept both generations. A marker is parsed from assembled agent text,
-not tool output, and marker precedence remains completion, structured question, monitoring.
+Missing executables, credentials, network access, catalogs, or optional writable state fail only
+the selected capability or turn. They must not prevent the cockpit or unrelated projects from
+opening.
 
-## Adding a backend
+## Compatibility boundary
 
-1. Add one runner module and one `SessionFactory` branch; do not add backend conditionals to
-   screens or core.
-2. Map the backend's stream into both event layers, including session, turn, tool, text, usage,
-   failure and teardown behavior.
-3. Add committed input/expected golden fixtures and a parity assertion for every capability the
-   backend claims.
-4. Add subprocess coverage for missing executables, first-turn streaming, follow-up turns,
-   cancellation/finish and any structured question or child-thread behavior.
-5. Run the workspace test, clippy and format gates and update this document if the seam changes.
+Legacy task, workflow, variant, marker, and task-branch records remain readable through
+compatibility readers. They may be inspected, archived, deleted, and used by existing Git views,
+but they never enter the conversation runtime. New writers emit only conversation-first state and
+the current marker and branch spellings.

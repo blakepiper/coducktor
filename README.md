@@ -1,380 +1,142 @@
-<div align="center">
-
 # Coducktor
 
-**A local terminal cockpit for coding-agent workflows.**
+Coducktor is a local terminal cockpit for durable coding-agent conversations. It wraps Claude
+Code, Codex, OpenCode, and pi in one Rust binary, keeps chats scoped to their repository, and
+leaves the selected harness in charge of its own agent loop.
 
-Coducktor gives you one place to start coding tasks, watch agent work as it
-happens, review the resulting changes, and keep a durable history of every run.
+One submitted message always means one native harness turn. The harness may reason, call tools,
+delegate, edit, and test for as long as that turn needs; when it returns, Coducktor records the
+result and waits for the next user message. Coducktor does not route between providers, retry by
+prompting the model, or run a workflow behind the conversation.
 
-[What it is](#what-it-is) | [Install](#install) | [Use the cockpit](#use-the-cockpit) |
-[CLI](#headless-cli) | [Workflows and skills](#workflows-and-skills) |
-[Development](#development)
+## Install and start
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Rust 1.97.1](https://img.shields.io/badge/Rust-1.97.1-orange)
-![Local first](https://img.shields.io/badge/local--first-yes-success)
-![No database](https://img.shields.io/badge/database-none-success)
+Requirements are Rust and at least one supported agent CLI. Git is optional for in-place chats;
+`gh` is optional for the GitHub screen.
 
-</div>
-
----
-
-## What it is
-
-Coducktor is a single Rust binary with two names: `coducktor` and the shorter
-`duck`. Its main interface is an interactive terminal UI backed by an in-process
-engine. It is not a browser application, hosted service, or background server.
-Coducktor itself does not require Node.js or npm.
-
-The cockpit can:
-
-- Start a plain task, apply a Markdown skill, or run a saved YAML workflow.
-- Run Claude Code, Codex, OpenCode, or pi sessions through one normalized runner interface.
-- Select a model, reasoning effort, branch, worktree mode, and task mode.
-- Run up to three competing Git variants and compare their diffs before choosing one.
-- Run tasks in isolated Git worktrees by default, with direct-checkout execution available when
-  explicitly wanted.
-- Stream agent text, tool activity, plans, questions, images, token counts, costs, and step status.
-- Persist run history and event transcripts so completed work remains inspectable after restart.
-- Continue, cancel, finish, archive, delete, or hand a completed session back to its native CLI.
-- Inspect task changes, files, and commits, then commit and push from the task Git view.
-- Browse and edit project files in the built-in IDE view.
-- Read GitHub issues and pull requests, hand them to an agent, inspect PR changes, create draft PRs,
-  and merge PRs when the local GitHub CLI is available.
-- Manage multiple local project folders from one workspace registry.
-
-Coducktor itself needs no account, database, web server, or project-specific service. Agent
-authentication remains owned by the agent CLIs, and GitHub access is optional.
-
-## Install
-
-Coducktor is source-first. There is no hosted installer or release archive.
-
-### Requirements
-
-- [Rustup](https://rustup.rs). The repository pins Rust `1.97.1` in
-  [`rust-toolchain.toml`](rust-toolchain.toml).
-- Git for worktrees and the Git views. Non-Git folders can still run tasks in place.
-- At least one logged-in agent CLI:
-  [Claude Code](https://claude.com/claude-code),
-  [Codex](https://github.com/openai/codex),
-  [OpenCode](https://opencode.ai), or
-  [pi](https://github.com/badlogic/pi-mono).
-- The [GitHub CLI](https://cli.github.com/) with `gh auth login`, or a GitHub token, only if you want
-  the GitHub view or GitHub actions.
-
-### Install from a checkout
-
-```bash
-git clone https://github.com/blakepiper/coducktor.git
-cd coducktor
-./install.sh
-```
-
-The installer builds the release binary and installs both `coducktor` and `duck` with
-`cargo install`. Ensure `$CARGO_HOME/bin` is on your `PATH` if the installer reports that it is
-not.
-
-Run the cockpit from the project you want to work on:
-
-```bash
-cd /path/to/your/project
-duck
-```
-
-The long name works everywhere too:
-
-```bash
+```sh
+cargo install --path crates/coducktor-tui
+coducktor projects add --repo .
 coducktor
 ```
 
-To run directly from the source checkout without installing:
+The installed binary is `coducktor`; `duck` is its short alias. During development:
 
-```bash
-cargo run -p coducktor-tui
+```sh
+cargo run -p coducktor-tui --
 ```
 
-To update a source installation, pull the checkout and run the installer again:
+Startup discovers the current repository, registered projects, local skills, Git, agent CLIs,
+and provider health. A missing optional CLI, credential, network connection, Git checkout, or
+writable optional state reduces only the affected capability.
 
-```bash
-git pull && ./install.sh
-```
+## The conversation loop
 
-## Use the cockpit
+Open **New chat**, write the exact message you want to send, and choose:
 
-### Start a task
+- a concrete harness: Claude, Codex, OpenCode, or pi;
+- the harness default or a discovered model and reasoning value;
+- zero or more local skills for this message;
+- a base branch and managed-worktree policy when Git is available; and
+- manual or automatic Git handling.
 
-1. Launch `duck` from a project folder. If you launch it from a subdirectory of a Git repository,
-   Coducktor resolves the repository root.
-2. Press `c` to open **New task**.
-3. Enter what the agent should do.
-4. Choose a baseline task, skill, or workflow. Then choose an available runner, model, reasoning
-   effort, branch, worktree mode, and task mode as needed.
-5. Leave autonomous mode enabled to let the run continue through its workflow without waiting for
-   confirmation, or toggle it off when you want a more interactive handoff.
-6. Press Enter to send the task. Choose `planning` in the task-mode picker when you want a
-   concise plan without repository changes.
+Harness, model, reasoning, base branch, and working directory are fixed after the conversation
+starts. Skills are per-message attachments and clear after a successful send. Git mode can change
+while the chat is idle.
 
-In a Git repository, normal tasks use an isolated task worktree by default. Each run gets its own
-worktree in Coducktor's per-user project state on a `duck/<run-id-prefix>` branch, so the workspace's
-parallel-session capacity can be used safely. Turn worktree mode off when you intentionally want
-the agent to modify the current checkout; those runs are serialized with other in-place runs. The
-New Task screen shows which mode a run will use. Competing variants always use worktrees; without
-Git, the run executes in place.
+Coducktor preserves an editable draft while a turn is active, but Send remains disabled until the
+turn ends. `Esc` cancels a live turn without discarding that draft. Ordinary questions in
+assistant prose end the turn normally; only a provider-native structured question enters
+**Needs you** and continues the same pending turn when answered.
 
-### Follow a run
+The **Chats** and **All chats** views group current conversations into Needs you, Working, and
+Recent. A conversation is closed only when you archive it. Historical task records from older
+versions remain readable, archivable, deletable, and available to the Git inspection views, but
+cannot be executed by the conversation runtime.
 
-Open a task from **Tasks** to see its thread. The thread shows the live normalized transcript,
-workflow steps, tool calls, agent questions, plan progress, diff statistics, token usage, and cost
-when the selected backend reports them.
+## Harnesses
 
-When a run stops, the available actions depend on its state. You can answer questions, continue a
-closed session, finish a waiting or review run, cancel active work, or archive and delete terminal
-runs.
+| Harness | Executable | Native transport |
+| --- | --- | --- |
+| Claude Code | `claude` | streaming JSON first turn, native session resume |
+| Codex | `codex` | app-server JSON-RPC thread and turn calls |
+| OpenCode | `opencode` | JSON event stream with native session resume |
+| pi | `pi` | RPC session with native prompt and resume |
 
-Use the task Git tabs to inspect **Changes**, **Files**, and **Commits**. The **Compare** view appears
-for multi-variant runs; selecting one variant archives the others and removes their worktrees.
+The harness runs autonomously according to its normal non-interactive contract. Provider-specific
+session IDs are stored with the chat so later messages, including messages after a Coducktor
+restart, resume native context without transcript replay. An unexpected permission request fails
+that turn clearly; Coducktor does not emulate a harness approval interface.
 
-### Navigate
+Skills are discovered from local Coducktor and harness skill directories. Attachments are bounded
+and delimited before the exact user-authored message; the transcript always shows the original
+message. `coducktor init` creates an example skill under `.ai/coducktor/skills/`.
 
-The global keymap is intentionally small:
+## Git behavior
 
-| Key | Action |
-|---|---|
-| `q` | Quit |
-| `c` | New task |
-| `t` | Project tasks |
-| `g` | All tasks across registered projects |
-| `?` | Contextual help |
-| `:` | Command line |
-| `Ctrl+O` / `Ctrl+I` | Back / forward |
+Managed worktrees are the recommended default for Git repositories and allow conversations to run
+without sharing a checkout. In-place chats are serialized per repository root and cannot silently
+switch the user's checked-out branch.
 
-Use mouse navigation where supported. The complete screen-by-screen reference is in
-[`docs/tui/keymap.md`](docs/tui/keymap.md), and terminal capability notes are in
-[`docs/tui/terminals.md`](docs/tui/terminals.md).
+Manual Git mode never commits or pushes at turn end. Auto mode requires a managed worktree and,
+after a successful turn, uses deterministic local Git commands to commit and push changed work.
+It never asks a model to review changes or write a commit message. A failed or cancelled turn
+leaves changes available for manual inspection.
 
-### Projects
+## CLI
 
-The current folder is the boot project. Register additional folders in the project switcher or
-from the command line:
-
-```bash
-duck projects add /path/to/another/project
-duck projects list
-duck --repo /path/to/another/project
-```
-
-`--repo` selects an already registered project. Removing a project only removes its registry entry;
-it does not delete the folder or its `.ai/coducktor/` data.
-
-## Headless CLI
-
-The non-interactive commands never open the TUI, alternate screen, browser, or Coducktor listener.
+Running `coducktor` or `coducktor tui` opens the cockpit. The non-interactive commands never open
+an alternate screen or start a Coducktor service:
 
 ```text
-duck                         Launch the interactive cockpit
-duck tui                     Same as the default invocation
-duck run "<task>"            Run a task and stream events to the terminal
-duck init                    Scaffold an example workflow and skill
-duck repair-runs             Back up and repair quarantined run state
-duck doctor [--json]         Check installation and available CLIs
-duck projects [list]         List registered projects
-duck projects add [DIR]      Register a folder
-duck projects remove ID      Remove a registry entry
-duck projects rm ID          Alias for remove
-duck usage [OPTIONS]         Quota telemetry compatibility command
+coducktor run [OPTIONS] [MESSAGE]...  Run one conversation turn
+coducktor init                        Scaffold an example local skill
+coducktor doctor [--json]             Check local capabilities
+coducktor usage [--json] [--refresh]  Show sanitized provider quota telemetry
+coducktor repair-runs                 Back up and repair quarantined run state
+coducktor projects [list|add|remove]  Manage the project registry
 ```
 
-The global launch options are:
+Headless `run` accepts `--runner`, `--model`, `--reasoning`, repeatable `--skill`, `--branch`,
+`--worktree true|false`, `--git-mode manual|auto`, and `--repo`. It creates a conversation,
+submits exactly one message, and prints normalized assistant and activity output.
 
-```text
---repo DIR                   Select a registered project
---workflow NAME              Preselect a workflow on New Task, or select it for run
---model MODEL                Preselect a model on New Task, or select it for run
+```sh
+duck run --runner codex --reasoning high --worktree false --git-mode manual \
+  'Explain the failing test and fix it.'
 ```
 
-Examples:
+Use `coducktor <command> --help` for the complete generated interface.
 
-```bash
-# Uses the built-in quick-task workflow and the default Claude runner.
-duck run "Fix the flaky login test"
+## State and configuration
 
-# Use a saved workflow and model.
-duck run "Implement the cache invalidation change" \
-  --workflow implement-and-verify \
-  --model sonnet
+Repository state is stored under `.ai/coducktor/`; per-user registry, preferences, and usage state
+live under `~/.coducktor/`. Durable state is JSON, NDJSON, Markdown, and YAML—there is no database.
+Startup migrations are ordered, additive, idempotent, and non-blocking. Unknown JSON keys and
+valid siblings survive read-modify-write; a corrupt file stays in place after one warning while
+the application boots with defaults.
 
-# Run against a registered project without opening the cockpit.
-duck --repo /path/to/project run "Update the changelog"
+Coducktor never loads `.env` automatically. Optional environment overrides use the `DUCK_*`
+namespace and are documented in [`.env.example`](.env.example). Project and global defaults are
+also editable in Settings; current chat defaults cover concrete harnesses, provider models,
+worktree mode, Git mode, parallel-chat capacity, and worktree retention.
 
-# Print a machine-readable installation report.
-duck doctor --json
-```
+## Scope and architecture
 
-`run` exits `0` for a completed or review-ready run and `1` for other terminal states or an
-execution error. The headless default runner is Claude; a workflow step can request another runner.
-`init` is idempotent: it creates
-`.ai/coducktor/workflows/fix-and-verify.yaml`,
-`.ai/coducktor/skills/project-conventions.md` without overwriting existing example files. This is
-an explicit, repository-owned setup intended to be reviewed and committed.
+The shipped product is one local terminal binary with an in-process engine. It has no Coducktor
+service child, listening socket, browser cockpit, npm workspace, hosted deployment, or remote
+session surface. Agent output is captured and normalized; child stdout and stderr are never
+inherited by the user's terminal.
 
-`usage` prints the same sanitized quota and routing-health view as Settings. Use `--json` for
-machine-readable output or `--refresh` to bypass the local quota cache. Providers without a
-supported quota source remain visible with an honest unknown or unavailable status. Per-run token
-and cost fields are also shown when a backend supplies them.
+Screens depend on the client `Engine` trait. Durable conversation and Git behavior live in core;
+provider-native details stop at the runner seam. See [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md) for
+that boundary and [docs/tui/keymap.md](docs/tui/keymap.md) for cockpit navigation.
 
-`repair-runs` is an explicit recovery command for a project whose `runs.json` was quarantined after
-a corrupt read. It backs up the original file before replacing it with the salvaged run records.
+The repository gate is:
 
-## Workflows and skills
-
-The built-in `quick-task` workflow is always available. Custom workflows are loaded from
-`.ai/coducktor/workflows/*.yaml` and `.yml`. A workflow may contain agent steps, shell check steps,
-per-step skills, runner or model overrides, and bounded retry links to earlier steps.
-
-The New Task picker also includes the built-in `planning` task mode. It returns a concise,
-ordered plan and does not modify the repository.
-
-```yaml
-name: implement-and-verify
-steps:
-  - id: implement
-    name: Implement
-    prompt: "{{task}}"
-    runner: claude
-  - id: verify
-    name: Verify
-    command: "cargo test --workspace --all-targets"
-    onFail:
-      retry: implement
-      max: 2
-```
-
-Each step is either an agent step (`prompt` or `skill`) or a check step (`command`). The
-`onFail.retry` target must name an earlier step. The Workflows screen can create, reorder, save,
-delete, import, and export workflow YAML without editing it by hand.
-
-A skill is a Markdown playbook with optional frontmatter:
-
-```markdown
----
-name: project-conventions
-description: Apply this repository's style and testing rules.
----
-
-# Project conventions
-
-Describe the conventions the agent should follow here.
-```
-
-Project skills are commonly kept in `.ai/coducktor/skills/` or `.ai/skills/`. Coducktor also reads
-the supported agent skill directories in the project and the user's global skill directories. The
-Skills screen lets you inspect the merged catalog and the New Task screen lets you select a skill.
-
-## Agent backends
-
-Coducktor keeps backend-specific wire formats inside the runner layer while exposing the same task
-and thread behavior in the cockpit.
-
-| Runner | Executable | Session transport |
-|---|---|---|
-| Claude Code | `claude` | Headless stream JSON |
-| Codex | `codex` | `app-server` JSON-RPC |
-| OpenCode | `opencode` | Local `serve` process with HTTP and SSE |
-| pi | `pi` | Persistent JSONL RPC |
-
-Select a runner in New Task or set a default in Settings. The agent CLIs own provider login and
-credentials. Coducktor does not load a `.env` file automatically; shell environment overrides are
-documented in [`.env.example`](.env.example). Useful overrides include:
-
-```bash
-DUCK_CLAUDE_BIN=/path/to/claude
-DUCK_CODEX_BIN=/path/to/codex
-DUCK_OPENCODE_BIN=/path/to/opencode
-DUCK_PI_BIN=/path/to/pi
-DUCK_HOME=/path/to/coducktor-state
-```
-
-`DUCK_APPROVAL_GATE=1` enables supported provider approval gates. Claude uses its edit-approval
-mode; Codex parks command and file-change requests in `Needs You` so they can be allowed once,
-allowed for the session, or rejected from the task thread. By default, headless Claude denies tools
-that are not allowed by the workflow, while Codex runs autonomously. `DUCK_CODEX_NETWORK=0`
-selects Codex's network-blocked workspace-write sandbox instead of its default full-access mode.
-
-Agent command tools run headlessly and do not share the user-controlled Terminal tab. Provider-
-native delegation is allowed by the default workflow tool policy and appears as nested task
-activity when the backend reports it.
-
-## Git and GitHub
-
-Git is optional for basic in-place tasks, but it enables the safest and richest workflow:
-
-- Per-task worktrees and `duck/` task branches.
-- Task diffs anchored to the configured base branch.
-- Task-local file browsing, commits, pushes, and commit diffs.
-- Repository changes, commit history, and branch creation in the Git screen.
-- Worktree retention and cleanup from Settings.
-
-The GitHub screen is an optional local integration. It resolves the repository's `origin` remote and
-uses the `gh` CLI for issues, pull requests, comments, checks, PR changes, draft PR creation, and
-manual merge actions. If `gh`, authentication, the remote, or the network is unavailable, the rest
-of Coducktor continues to work and the GitHub screen explains why it is unavailable.
-
-The review gate is optional and off by default. Enable it in Settings or set
-`DUCK_REVIEW_GATE=1` to park changed, non-autonomous runs at `review` so you can inspect the diff,
-send feedback, accept the changes, or create a draft PR. Coducktor never merges a task
-automatically.
-
-## Local state and optional capabilities
-
-Per-project runtime data lives under `~/.coducktor/projects/<project-key>/`, including settings,
-run records, normalized event history, UI state, and managed worktrees. Opening a repository never
-creates or modifies `.ai/`. Run `duck init` only when you deliberately want to add the shareable
-workflows and skills under `.ai/coducktor/` to that repository.
-
-Workspace data lives under `~/.coducktor/`:
-
-- `config.json` contains the project registry, workspace defaults, resource limits, and agent defaults.
-- `ui-state.json` contains workspace UI preferences.
-- `agent-accounts.json` contains additional Claude or Codex account directories.
-
-Set `DUCK_HOME` to move the workspace state directory. Missing, corrupt, or unwritable state is
-treated as a degraded capability rather than a reason to prevent startup.
-
-The following features are opt-in or limited in this build:
-
-- Intelligent context refresh is disabled by default and can be enabled in Settings -> Resources.
-- Provider quota dashboards report supported local telemetry and preserve unknown states when an
-  installed backend does not expose a stable quota source.
-- Coducktor itself opens no listening socket and no browser. OpenCode may start its own short-lived
-  local `serve` process when that runner is selected.
-
-## Development
-
-The workspace is Rust-only and lives under `crates/`. Common commands:
-
-```bash
-just build       # release build of coducktor and duck
-just test        # cargo test --workspace --all-targets
-just lint        # fmt check plus clippy with -D warnings
-just fmt         # format the workspace
-just snapshots   # review insta TUI snapshots
-cargo run -p coducktor-tui
-```
-
-The final repository checks are:
-
-```bash
+```sh
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 cargo tree --workspace
 ```
-
-See [`docs/tui/screenshots.md`](docs/tui/screenshots.md) for deterministic text renders from the
-TUI snapshot tests.
-
-## License
-
-MIT. See [LICENSE](LICENSE).

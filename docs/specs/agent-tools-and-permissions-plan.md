@@ -1,5 +1,9 @@
 # Agent tools, delegation, and recoverable permissions
 
+> Superseded on 2026-08-23 by the
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). Retained as
+> historical implementation evidence; its approval UI and workflow policy are not current.
+
 ## Outcome
 
 Coducktor continues to run coding-agent commands headlessly and keeps the embedded Terminal tab

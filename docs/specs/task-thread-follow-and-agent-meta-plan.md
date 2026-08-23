@@ -1,5 +1,9 @@
 # Task thread follow mode and agent metadata
 
+> Superseded for current product behavior on 2026-08-23 by the
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). Follow-mode details
+> remain historical implementation evidence for the current conversation timeline.
+
 ## Decision
 
 The task transcript follows live output while it is at the bottom. Scrolling upward pauses

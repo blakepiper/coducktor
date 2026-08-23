@@ -20,6 +20,12 @@ if (args[0] !== 'run' || valueAfter('--format') !== 'json' || !args.includes('--
   process.exit(2);
 }
 
+// The real CLI does not begin an argument-supplied prompt while a piped stdin producer remains
+// open. Waiting here makes the transport test prove Coducktor closes its unused stdin handle.
+for await (const _chunk of process.stdin) {
+  // This transport has no stdin protocol.
+}
+
 const sessionID = valueAfter('--session') ?? 'ses_mock_opencode_run';
 const prompt = args.at(-1) ?? '';
 if (prompt.includes('mock:slow')) {

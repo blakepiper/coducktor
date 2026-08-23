@@ -1,268 +1,59 @@
-# Terminal support matrix
+# Interactive terminal verification
 
-Coducktor feature-detects and degrades — it never assumes a terminal capability.
-Detection still needs a real interactive terminal to exercise, so this checklist
-records what is implemented and which terminal observations remain unverified.
+Last run: 2026-08-23 in a real tmux PTY at 120×40, from the locally built
+`target/debug/coducktor`. These are interactive cockpit results; headless `coducktor run` output
+was not counted.
 
-## Current implementation
+The verification used isolated temporary `DUCK_HOME` and non-Git project directories so no source
+checkout or user registry was changed. Each message requested an exact response and no tools. For
+available harnesses, the second message was submitted from the same chat composer and the rendered
+timeline was captured after the chat returned to idle.
 
-- **Color.** `ColorCapability::detect()` (`crates/coducktor-tui/src/theme.rs`) reads `COLORTERM` for
-  `truecolor`/`24bit` → 24-bit RGB; else falls back to 256-color if `TERM` contains
-  `"256"`, else 16-color. Three named themes (`dark`, `lazyvim`, and `lakes`), no `system`
-  theme and no separate accent picker. The chosen theme is persisted in
-  `~/.coducktor/ui-state.json` and restored on later launches.
-- **Images.** `ImageSupport::detect()` (`crates/coducktor-tui/src/image.rs`) calls `ratatui-image`'s
-  `Picker::from_query_stdio()`, which probes the terminal (kitty graphics protocol,
-  iTerm2 protocol, or sixel) over stdio at startup; falls back to a halfblock Unicode
-  renderer on any color terminal, or a bordered placeholder + `o`-to-open otherwise.
-  This probe **requires a real interactive TTY** — see the caveat below.
-- **Mouse.** `crossterm`'s mouse capture is enabled unconditionally in
-  `terminal::setup()` (`crates/coducktor-tui/src/terminal.rs`). Click/hover/drag work wherever the
-  terminal reports mouse events at all; there's no separate capability gate.
-- **Alternate screen + raw mode.** Always on; restored via the panic hook and on
-  clean exit (`terminal::restore()`).
-- **Global settings.** Manually exercised through `:open /settings` in the same `script` pseudo-terminal
-  at `120x40` on 2026-08-17: the `Global settings` panel exposed `Add repository` and `Appearance`,
-  and quitting restored the alternate screen. Repeated at `120x40` on 2026-08-18 after adding
-  provider usage: the Resources section showed routing health, observation time, honest unknown
-  states for Claude and OpenCode, and both live Codex weekly windows (16% and 0% used) with reset
-  times; quitting again restored the alternate screen. Repeated in an isolated real `80x24` PTY on
-  2026-08-18 after restoring global agent defaults: `:open /settings` opened directly on `Agents`
-  and showed runner, per-provider model, reasoning, variants, worktree, and task-mode defaults. The
-  Codex model row opened a picker that refreshed from `auto` to the live model catalog; selecting
-  `gpt-5.6-terra` persisted it and immediately rendered that value in the row. `q` restored the
-  alternate screen.
-- **Auto routing failover.** Manually exercised in a real `120x40` `script` pseudo-terminal on
-  2026-08-18 with the bundled Claude and Codex process mocks and the configured runner default
-  set to Auto. A `mock:limit` prompt first rendered `Auto routing · trying Claude · model provider
-  default`; Claude's limit result then rendered the warning `Claude hit a usage limit — trying
-  Codex`, followed by the Codex choice and Codex output for the unchanged prompt. The exhausted
-  Claude session received no autonomous nudges, and quitting restored the alternate screen.
-- **OpenCode Go usage.** `duck usage --refresh` was manually exercised on 2026-08-18 against the
-  signed-in OpenCode Go account used by the BLARCHY top-bar widget. It reported the same live
-  session, weekly, and monthly windows with reset timestamps, without opening an interactive
-  OpenCode session or issuing a model prompt. The Resources screen was then exercised in a real
-  `140x50` terminal and showed OpenCode Go as available with distinct Session, Weekly, and Monthly
-  rows (0%, 80%, and 80%) and the same reset timestamps; quitting restored the alternate screen.
-- **Tasks keyboard focus.** Before the Phase 6 keymap change, this was manually exercised through
-  the real TUI in an 80x24 pseudo-terminal on 2026-08-17: from the focused sidebar, `Ctrl+Right`
-  moved control into the Tasks table,
-  `Down` highlighted the first task row, and `Enter` opened that task's thread. Quitting restored
-  the alternate screen.
-- **Focus feedback.** The status line names the keyboard-owned space (for example `SIDEBAR`,
-  `TASKS`, `COMMIT LIST`, or `GIT DETAIL`) and lists its movement keys. In the latest manual PTY
-  smoke test on 2026-08-22, pressing `Ctrl+W` alone visibly changed the status to `CTRL-W`, then
-  `l` changed focus from `SIDEBAR` to `TASKS`. `/last` visibly entered `SEARCH /last` and filtered
-  the task list, `Enter` returned to normal mode, and `:q` exited cleanly with the alternate screen
-  restored. An older 2026-08-18 run covered the superseded `Ctrl+Arrow` keymap. Project expansion
-  and switching retain sidebar focus.
-- **Debug HUD.** Manually exercised at `80x24` in a real pseudo-terminal on 2026-08-22 with
-  `DUCK_DEBUG_HUD=1`: the status bar showed live `FRAME`, `PROJ`, `REDUCED`, and `DROPPED` values,
-  kept those diagnostics visible as the workspace snapshot populated the Tasks screen, and
-  restored the alternate screen on `q`. The ordinary focus hint followed the metrics and clipped
-  cleanly at the terminal edge.
-- **Embedded project terminals.** The per-project Terminal tab (`screens/terminal.rs` + `pty.rs`)
-  runs a real `$SHELL` inside the cockpit — no external terminal emulator is spawned. Each
-  project gets one persistent session (`portable-pty` master pair + a background reader thread
-  feeding a `vt100` parser), keyed in `TerminalUi::sessions` and kept alive across navigation.
-  The shell's grid renders inside the tab with per-cell colors and a reversed cursor block;
-  every key on the tab goes to the shell (Esc included), scrollback is browsable with the mouse
-  wheel, and bracketed paste is enabled for the cockpit lifetime. Pasting multiline clipboard
-  content into the shell arrives as one chunk.
-  Leaving the tab: `Ctrl+W h` to the sidebar, mouse, or a sidebar nav row; a dead shell falls
-  back to degraded keys (Enter/r restarts, Esc leaves). Resize follows the tab's rect and
-  forwards SIGWINCH to the shell. Sessions are killed on quit via the session `Drop`.
-  The parser grid, key encoding, scrollback, and the spawn/error states are covered by unit
-  tests and insta snapshots. Manually exercised through the real TUI in an 80x24 pseudo-terminal
-  on 2026-08-17: opened `/p/coducktor/terminal`, verified the shell prompt and project cwd,
-  ran `printf 'manual-terminal-check\n'` and saw its output in the pane, sent `Ctrl+C`, used the
-  then-current `Ctrl+Left` binding to reach the sidebar, navigated to Git, and quit with the
-  alternate screen restored.
-  Mouse-wheel scrollback and bracketed paste remain unverified in a live terminal.
-- **Composer paste.** With bracketed paste enabled for the cockpit lifetime, `Event::Paste` inserts
-  clipboard text at the caret in New Task and thread composers, including newlines. Text above
-  1,000 characters is shown as `[Pasted Content N chars]` and expanded exactly when submitted.
-  With the composer focused, `Ctrl+V` (or `Alt+V`) reads the native clipboard directly: image data
-  is PNG-encoded and shown as `[Image #N]`, while text follows the same paste path. Native clipboard
-  access degrades to a scoped notice when no display/clipboard provider is available; it is covered
-  by pure encoding, composer, new-task, follow-up, and retry-state tests but still needs live checks
-  across the terminal matrix below.
+## Harness matrix
 
-## Task experience smoke test
+| Harness | Local version and availability | First turn | Second turn / resume | Result |
+| --- | --- | --- | --- | --- |
+| Claude Code | 2.1.233; status `claude ok`, selectable | `CLAUDE TURN 1 OK` | `CLAUDE TURN 2 OK` in the same chat | Pass |
+| Codex | codex-cli 0.149.0; status `codex ok`, selectable | `CODEX TURN 1 OK` | `CODEX TURN 2 OK` in the same chat | Pass |
+| OpenCode | 1.18.18; status `opencode ok`, selectable | `OPENCODE TURN 1 OK` | `OPENCODE TURN 2 OK` in the same chat | Pass after stdin fix |
+| pi | 0.83.0 installed, but `pi --list-models` reported no models and requested `/login`; omitted from the connected-harness picker | Not runnable | Not runnable | Unavailable locally |
 
-- **120×40 tmux pseudo-terminal, 2026-08-22 (confirmed active-run cancellation).** Built and
-  launched the real binary against an isolated temporary Git repository and home with the bundled
-  slow Claude process mock. Opened the running task's `[Cancel]` action with `Tab` and `Enter`, then
-  pressed `y` at the confirmation. The live count changed from `running 1` to `running 0`, the task
-  and Session header both changed to `Cancelled`, and the transcript appended `run cancelled`.
-  `:q` restored the alternate screen. Cancellation specifically during the synthetic automatic
-  commit-message turn is covered by a deterministic client regression plus the runner's real-child
-  token-lifetime regression because the bundled mock does not modify and commit a fixture repository.
+The OpenCode exercise initially remained running with no provider events. Running the identical
+native command directly completed, isolating the difference to Coducktor retaining an unused
+piped stdin handle. Closing stdin immediately after spawn made both real interactive turns finish
+normally; the focused runner tests cover the transport afterward.
 
-- **80×24 tmux pseudo-terminal, 2026-08-22 (follow-up composer mouse focus).** Built and
-  launched the real binary against an isolated temporary repository with one failed dry-run task,
-  opened its thread, and pressed `Esc` so the composer showed `FOLLOW UP (i to type)`. Injecting a
-  real SGR left-button event into the composer's interior changed it to `FOLLOW UP`; the next `x`
-  key appeared in the editor and the status changed to `INSERT`. Quitting restored the alternate
-  screen, and the isolated state was removed afterward.
+## Cockpit observations
 
-- **80×24 → 55×24 → 80×24 tmux pseudo-terminal, 2026-08-22 (graphics artifact
-  regression).** Built and launched the real binary against the registered coducktor repository,
-  opened a live stored task, narrowed and restored the terminal, and returned focus to the
-  sidebar. The sidebar repainted completely at both widths with no retained black rectangle or
-  displaced text, and quitting restored the alternate screen. This pseudo-terminal did not expose
-  a native graphics protocol, so Kitty, iTerm2, and Sixel cleanup still require verification in
-  their respective terminal emulators.
+- New Chat rendered Message, Harness, Model, Reasoning, Skills, Base branch, Worktree, and Git
+  mode. The non-Git temporary project correctly forced worktree off and Git manual.
+- The connected-harness picker contained Claude, Codex, and OpenCode with no Auto row. pi was
+  excluded because it had no configured model/provider.
+- After each successful turn, the header returned to `idle`, the timeline showed the exact user
+  message and exact assistant response, and the composer showed `Enter · send`.
+- The second OpenCode turn rendered as a separate prompt/response pair after the durable
+  turn-settlement resync; it did not merge into the first turn.
+- Opening a stored chat after process recreation loaded its conversation history rather than the
+  legacy task-history endpoint.
+- `Esc` on the intentionally stalled pre-fix OpenCode turn cancelled it, reaped the native child,
+  preserved the transcript, and returned the composer. This also verified the displayed
+  `Esc cancels` contract against a real long-running child.
+- Keyboard traversal reached the harness picker, chat cards, current-chat header actions, and the
+  follow-up composer. Mouse behavior remains covered by the hitmap and screen snapshot tests.
 
-- **120×40 tmux pseudo-terminal, 2026-08-22 (New Task option focus).** Built and launched the
-  real `coducktor` binary against this repository with `DUCK_DRY_RUN=1`, opened New Task, and
-  confirmed the composer owned input. `Tab` moved focus to `source: execution`; `Enter` opened
-  the skill/workflow picker with execution selected. The screen also showed the new `Tab options`
-  hint, and the draft used for the check was cleared before exit.
+## Reproduction shape
 
-- **80×24 pseudo-terminal, 2026-08-22 (task action focus).** Built and launched the real
-  `coducktor` binary against this repository with `DUCK_DRY_RUN=1`. The project Tasks view showed
-  `[+ New task]` flush right on the `DONE` heading. After moving focus out of the sidebar,
-  `Tab` applied the visible reverse-video focus style, `Shift-Tab` returned focus to the task
-  cards, and `Tab` then `Enter` opened the New Task composer. The temporary dry-run task created
-  while exercising the control was deleted through the product before exit; `:q` restored the
-  alternate screen.
+The real sessions followed this sequence:
 
-- **120×40 pseudo-terminal, 2026-08-22 (Phase 4 interaction model).** Built and launched the real
-  `coducktor` binary against an isolated temporary Git repository and home with the bundled dry-run
-  Claude session. Submitted `phase four interrupt gate mock:slow mock:done`, then typed `queued
-  while active` directly into the opened task without pressing `i`. Enter rendered that exact text
-  once with `Queued for the next turn`; the dock simultaneously showed the live `Thinking…`,
-  elapsed-time, and token line. Pressing `Esc` cancelled the slow provider turn immediately, left
-  the queued text durable for a later Continue, and did not archive or finish the task. A separate
-  idle `Esc` changed the composer title to `FOLLOW UP (i to type)`, and `q` then restored the
-  alternate screen. No external model call was made.
+```text
+coducktor projects add --repo <temporary-project>
+coducktor --repo <temporary-project>
+:new
+Tab, Enter, select harness, Enter, i
+Reply with exactly <HARNESS> TURN 1 OK. Do not use tools.
+open the new chat card
+Reply with exactly <HARNESS> TURN 2 OK. Do not use tools.
+```
 
-- **120×40 pseudo-terminal, 2026-08-22 (Phase 3 transcript readability).** Built and launched the
-  real `coducktor` binary against the registered coducktor repository, opened a stored finished
-  task, and verified its event order directly: assistant prose used the accent `●` gutter and full
-  markdown styling, followed by collapsed/expanded tool rows with soft `▸`/`▾` gutters and colored
-  `Ran` verbs, then a dim `· run finished` lifecycle note. Blank separator rows kept the three row
-  types visually distinct, and `q` restored the alternate screen.
-
-- **80×24 pseudo-terminal, 2026-08-22 (Phase 2 state/event honesty).** Launched the real
-  `coducktor` binary against the coducktor repository with `DUCK_DRY_RUN=1` and
-  `DUCK_DEBUG_HUD=1`. The workspace settled at `running 0` / `needs 0`, switching from the
-  fallback project to coducktor populated all 18 finished tasks without a false needs-you pulse,
-  and the HUD continued repainting with `DROPPED 0`. `q` restored the alternate screen. The
-  `Idle` versus structured-ask transition and forced channel-lag recovery use deterministic
-  manager/client/TUI tests because this repository had no parked task to mutate during the smoke
-  run.
-
-- **80×24 pseudo-terminal, 2026-08-22 (Phase 1 responsiveness HUD).** Built and launched the real
-  `coducktor` binary against the coducktor repository with `DUCK_DRY_RUN=1` and
-  `DUCK_DEBUG_HUD=1`. The Tasks screen populated while the status bar continued repainting
-  `FRAME`, `PROJ`, `REDUCED`, and `DROPPED`; project switching completed without a blank or frozen
-  frame, and `q` restored the alternate screen. Slow follow-up/finish concurrency is exercised by
-  the un-ignored one-second-session integration tests so this smoke run made no external model call.
-
-- **80×24 pseudo-terminal, 2026-08-18 (completed-task follow-up).** Built and launched the real
-  `duck` binary against an isolated temporary Git repository and a seeded completed dry-run
-  Claude session. Opened the completed task, typed `second prompt mock:done`, and pressed Enter.
-  The exact prompt appeared as the next turn, `Sending…` cleared as soon as the durable
-  `user-message` arrived, the mock agent's response streamed beneath it, and the task returned to
-  `done`. `q` restored the alternate screen.
-
-- **120×40 pseudo-terminal, 2026-08-18 (follow-up prompt visibility).** Built and launched the
-  real `duck` binary against an isolated temporary Git repository and mock Claude session. After
-  the initial turn parked for input, submitted `confirm prompt visibility mock:slow mock:done` and
-  observed the exact follow-up appear immediately at the bottom of the transcript. It remained
-  visible after `Sending…` cleared and throughout the mock's 25-second turn, then reconciled with
-  the durable user-message without a duplicate before the task completed. `q` restored the
-  alternate screen.
-
-- **80×24 pseudo-terminal, 2026-08-18 (parked transcript pass).** Built and launched the real
-  `coducktor` binary, opened the stored waiting task from the Tasks screen, and verified the
-  Session header and dock both said it was waiting for an answer while no stale `Working…` row
-  remained in the transcript. The stored autonomous history was also exercised by reducer tests
-  that assert every orchestration pass is placed immediately before the response it triggered.
-  `q` restored the alternate screen.
-
-- **80×24 pseudo-terminal, 2026-08-18 (live activity pass).** Built and launched the real
-  `coducktor` binary with `DUCK_DRY_RUN=1`, submitted `verify throbber and finish once`, and
-  observed the Session screen immediately. The activity glyph advanced through the braille
-  frames while the status moved from `Queued` to `Thinking…` and tool activity streamed below.
-  The deliberately marker-less dry-run backend stopped at the new `autonomous continuation
-  (4/4)` ceiling and parked for input instead of repeating forty times. `q` restored the
-  alternate screen. Responsive in-flight process cancellation is covered by the manager-lock
-  integration test because this mock completed each individual turn too quickly for a reliable
-  manual key race.
-
-- **120×40 pseudo-terminal, 2026-08-18.** Built and launched the real `duck` binary against a
-  temporary Git repository with `DUCK_DRY_RUN=1`, opened New task, and submitted `Show the prompt
-  and stream agent activity`. Submission immediately replaced the composer with the run's Session
-  screen: the exact prompt was visible on the first queued frame, then the header/status changed to
-  `running` / `Thinking…`, and the dry-run runner's eventual process error appeared inline as a
-  failed activity/outcome instead of a blank loading screen. `q` exited and restored the alternate
-  screen.
-
-- **80×24 pseudo-terminal, 2026-08-18.** Launched the real `duck` binary against the coducktor
-  repository. The Tasks screen showed the `Current`/`Needs you`/`Finished` stats row and the
-  bordered `TASKS — coducktor` panel title without rendering the project title twice. `q` exited
-  and restored the alternate screen.
-
-- **80×24 pseudo-terminal, 2026-08-17.** Launched the real `duck` binary against the coducktor
-  repository. The project Tasks screen rendered `Current`, a bordered `Needs You` card with a
-  visible `▶` selection marker, exact prompt text, relative time, runner, and workflow metadata.
-  The sidebar contained project navigation plus workspace All Tasks/Settings and no task-filter
-  dashboard or snippets. `Ctrl+Right` moved focus into Tasks and `Enter` opened the selected task.
-  The loaded Session showed one integrated prompt/commentary/tool/outcome timeline, a collapsed
-  expandable `git status` tool row, an inline running subagent row, explicit cancellation, and a
-  persistent follow-up composer. `q` exited and restored the alternate screen. Pagination could
-  not be exercised because this stored task fit on one history page; multi-page behavior is
-  covered by reducer/state tests.
-
-## IDE smoke test
-
-- **120×40 tmux pseudo-terminal, 2026-08-22 (Vim tree navigation).** Built and launched the
-  real `coducktor` binary against this repository with `DUCK_DRY_RUN=1`, opened the IDE, and
-  focused its file tree. With `.cargo` selected, `l` descended into `/.cargo` and displayed
-  `config.toml`; `h` returned to `IDE — project root`.
-
-## Settings smoke test
-
-- **120×40 tmux pseudo-terminal, 2026-08-22 (Vim pane navigation).** Built and launched the
-  real `coducktor` binary against this repository with `DUCK_DRY_RUN=1` and opened Global
-  Settings. `h` moved focus from `SETTINGS VALUES` to `SETTINGS NAV`; `l` moved it back to the
-  values panel. The active border and status-bar focus label changed with both motions.
-
-## Known gaps — not yet wired, not a detection failure
-
-- **Kitty keyboard protocol.** `PushKeyboardEnhancementFlags` is not enabled.
-  Terminals that support it (kitty, Ghostty, WezTerm) get ordinary `crossterm` key
-  events, not the enhanced disambiguation (distinguishing e.g. `Ctrl+I` from `Tab`).
-
-The remaining gap is real and worth picking up in a later pass; it is listed here so the matrix
-below isn't misread as "these terminals fail the Kitty keyboard protocol."
-
-## A caveat on how this checklist was produced
-
-This document was authored from a **headless CI/agent sandbox with no attached TTY**
-(`[ -t 1 ]` is false; there is no real terminal to run `duck` in interactively). Every
-row below reflects either (a) what the code demonstrably does by reading the
-capability-detection source above, or (b) is honestly marked **untested** rather than
-guessed at. Do not trust a row marked "expected" as verified — replace it with a real
-result the first time someone runs `duck` in that terminal.
-
-| Terminal | Truecolor | Images | Mouse | Bracketed paste | Kitty keyboard protocol | Notes |
-|---|---|---|---|---|---|---|
-| Ghostty | expected (`COLORTERM=truecolor` typical) | expected (kitty graphics protocol) | expected | wired | not wired (see above) | Untested — needs manual verification. |
-| kitty | expected | expected (kitty graphics protocol, kitty invented it) | expected | wired | not wired | Untested — needs manual verification. |
-| WezTerm | expected | expected (kitty graphics protocol) | expected | wired | not wired | Untested — needs manual verification. |
-| iTerm2 | expected | expected (iTerm2 inline image protocol) | expected | wired | not wired | Untested — needs manual verification. |
-| Terminal.app (macOS) | no (256-color only) | no protocol — halfblock fallback | expected | wired | not wired | Untested — needs manual verification. |
-| Alacritty | expected | no protocol — halfblock fallback (no image protocol support) | expected | wired | not wired | Untested — needs manual verification. |
-| tmux | depends on `COLORTERM` passthrough config | usually breaks image protocols unless passthrough is configured | expected, may need `set -g mouse on` | wired | not wired | Untested — needs manual verification; image support inside tmux is notoriously configuration-sensitive regardless of the inner terminal. |
-| GNU screen | no (very limited color passthrough historically) | no protocol — halfblock fallback | uncertain | wired | not wired | Untested — needs manual verification. |
-| This sandbox (headless, `TERM=xterm-256color`, `COLORTERM=truecolor`, no TTY) | `ColorCapability::detect()` would report `TrueColor` from the env vars alone | `Picker::from_query_stdio()` cannot be meaningfully exercised without a real TTY to probe | N/A, no TTY | wired; no TTY to exercise | not wired | The one row in this table backed by an actual run of the detection code, not a terminal. |
-
-## Updating this file
-
-When you run `duck` in one of the terminals above, replace its "expected"/"untested"
-cells with what actually happened, and note the terminal's version. This file is a
-living checklist, not a one-time deliverable.
+The terminal was left through tmux after capture; the temporary state contains only disposable
+manual-verification transcripts.

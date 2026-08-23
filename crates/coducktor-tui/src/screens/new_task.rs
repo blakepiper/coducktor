@@ -538,7 +538,7 @@ fn handle_composer_event(app: &mut App, event: ComposerEvent) -> bool {
         ComposerEvent::Submit { text }
             if text.trim().is_empty() && app.new_task_ui.composer.attachments.is_empty() =>
         {
-            app.notice = Some("describe a task first".to_owned());
+            app.notice = Some("write a message first".to_owned());
             true
         }
         ComposerEvent::Submit { .. } => {
@@ -1148,7 +1148,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     frame.render_widget(
         Paragraph::new(Text::from(vec![
             Line::from(Span::styled(
-                format!("New task in {project} · {root}"),
+                format!("New chat in {project} · {root}"),
                 Style::default().fg(theme.palette.accent),
             )),
             Line::from(Span::styled(

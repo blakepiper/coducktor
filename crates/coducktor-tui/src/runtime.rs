@@ -73,14 +73,16 @@ pub async fn entry() -> io::Result<()> {
         }) => {
             let code = headless::run_command(
                 repo_root,
-                message.join(" "),
-                (*runner).into(),
-                cli.model.clone(),
-                reasoning.clone(),
-                skill.clone(),
-                branch.clone(),
-                *worktree,
-                (*git_mode).into(),
+                headless::RunCommandOptions {
+                    message: message.join(" "),
+                    harness: (*runner).into(),
+                    model: cli.model.clone(),
+                    reasoning: reasoning.clone(),
+                    skills: skill.clone(),
+                    base_branch: branch.clone(),
+                    worktree: *worktree,
+                    git_mode: (*git_mode).into(),
+                },
             )
             .await;
             std::process::exit(code);
@@ -1269,9 +1271,18 @@ fn execute_pending(
                                     }),
                                 Err(other) => Err(other),
                             };
-                        let history = engine_for_task
-                            .run_history(&scope, &id_for_task, None)
-                            .await;
+                        let history = if matches!(
+                            &subject,
+                            Ok(screens::thread::ThreadSubject::Conversation(_))
+                        ) {
+                            engine_for_task
+                                .conversation_history(&scope, &id_for_task, None)
+                                .await
+                        } else {
+                            engine_for_task
+                                .run_history(&scope, &id_for_task, None)
+                                .await
+                        };
                         (subject, history)
                     },
                     move |(subject, history)| BackgroundResult::LoadThread {
@@ -1288,6 +1299,7 @@ fn execute_pending(
                 id,
                 cursor,
             } => {
+                let is_conversation = app.thread_ui.data.conversation().is_some();
                 let scope = Scope::Project(project.clone());
                 let engine_for_task = engine.clone();
                 let id_for_task = id.clone();
@@ -1295,9 +1307,15 @@ fn execute_pending(
                     background_handle,
                     background_sender,
                     async move {
-                        engine_for_task
-                            .run_history(&scope, &id_for_task, Some(&cursor))
-                            .await
+                        if is_conversation {
+                            engine_for_task
+                                .conversation_history(&scope, &id_for_task, Some(&cursor))
+                                .await
+                        } else {
+                            engine_for_task
+                                .run_history(&scope, &id_for_task, Some(&cursor))
+                                .await
+                        }
                     },
                     move |history| BackgroundResult::LoadEarlierThread {
                         project,
@@ -2392,7 +2410,7 @@ fn drain_background_results(
                     result.map_err(|error| error.to_string()),
                 );
                 if let Some(error) = error {
-                    app.notice = Some(format!("refresh tasks failed: {error}"));
+                    app.notice = Some(format!("refresh legacy history failed: {error}"));
                 }
             }
             BackgroundResult::RefreshChats {
@@ -2476,7 +2494,7 @@ fn drain_background_results(
                     result.map_err(|error| error.to_string()),
                 );
                 if let Some(error) = error {
-                    app.notice = Some(format!("refresh all tasks failed: {error}"));
+                    app.notice = Some(format!("refresh all legacy history failed: {error}"));
                 }
             }
             BackgroundResult::RefreshProjectRegistry { result } => {

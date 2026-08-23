@@ -1,8 +1,9 @@
 # Project-scoped tasks and agent thread UX (superseded)
 
-> Superseded by [Task experience](task-experience.md). This document remains as historical
-> context for project scoping and event normalization; its task tables and separate
-> Conversation/Activity presentation are no longer the product contract.
+> Superseded by the implemented
+> [conversation-first harness cockpit](conversation-first-harness-cockpit.md). This document
+> remains historical context for project scoping and event normalization; its task tables are not
+> the product contract.
 
 Status: Proposed
 

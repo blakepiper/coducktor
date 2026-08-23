@@ -1,11 +1,12 @@
 # Conversation-first harness cockpit — implementation specification
 
-Status: approved product direction; ready for staged implementation (2026-08-22)
+Status: implemented (2026-08-23)
 
 Audience: the implementation agent. Work directly on `main`, preserve unrelated worktree changes,
 commit completed phases, and push `origin main` as required by `AGENTS.md`.
 
-This specification replaces the workflow-oriented product model for newly created work. Existing
+This specification is the current product contract and replaces the workflow-oriented product
+model for newly created work. Existing
 task and workflow records remain readable historical data until their compatibility readers can be
 removed under a separate migration policy. Where this document conflicts with the current
 `task-experience.md`, `intelligent-auto-routing.md`, or agent lifecycle sections of
