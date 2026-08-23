@@ -6,7 +6,7 @@
 //! converted to the contract's degraded responses so optional GitHub tools, agent CLIs, and
 //! local integrations do not prevent the application from starting.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
@@ -17,36 +17,33 @@ use coducktor_contract::{
     AgentConfigFileContent, AgentConfigFormat, AgentConfigKind, AgentConfigListing,
     AgentConfigScope, AgentConfigTracked, AgentProfile, AgentProfileResponse,
     AgentProfileSelectionsResponse, AgentProfilesResponse, ApiRun, ArchiveFinishedResponse,
-    BackendCheck, BackendCheckName, CancelAutoResumeResponse, CancelResponse, Capabilities,
-    ChangedFile, ChangedFileStatus, ChangesPayload, ConfigResponse, ContinueInput,
-    ContinueResponse, CreateAgentProfileInput, CreatePrResponse, CreateRunInput, CreateRunResponse,
-    DeleteRunResponse, EditQueuedMessageResponse, EmptyRepoResponse, FinishResponse, ForgeInfo,
-    ForgeKind, GitCommitInput, GitCommitResponse, GitPushResponse, GithubChecksAvailable,
-    GithubChecksData, GithubChecksUnavailable, GithubCommentsData, GithubData, GithubItemKind,
-    GithubMergeInput, GithubMergeResponse, GithubPrChangesAvailable, GithubPrChangesData,
-    GithubPrChangesUnavailable, GithubPrMergeStateResponse, GithubRefStatusAvailable,
-    GithubRefStatusData, GithubRefStatusUnavailable, GroupResponse, GroupVariant, HealthProject,
-    HealthResponse, IdeDirectoryResponse, IdeEntry, IdeEntryType, IdeFileResponse, ImageInput,
-    LogEntry, MarkAllReadResponse, MessageInput, MessageResponse, ModelCatalogSource,
-    ModelDiscoveryRunner, ModelUsageEntry, OpenAgentAccountFileInput, OpenAgentAccountFileResponse,
-    OpenInInput, OpenProjectInResponse, OpenTargetsResponse, PatchRunInput, PlanResponse,
-    PresentRepoResponse, ProjectListEntry, ProjectSource, ProjectStatus, ProjectsResponse,
-    ProviderConnectAlreadyConnected, ProviderConnectInput, ProviderConnectOpened,
-    ProviderConnectResponse, ProviderConnectionState, ProviderStatus, ProviderStatusResponse,
-    ProviderUsageError, ProviderUsageHealth, ProviderUsageSnapshot, ProviderUsageWindow,
-    ProviderUsageWindowKind, QueuedMessagePatchInput, QuotaProvider, RUN_HISTORY_PAGE_ITEMS,
+    BackendCheck, BackendCheckName, CancelAutoResumeResponse, Capabilities, ChangedFile,
+    ChangedFileStatus, ChangesPayload, ConfigResponse, CreateAgentProfileInput, CreatePrResponse,
+    DeleteRunResponse, EmptyRepoResponse, ForgeInfo, ForgeKind, GitCommitInput, GitCommitResponse,
+    GitPushResponse, GithubChecksAvailable, GithubChecksData, GithubChecksUnavailable,
+    GithubCommentsData, GithubData, GithubItemKind, GithubMergeInput, GithubMergeResponse,
+    GithubPrChangesAvailable, GithubPrChangesData, GithubPrChangesUnavailable,
+    GithubPrMergeStateResponse, GithubRefStatusAvailable, GithubRefStatusData,
+    GithubRefStatusUnavailable, GroupResponse, GroupVariant, HealthProject, HealthResponse,
+    IdeDirectoryResponse, IdeEntry, IdeEntryType, IdeFileResponse, LogEntry, MarkAllReadResponse,
+    ModelCatalogSource, ModelDiscoveryRunner, ModelUsageEntry, OpenAgentAccountFileInput,
+    OpenAgentAccountFileResponse, OpenInInput, OpenProjectInResponse, OpenTargetsResponse,
+    PatchRunInput, PlanResponse, PresentRepoResponse, ProjectListEntry, ProjectSource,
+    ProjectStatus, ProjectsResponse, ProviderConnectAlreadyConnected, ProviderConnectInput,
+    ProviderConnectOpened, ProviderConnectResponse, ProviderConnectionState, ProviderStatus,
+    ProviderStatusResponse, ProviderUsageError, ProviderUsageHealth, ProviderUsageSnapshot,
+    ProviderUsageWindow, ProviderUsageWindowKind, QuotaProvider, RUN_HISTORY_PAGE_ITEMS,
     ReclaimWorktreesResponse, RegisterProjectInput, RegisterProjectResponse,
-    RemoveAgentProfileResponse, RemoveProjectResponse, RemoveQueuedMessageResponse,
-    RemoveWorktreeResponse, RepoBranchRequest, RepoBranchResponse, RepoCommitPayload, RepoDiffStat,
-    RepoInfo, RepoResponse, RunCommit, RunCommitsResponse, RunEvent, RunHistoryContext,
-    RunHistoryEvent, RunHistoryPage, RunIndexEntry, Runner, RunnerModelCatalogResponse,
-    RunnerModelOption, RunnerSelection, RunsIndexResponse, SelectAgentProfileInput,
-    SetAgentConfigInput, SetConfigInput, SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill,
-    StatusEntry, UpdateAgentProfileInput, UpdateProjectInput, UpdateProjectResponse,
-    UsageAggregate, UsageAggregateScope, UsageConfidence, UserMcpListing, WorkflowStepDef,
-    WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsagePolicyHealth, WorkspaceUsageRefresh,
-    WorkspaceUsageResponse, WorktreeDirEntry, WorktreeEntry, WorktreeEntryType, WorktreeInfo,
-    WorktreeRunStatus, WorktreesResponse,
+    RemoveAgentProfileResponse, RemoveProjectResponse, RemoveWorktreeResponse, RepoBranchRequest,
+    RepoBranchResponse, RepoCommitPayload, RepoDiffStat, RepoInfo, RepoResponse, RunCommit,
+    RunCommitsResponse, RunEvent, RunHistoryContext, RunHistoryEvent, RunHistoryPage,
+    RunIndexEntry, Runner, RunnerModelCatalogResponse, RunnerModelOption, RunnerSelection,
+    RunsIndexResponse, SelectAgentProfileInput, SetAgentConfigInput, SetConfigInput,
+    SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill, StatusEntry, UpdateAgentProfileInput,
+    UpdateProjectInput, UpdateProjectResponse, UsageAggregate, UsageAggregateScope,
+    UsageConfidence, UserMcpListing, WorkflowStepDef, WorkspaceConfigResponse, WorkspaceUiState,
+    WorkspaceUsagePolicyHealth, WorkspaceUsageRefresh, WorkspaceUsageResponse, WorktreeDirEntry,
+    WorktreeEntry, WorktreeEntryType, WorktreeInfo, WorktreeRunStatus, WorktreesResponse,
 };
 use coducktor_contract::{
     AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
@@ -57,32 +54,26 @@ use coducktor_contract::{
     SubmitConversationMessageInput, SubmitConversationMessageResponse, TurnState,
     UpdateConversationGitModeInput, UpdateConversationGitModeResponse,
 };
-use coducktor_core::config::{RepoConfig, load_config};
+use coducktor_core::agent_session::EventInput;
+use coducktor_core::config::load_config;
 use coducktor_core::conversations::{
     AdmittedConversationTurn, ConversationEventInput, ConversationManager,
     ConversationManagerOptions, ConversationSessionFactory, NewConversation,
     PendingConversationAnswer,
 };
-use coducktor_core::git::worktree::{AutosaveReason, AutosaveResult, autosave_commit};
 use coducktor_core::handoff::{handoff_progress_excerpt, read_handoff};
+use coducktor_core::legacy_runs::RunManager;
 use coducktor_core::paths::{
     ProcessEnv, agent_accounts_path, agent_home_paths, expand_tilde, is_absolute_config_dir,
     project_state_dir, project_state_dir_in, real_home_dir,
 };
 use coducktor_core::skills::discover_skills;
-use coducktor_core::workflows::load::load_workflows;
-use coducktor_core::workflows::run::{
-    AUTOMATIC_COMMIT_MESSAGE_NUDGE, AUTONOMOUS_NUDGE, AdmittedTurn, CancellationToken,
-    CheckExecutor, CheckResult, DiffInspector, EventInput, FinishStart, GitAutoMessage,
-    PromptImage, RepositoryRootLease, RunManager, RuntimeActive, RuntimeOptions, SessionFactory,
-    SessionOutcome, StartRunInput as CoreStartRunInput, TurnStep, WorkspaceSemaphore,
-};
 use coducktor_core::workspace::agent_accounts::{
     AgentAccount, has_control_chars, is_valid_account_id, load_agent_accounts,
     merge_write_agent_accounts, supports_profiles,
 };
 use coducktor_core::workspace::config::{
-    PROVIDER_IDS, WorkspaceConfig, load_workspace_config, merge_write_workspace_config,
+    PROVIDER_IDS, load_workspace_config, merge_write_workspace_config,
 };
 use coducktor_core::workspace::ui_state::{
     merge_write_workspace_ui_state, read_workspace_ui_state,
@@ -124,21 +115,13 @@ pub struct InProcessEngine {
     version: String,
     manager: Arc<RunManagerMutex<RunManager>>,
     managers: Arc<Mutex<BTreeMap<String, ProjectManager>>>,
-    session_factory: Arc<dyn SessionFactory>,
-    cancellations: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
     boot_project_id: String,
     project_id: String,
     run_snapshot: Arc<RwLock<BTreeMap<String, BTreeMap<String, coducktor_contract::RunRecord>>>>,
-    activation_workers: Arc<Mutex<BTreeMap<String, std::thread::JoinHandle<()>>>>,
-    /// One worker thread per run currently running a live turn outside any manager lock. Keyed
-    /// by run id, matching `RunManager`'s own `in_flight` bookkeeping — a run has at most one.
-    turn_workers: Arc<Mutex<BTreeMap<String, std::thread::JoinHandle<()>>>>,
     /// Independent bounded channels keep workspace updates out of each run's delta firehose.
     live_event_topics: LiveEventTopics,
     model_catalog: Arc<Mutex<Vec<CachedModelCatalog>>>,
     usage_cache: Arc<Mutex<Option<CachedWorkspaceUsage>>>,
-    workspace_admission: SharedWorkspaceAdmission,
-    repository_leases: Arc<Mutex<BTreeMap<PathBuf, SharedRepositoryLease>>>,
     /// Conversation-first runtime, kept beside the workflow runtime rather than inside it: the
     /// two share storage locations and live topics but no lifecycle state.
     conversations: Arc<Mutex<BTreeMap<String, ProjectConversations>>>,
@@ -152,717 +135,6 @@ pub struct InProcessEngine {
 struct ProjectManager {
     root: PathBuf,
     manager: Arc<RunManagerMutex<RunManager>>,
-}
-
-/// Process-wide workspace admission. Each manager receives a cheap clone, while the held run
-/// ids live in exactly one mutex-protected set. This keeps a lazily opened project from bypassing
-/// the workspace setting by getting its own local semaphore.
-#[derive(Clone)]
-struct SharedWorkspaceAdmission {
-    state: Arc<Mutex<WorkspaceAdmissionState>>,
-}
-
-struct WorkspaceAdmissionState {
-    max_parallel: usize,
-    holders: BTreeSet<(String, String)>,
-}
-
-impl SharedWorkspaceAdmission {
-    fn new(max_parallel: usize) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(WorkspaceAdmissionState {
-                max_parallel: max_parallel.max(1),
-                holders: BTreeSet::new(),
-            })),
-        }
-    }
-
-    fn reconfigure(&self, max_parallel: usize) {
-        if let Ok(mut state) = self.state.lock() {
-            // Existing holders intentionally remain admitted. The new ceiling applies when a
-            // future run asks for a slot.
-            state.max_parallel = max_parallel.max(1);
-        }
-    }
-}
-
-impl WorkspaceSemaphore for SharedWorkspaceAdmission {
-    fn try_acquire(&mut self, run_id: &str, project_id: &str) -> bool {
-        let Ok(mut state) = self.state.lock() else {
-            return false;
-        };
-        let holder = (project_id.to_owned(), run_id.to_owned());
-        if state.holders.contains(&holder) {
-            return true;
-        }
-        if state.holders.len() >= state.max_parallel {
-            return false;
-        }
-        state.holders.insert(holder);
-        true
-    }
-
-    fn release(&mut self, run_id: &str, project_id: &str) {
-        if let Ok(mut state) = self.state.lock() {
-            state
-                .holders
-                .remove(&(project_id.to_owned(), run_id.to_owned()));
-        }
-    }
-
-    fn busy_slots(&self) -> usize {
-        self.state
-            .lock()
-            .map(|state| state.holders.len())
-            .unwrap_or(0)
-    }
-
-    fn max_parallel(&self) -> usize {
-        self.state
-            .lock()
-            .map(|state| state.max_parallel)
-            .unwrap_or(0)
-    }
-}
-
-/// A per-canonical-root lease shared by every in-place manager for that checkout.
-#[derive(Clone, Default)]
-struct SharedRepositoryLease {
-    state: Arc<Mutex<RepositoryLeaseState>>,
-}
-
-#[derive(Default)]
-struct RepositoryLeaseState {
-    owner: Option<String>,
-    waiters: std::collections::VecDeque<String>,
-}
-
-impl RepositoryRootLease for SharedRepositoryLease {
-    fn try_acquire(&mut self, run_id: &str) -> bool {
-        let Ok(mut state) = self.state.lock() else {
-            return false;
-        };
-        if state.owner.as_deref() == Some(run_id) {
-            return true;
-        }
-        if state.owner.is_some() {
-            if !state.waiters.iter().any(|waiter| waiter == run_id) {
-                state.waiters.push_back(run_id.to_owned());
-            }
-            return false;
-        }
-        if state.waiters.front().is_some_and(|waiter| waiter != run_id) {
-            return false;
-        }
-        state.waiters.retain(|waiter| waiter != run_id);
-        state.owner = Some(run_id.to_owned());
-        true
-    }
-
-    fn release(&mut self, run_id: &str) {
-        if let Ok(mut state) = self.state.lock() {
-            if state.owner.as_deref() == Some(run_id) {
-                state.owner = None;
-            }
-            state.waiters.retain(|waiter| waiter != run_id);
-        }
-    }
-}
-
-#[cfg(test)]
-mod admission_tests {
-    use super::*;
-
-    #[test]
-    fn workspace_admission_is_shared_and_reconfiguration_only_affects_new_holders() {
-        let mut first = SharedWorkspaceAdmission::new(1);
-        let mut second = first.clone();
-        assert!(first.try_acquire("run-a", "project-a"));
-        assert!(!second.try_acquire("run-b", "project-b"));
-
-        first.reconfigure(2);
-        assert!(second.try_acquire("run-b", "project-b"));
-        first.reconfigure(1);
-        // Reducing the limit never revokes a live session, but prevents the next admission.
-        assert!(!first.try_acquire("run-c", "project-c"));
-        first.release("run-a", "project-a");
-        assert!(!second.try_acquire("run-c", "project-c"));
-        second.release("run-b", "project-b");
-        assert!(first.try_acquire("run-c", "project-c"));
-    }
-
-    #[test]
-    fn repository_lease_is_shared_per_root() {
-        let mut first = SharedRepositoryLease::default();
-        let mut second = first.clone();
-        assert!(first.try_acquire("run-a"));
-        assert!(!second.try_acquire("run-b"));
-        first.release("run-a");
-        assert!(second.try_acquire("run-b"));
-    }
-}
-
-/// Lazily opened project managers share one factory without splitting its configuration. Factory
-/// methods use shared access, so provider setup for distinct runs can proceed concurrently.
-struct SharedSessionFactory {
-    inner: Arc<dyn SessionFactory>,
-    state_home: PathBuf,
-    /// Cancellation must remain reachable without waiting for an in-progress `open` call, which
-    /// can be blocked in provider/process setup.
-    cancellations: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
-}
-
-impl SessionFactory for SharedSessionFactory {
-    fn open(
-        &self,
-        mut request: coducktor_core::workflows::run::SessionRequest,
-    ) -> Result<Box<dyn coducktor_core::workflows::run::AgentSession + Send>, String> {
-        if let Ok(mut cancellations) = self.cancellations.lock() {
-            cancellations.insert(request.run_id.clone(), request.cancellation.clone());
-        }
-        if let Some(profile_id) = request
-            .agent_profile
-            .as_deref()
-            .filter(|profile| *profile != coducktor_contract::DEFAULT_AGENT_ACCOUNT_ID)
-        {
-            let provider = runner_selection_provider(request.runner)
-                .ok_or_else(|| "Auto runner reached profile resolution".to_owned())?;
-            let store = load_agent_accounts(&self.state_home.join("agent-accounts.json"));
-            let account = store
-                .accounts
-                .iter()
-                .find(|account| account.id == profile_id)
-                .ok_or_else(|| format!("agent profile {profile_id} no longer exists"))?;
-            if account.provider != provider {
-                return Err(format!(
-                    "agent profile {profile_id} belongs to {}, not {}",
-                    provider_label(account.provider),
-                    provider_label(provider)
-                ));
-            }
-            let path = expand_tilde(&account.config_dir, &ProcessEnv);
-            if !path.is_dir() {
-                return Err(format!(
-                    "agent profile {profile_id} is unavailable at {}",
-                    path.display()
-                ));
-            }
-            let key = match provider {
-                Runner::Claude => "CLAUDE_CONFIG_DIR",
-                Runner::Codex => "CODEX_HOME",
-                Runner::OpenCode | Runner::Pi => {
-                    return Err(format!(
-                        "{} does not support alternate profiles",
-                        provider_label(provider)
-                    ));
-                }
-            };
-            request
-                .env
-                .insert(key.to_owned(), path.to_string_lossy().into_owned());
-        }
-        self.inner.open(request)
-    }
-
-    fn request_cancel(&self, run_id: &str) -> bool {
-        self.inner.request_cancel(run_id)
-    }
-}
-
-/// Runs [`AdmittedTurn`]s to completion on their own worker threads, entirely outside the
-/// manager's lock: `RunManager::execute_job` stops the instant it would otherwise call
-/// `SessionFactory::open`, so this is the only place production code actually opens a session or
-/// runs a turn. Each clone shares the same manager, factory, cancellation registry, and worker
-/// registry — cheap to hand to a new thread, and cheap to hand back to itself for the next
-/// admitted turn a just-applied outcome unblocked.
-#[allow(dead_code)]
-#[derive(Clone)]
-struct TurnDispatch {
-    manager: Arc<RunManagerMutex<RunManager>>,
-    session_factory: Arc<dyn SessionFactory>,
-    state_home: PathBuf,
-    cancellations: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
-    workers: Arc<Mutex<BTreeMap<String, std::thread::JoinHandle<()>>>>,
-}
-
-#[allow(dead_code)]
-impl TurnDispatch {
-    fn active_step_id(&self, run_id: &str, active: &RuntimeActive) -> Option<String> {
-        match active.step_id() {
-            Ok(step_id) => Some(step_id.to_owned()),
-            Err(error) => {
-                let _ = self.manager.lock().fail_invalid_runtime(run_id, &error);
-                self.redispatch();
-                None
-            }
-        }
-    }
-
-    /// Spawn one worker per admitted turn. Safe to call with an empty list — the common case,
-    /// since most manager operations admit nothing new. Also reaps every finished worker still
-    /// sitting in the registry first: a run's own worker cannot safely remove itself (a
-    /// redispatch it triggers for the same run id can already have inserted a new handle under
-    /// that key before the old thread returns), so every dispatch point sweeps instead.
-    fn dispatch(&self, admitted: Vec<AdmittedTurn>) {
-        self.reap_finished();
-        for turn in admitted {
-            self.spawn(turn);
-        }
-    }
-
-    /// Join and drop every worker handle that has already finished. Safe to call from any
-    /// dispatch point at any time — a worker only ever finishes after it has durably applied its
-    /// own terminal outcome, so joining it here does not race anything observable.
-    fn reap_finished(&self) {
-        let Ok(mut workers) = self.workers.lock() else {
-            return;
-        };
-        let finished = workers
-            .iter()
-            .filter(|(_, worker)| worker.is_finished())
-            .map(|(run_id, _)| run_id.clone())
-            .collect::<Vec<_>>();
-        for run_id in finished {
-            if let Some(worker) = workers.remove(&run_id) {
-                let _ = worker.join();
-            }
-        }
-    }
-
-    fn spawn(&self, admitted: AdmittedTurn) {
-        // Registered before the thread even starts so a `cancel_run` racing this dispatch can
-        // never land in the gap between admission and the worker's first lock acquisition — the
-        // token is reachable the moment `RunManager::in_flight` says this run is busy.
-        if let Ok(mut cancellations) = self.cancellations.lock() {
-            cancellations.insert(
-                admitted.run_id.clone(),
-                admitted.request.cancellation.clone(),
-            );
-        }
-        let run_id = admitted.run_id.clone();
-        let step_id = admitted.step_id.clone();
-        let dispatch = self.clone();
-        let spawned = std::thread::Builder::new()
-            .name("coducktor-turn".to_owned())
-            .spawn(move || dispatch.run(admitted));
-        match spawned {
-            Ok(handle) => {
-                if let Ok(mut workers) = self.workers.lock() {
-                    workers.insert(run_id, handle);
-                }
-            }
-            Err(error) => {
-                // The closure above (and the `AdmittedTurn` it moved) is gone the instant `spawn`
-                // returns `Err` — a local resource failure, so there is no provider error to
-                // auto-failover from anyway. A run stuck `Running` forever with no worker would be
-                // worse than a fast, visible failure.
-                let _ = self.manager.lock().fail_admission(
-                    &run_id,
-                    &step_id,
-                    format!("could not start a turn worker: {error}"),
-                );
-                self.autosave_after_settlement(&run_id);
-            }
-        }
-    }
-
-    /// Dispatch an already-durable user follow-up and return as soon as its per-run worker has
-    /// taken ownership. The cell keeps the detached live session recoverable if thread creation
-    /// itself fails.
-    fn message(
-        &self,
-        run_id: String,
-        active: RuntimeActive,
-        prompt: String,
-        images: Vec<PromptImage>,
-    ) -> bool {
-        self.reap_finished();
-        let cell = Arc::new(Mutex::new(Some(active)));
-        let dispatch = self.clone();
-        let thread_cell = cell.clone();
-        let thread_run_id = run_id.clone();
-        let spawned = std::thread::Builder::new()
-            .name("coducktor-follow-up".to_owned())
-            .spawn(move || {
-                if let Some(active) = thread_cell.lock().ok().and_then(|mut cell| cell.take()) {
-                    dispatch.run_message(thread_run_id, active, prompt, images);
-                }
-            });
-        self.register_detached_worker(run_id, cell, spawned, true)
-    }
-
-    /// Dispatch a detached provider finish without making the engine call wait for process exit.
-    fn finish(&self, run_id: String, active: RuntimeActive) -> bool {
-        self.reap_finished();
-        let cell = Arc::new(Mutex::new(Some(active)));
-        let dispatch = self.clone();
-        let thread_cell = cell.clone();
-        let thread_run_id = run_id.clone();
-        let spawned = std::thread::Builder::new()
-            .name("coducktor-finish".to_owned())
-            .spawn(move || {
-                if let Some(active) = thread_cell.lock().ok().and_then(|mut cell| cell.take()) {
-                    dispatch.run_finish(thread_run_id, active);
-                }
-            });
-        self.register_detached_worker(run_id, cell, spawned, false)
-    }
-
-    fn register_detached_worker(
-        &self,
-        run_id: String,
-        cell: Arc<Mutex<Option<RuntimeActive>>>,
-        spawned: std::io::Result<std::thread::JoinHandle<()>>,
-        message: bool,
-    ) -> bool {
-        match spawned {
-            Ok(handle) => {
-                if let Ok(mut workers) = self.workers.lock() {
-                    workers.insert(run_id, handle);
-                }
-                true
-            }
-            Err(_) => {
-                if let Some(active) = cell.lock().ok().and_then(|mut cell| cell.take()) {
-                    let mut manager = self.manager.lock();
-                    if message {
-                        manager.abandon_message(&run_id, active);
-                    } else {
-                        manager.abandon_finish(&run_id, active);
-                    }
-                }
-                false
-            }
-        }
-    }
-
-    /// Flush agent changes at the end of every provider turn. Git I/O deliberately happens after
-    /// taking only the short lock needed to copy the isolated worktree path: a provider or Git
-    /// child must never run while the manager mutex is held.
-    fn autosave_after_turn(&self, run_id: &str, outcome: &Result<SessionOutcome, String>) {
-        // A final ordinary step is already the run-finalize boundary. Keeping that reason on the
-        // commit makes the durable recovery history say why the run stopped. Automatic Git runs
-        // are the exception: their dispatcher must see the agent's changes and create its own
-        // commit subject, so the final step is left for that path instead of being autosaved here.
-        let Some((final_step, git_auto)) = self.manager.lock().get_run(run_id).map(|run| {
-            let final_step = run.queued_messages.as_ref().is_none_or(Vec::is_empty)
-                && run.current_step_id.as_deref() == run.steps.last().map(|step| step.id.as_str());
-            (final_step, run.git_auto == Some(true))
-        }) else {
-            self.autosave_worktree(run_id, AutosaveReason::TurnEnd);
-            return;
-        };
-        if matches!(outcome, Ok(SessionOutcome::Completed(_))) && final_step && git_auto {
-            return;
-        }
-        let reason = if matches!(outcome, Ok(SessionOutcome::Completed(_))) && final_step {
-            AutosaveReason::RunFinalize
-        } else {
-            AutosaveReason::TurnEnd
-        };
-        self.autosave_worktree(run_id, reason);
-    }
-
-    /// A terminal transition is the final recovery boundary for failed, cancelled, and
-    /// successfully completed runs. Only materialized task worktrees are eligible; an in-place
-    /// run must never turn the user's repository-root edits into an automatic commit.
-    fn autosave_after_settlement(&self, run_id: &str) {
-        let terminal = self.manager.lock().get_run(run_id).is_some_and(|run| {
-            matches!(
-                run.status,
-                coducktor_contract::RunStatus::Done
-                    | coducktor_contract::RunStatus::Failed
-                    | coducktor_contract::RunStatus::Cancelled
-                    | coducktor_contract::RunStatus::Review
-            )
-        });
-        if terminal {
-            self.autosave_worktree(run_id, AutosaveReason::RunFinalize);
-        }
-    }
-
-    fn autosave_worktree(&self, run_id: &str, reason: AutosaveReason) {
-        let path = self
-            .manager
-            .lock()
-            .get_run(run_id)
-            .and_then(|run| run.worktree_path.clone());
-        let Some(path) = path else {
-            return;
-        };
-        let result = autosave_commit(Path::new(&path), reason);
-        if matches!(result, AutosaveResult::Refused | AutosaveResult::Failed) {
-            let detail = match result {
-                AutosaveResult::Refused => "worktree contains unresolved conflicts",
-                AutosaveResult::Failed => "git could not create the recovery commit",
-                AutosaveResult::Committed | AutosaveResult::NothingToDo => return,
-            };
-            let _ = self.manager.lock().append_event(
-                run_id,
-                EventInput::new("error").field(
-                    "message",
-                    format!("automatic {reason:?} autosave skipped — {detail}"),
-                ),
-            );
-        }
-    }
-
-    fn run_message(
-        &self,
-        run_id: String,
-        mut active: RuntimeActive,
-        prompt: String,
-        images: Vec<PromptImage>,
-    ) {
-        let Some(step_id) = self.active_step_id(&run_id, &active) else {
-            return;
-        };
-        let send_result = active
-            .session_mut()
-            .send_message(&prompt, &images, &mut |event| {
-                self.apply_event(&run_id, &step_id, event)
-            });
-        self.autosave_after_turn(&run_id, &send_result);
-        let cancellation_requested = self
-            .cancellations
-            .lock()
-            .ok()
-            .and_then(|tokens| tokens.get(&run_id).cloned())
-            .is_some_and(|token| token.is_requested());
-        let step = self.manager.lock().apply_message_turn(
-            &run_id,
-            active,
-            send_result,
-            cancellation_requested,
-        );
-        self.autosave_after_settlement(&run_id);
-        self.drive_steps(&run_id, &step_id, step);
-        self.redispatch();
-    }
-
-    fn run_finish(&self, run_id: String, mut active: RuntimeActive) {
-        let Some(step_id) = self.active_step_id(&run_id, &active) else {
-            return;
-        };
-        let finish_result = active
-            .session_mut()
-            .finish(&mut |event| self.apply_event(&run_id, &step_id, event));
-        self.autosave_after_turn(&run_id, &finish_result);
-        let step = self
-            .manager
-            .lock()
-            .apply_finish_turn(&run_id, active, finish_result);
-        self.autosave_after_settlement(&run_id);
-        self.drive_steps(&run_id, &step_id, step);
-        self.redispatch();
-    }
-
-    fn drive_steps(&self, run_id: &str, step_id: &str, mut step: std::io::Result<TurnStep>) {
-        let cancellation = self
-            .cancellations
-            .lock()
-            .ok()
-            .and_then(|tokens| tokens.get(run_id).cloned())
-            .unwrap_or_default();
-        loop {
-            let active = match step {
-                Ok(TurnStep::Done) | Err(_) => break,
-                Ok(TurnStep::Nudge(active)) => active,
-                Ok(TurnStep::QueuedMessage {
-                    active,
-                    prompt,
-                    images,
-                }) => {
-                    step = self.run_queued_message(
-                        run_id,
-                        step_id,
-                        active,
-                        prompt,
-                        images,
-                        &cancellation,
-                    );
-                    continue;
-                }
-                Ok(TurnStep::GitAutoCommit(active)) => {
-                    self.run_git_auto_commit(run_id, step_id, active, &cancellation);
-                    break;
-                }
-            };
-            step = self.run_nudge(run_id, step_id, active, &cancellation);
-        }
-    }
-
-    /// One admitted turn's whole lifetime on its own thread: open, run the turn (and any
-    /// autonomous nudges), report back, then look for whatever the manager admitted as a result
-    /// — completing this run's next step, or another run capacity freed up for — and dispatch
-    /// that too. No branch of this function ever holds the manager's lock across the session
-    /// calls themselves, only around the brief, individual state mutations each one produces.
-    fn run(&self, admitted: AdmittedTurn) {
-        let run_id = admitted.run_id.clone();
-        let step_id = admitted.step_id.clone();
-        let cancellation = admitted.request.cancellation.clone();
-        let factory = SharedSessionFactory {
-            inner: self.session_factory.clone(),
-            state_home: self.state_home.clone(),
-            cancellations: self.cancellations.clone(),
-        };
-        let opened = factory.open(admitted.request.clone());
-        let mut session = match opened {
-            Ok(session) => session,
-            Err(error) => {
-                let _ = self.manager.lock().apply_open_failure(
-                    admitted,
-                    error,
-                    cancellation.is_requested(),
-                );
-                self.autosave_after_settlement(&run_id);
-                self.redispatch();
-                return;
-            }
-        };
-        let turn_result = session.turn(&mut |event| self.apply_event(&run_id, &step_id, event));
-        self.autosave_after_turn(&run_id, &turn_result);
-        let mut step = self.manager.lock().apply_admitted_turn(
-            admitted,
-            session,
-            turn_result,
-            cancellation.is_requested(),
-        );
-        self.autosave_after_settlement(&run_id);
-        loop {
-            let active = match step {
-                Ok(TurnStep::Done) | Err(_) => break,
-                Ok(TurnStep::Nudge(active)) => active,
-                Ok(TurnStep::QueuedMessage {
-                    active,
-                    prompt,
-                    images,
-                }) => {
-                    step = self.run_queued_message(
-                        &run_id,
-                        &step_id,
-                        active,
-                        prompt,
-                        images,
-                        &cancellation,
-                    );
-                    continue;
-                }
-                Ok(TurnStep::GitAutoCommit(active)) => {
-                    self.run_git_auto_commit(&run_id, &step_id, active, &cancellation);
-                    break;
-                }
-            };
-            step = self.run_nudge(&run_id, &step_id, active, &cancellation);
-        }
-        self.redispatch();
-    }
-
-    fn run_nudge(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        mut active: Box<RuntimeActive>,
-        cancellation: &CancellationToken,
-    ) -> std::io::Result<TurnStep> {
-        let send_result = active
-            .session_mut()
-            .send_message(AUTONOMOUS_NUDGE, &[], &mut |event| {
-                self.apply_event(run_id, step_id, event)
-            });
-        self.autosave_after_turn(run_id, &send_result);
-        let step = self.manager.lock().apply_active_turn(
-            run_id,
-            *active,
-            send_result,
-            cancellation.is_requested(),
-        );
-        self.autosave_after_settlement(run_id);
-        step
-    }
-
-    fn run_queued_message(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        mut active: Box<RuntimeActive>,
-        prompt: String,
-        images: Vec<PromptImage>,
-        cancellation: &CancellationToken,
-    ) -> std::io::Result<TurnStep> {
-        let send_result = active
-            .session_mut()
-            .send_message(&prompt, &images, &mut |event| {
-                self.apply_event(run_id, step_id, event)
-            });
-        self.autosave_after_turn(run_id, &send_result);
-        let step = self.manager.lock().apply_message_turn(
-            run_id,
-            *active,
-            send_result,
-            cancellation.is_requested(),
-        );
-        self.autosave_after_settlement(run_id);
-        step
-    }
-
-    fn run_git_auto_commit(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        mut active: Box<RuntimeActive>,
-        cancellation: &CancellationToken,
-    ) {
-        let send_result =
-            active
-                .session_mut()
-                .send_message(AUTOMATIC_COMMIT_MESSAGE_NUDGE, &[], &mut |event| {
-                    self.apply_event(run_id, step_id, event)
-                });
-        let subject = self.manager.lock().apply_git_auto_commit_message(
-            run_id,
-            *active,
-            send_result,
-            cancellation.is_requested(),
-        );
-        self.autosave_after_settlement(run_id);
-        let result = match subject {
-            Ok(Ok(GitAutoMessage::Subject(message))) => {
-                let root = {
-                    let manager = self.manager.lock();
-                    manager
-                        .get_run(run_id)
-                        .and_then(|run| manager.working_directory_for(run))
-                };
-                match root {
-                    Some(root) => commit_all(&root, &message)
-                        .and_then(|_| push_current_branch(&root).map(|_| ())),
-                    None => {
-                        Err("run has no working directory for automatic Git actions".to_owned())
-                    }
-                }
-            }
-            Ok(Ok(GitAutoMessage::Cancelled)) => return,
-            Ok(Err(reason)) => Err(reason),
-            Err(error) => Err(error.to_string()),
-        };
-        let _ = self.manager.lock().finish_git_auto(run_id, result);
-        self.autosave_after_settlement(run_id);
-    }
-
-    /// Applied under a fresh, brief lock per event — never the same lock the child process I/O
-    /// between events runs under.
-    fn apply_event(&self, run_id: &str, step_id: &str, event: EventInput) -> std::io::Result<()> {
-        self.manager.lock().apply_turn_event(run_id, step_id, event)
-    }
-
-    /// Drain whatever the manager admitted while this worker was running — its own next step, or
-    /// unrelated queued work this run finishing freed capacity for — and dispatch it. Cheap and a
-    /// no-op when nothing is pending, so it is safe to call unconditionally at the end of a run.
-    fn redispatch(&self) {
-        let admitted = self.manager.lock().take_pending_turns();
-        self.dispatch(admitted);
-    }
 }
 
 /// A 5-minute TTL cache so a slow or failing model probe does not re-run on every picker update.
@@ -888,135 +160,6 @@ const MAX_DISCOVERED_MODELS: usize = 500;
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const MAX_OPENCODE_AUTH_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_OPENCODE_USAGE_BYTES: usize = 256 * 1024;
-const MAX_CHECK_OUTPUT_BYTES: usize = 512 * 1024;
-const CHECK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-
-struct ProductionCheckExecutor;
-
-impl CheckExecutor for ProductionCheckExecutor {
-    fn run(&mut self, command: &str, cwd: &Path) -> Result<CheckResult, String> {
-        if command.is_empty() || command.len() > 100_000 {
-            return Err("check command is empty or exceeds 100,000 bytes".to_owned());
-        }
-        let mut process = if cfg!(windows) {
-            let mut process = Command::new("cmd.exe");
-            process.args(["/D", "/S", "/C", command]);
-            process
-        } else {
-            let mut process = Command::new("sh");
-            process.args(["-lc", command]);
-            process
-        };
-        let mut child = process
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| format!("could not start check: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .map(|pipe| std::thread::spawn(move || read_bounded_output(pipe)));
-        let stderr = child
-            .stderr
-            .take()
-            .map(|pipe| std::thread::spawn(move || read_bounded_output(pipe)));
-        let started = Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if started.elapsed() < CHECK_TIMEOUT => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = join_check_output(stdout);
-                    let _ = join_check_output(stderr);
-                    return Err(format!(
-                        "check timed out after {} seconds",
-                        CHECK_TIMEOUT.as_secs()
-                    ));
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = join_check_output(stdout);
-                    let _ = join_check_output(stderr);
-                    return Err(format!("could not wait for check: {error}"));
-                }
-            }
-        };
-        let stdout = join_check_output(stdout);
-        let stderr = join_check_output(stderr);
-        let output = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
-            (false, false) => format!("{stdout}\n{stderr}"),
-            (false, true) => stdout,
-            (true, false) => stderr,
-            (true, true) => String::new(),
-        };
-        Ok(CheckResult {
-            success: status.success(),
-            exit_code: status.code().unwrap_or(-1),
-            output,
-        })
-    }
-}
-
-fn read_bounded_output(mut reader: impl std::io::Read) -> String {
-    let mut retained = Vec::new();
-    let mut buffer = [0_u8; 8192];
-    let mut truncated = false;
-    while let Ok(read) = reader.read(&mut buffer) {
-        if read == 0 {
-            break;
-        }
-        let remaining = MAX_CHECK_OUTPUT_BYTES.saturating_sub(retained.len());
-        retained.extend_from_slice(&buffer[..read.min(remaining)]);
-        truncated |= read > remaining;
-    }
-    let mut output = String::from_utf8_lossy(&retained).into_owned();
-    if truncated {
-        output.push_str("\n[output truncated by coducktor]");
-    }
-    output
-}
-
-fn join_check_output(handle: Option<std::thread::JoinHandle<String>>) -> String {
-    handle
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default()
-}
-
-struct ProductionDiffInspector {
-    repo_root: PathBuf,
-}
-
-impl DiffInspector for ProductionDiffInspector {
-    fn has_diff(&mut self, run: &coducktor_contract::RunRecord) -> bool {
-        if let Some(path) = run.worktree_path.as_deref() {
-            let diff = coducktor_core::git::worktree::worktree_diff(
-                Path::new(path),
-                run.base_branch.as_deref().unwrap_or("HEAD"),
-                1_000_000,
-            );
-            return !diff.trim().is_empty() && !diff.starts_with("(diff failed");
-        }
-        git_capture(&self.repo_root, &["status", "--porcelain"])
-            .is_ok_and(|status| !status.trim().is_empty())
-    }
-
-    fn has_uncommitted_diff(&mut self, run: &coducktor_contract::RunRecord) -> bool {
-        let root = run
-            .worktree_path
-            .as_deref()
-            .map(Path::new)
-            .unwrap_or(&self.repo_root);
-        git_capture(root, &["status", "--porcelain"]).is_ok_and(|status| !status.trim().is_empty())
-    }
-}
-
 fn data_dir(repo_root: &Path) -> PathBuf {
     project_state_dir(repo_root, &ProcessEnv)
 }
@@ -1031,91 +174,23 @@ fn io_err(error: std::io::Error) -> EngineError {
     EngineError::Transport(error.to_string())
 }
 
-fn configure_production_manager(
-    manager: &mut RunManager,
-    repo_root: &Path,
-    state_home: &Path,
-    workspace: &coducktor_core::workspace::config::WorkspaceConfig,
-    project_id: &str,
-    workspace_admission: SharedWorkspaceAdmission,
-    repository_lease: SharedRepositoryLease,
-) {
-    let repo = load_config(
-        &repo_config_path_at(repo_root, state_home),
-        &workspace.agent_defaults,
-    );
-    manager.set_runtime_options(effective_runtime_options(workspace, &repo, project_id));
-    manager.set_intelligent_context_refresh(workspace.resources.intelligent_context_refresh);
-    manager.set_workspace_semaphore(workspace_admission);
-    manager.set_repository_lease(repository_lease);
-    manager.set_check_executor(ProductionCheckExecutor);
-    manager.set_diff_inspector(ProductionDiffInspector {
-        repo_root: repo_root.to_path_buf(),
-    });
-}
-
-/// Resolve the policy used for future run admissions from every retained configuration layer.
-/// Running sessions keep their existing limits; callers reconfigure only future admissions.
-fn effective_runtime_options(
-    workspace: &WorkspaceConfig,
-    repo: &RepoConfig,
-    project_id: &str,
-) -> RuntimeOptions {
-    let project_limit = workspace
-        .projects
-        .iter()
-        .find(|project| project.id == project_id)
-        .and_then(|project| project.max_parallel)
-        .map(|value| value as usize)
-        .unwrap_or(repo.max_parallel as usize);
-    RuntimeOptions {
-        max_parallel: project_limit
-            .min(workspace.resources.max_parallel as usize)
-            .max(1),
-        max_monitoring_sessions: workspace.resources.max_monitoring_sessions as usize,
-        monitoring_wake_interval_minutes: workspace.resources.monitoring_wake_interval_minutes,
-        auto_resume_on_usage_limit: workspace.resources.auto_resume_on_usage_limit,
-    }
-}
-
-/// Build a lifecycle event without repeating the full `EventInput` construction at each site.
-#[allow(dead_code)]
-fn lifecycle_event(message: String) -> EventInput {
-    let mut event = EventInput::new("lifecycle");
-    event
-        .extra
-        .insert("message".to_owned(), Value::String(message));
-    event
-}
-
 // Legacy task records still share this implementation for read/archive/delete/Git compatibility.
 // Its workflow mutation methods are crate-private and retained only for historical unit fixtures.
 #[allow(dead_code)]
 impl InProcessEngine {
-    /// Build a manager over `repo_root` wired with the real [`DefaultSessionFactory`]. Events
-    /// are published through an in-process broadcast channel.
+    /// Build an engine over `repo_root` wired with the real [`DefaultSessionFactory`] for
+    /// conversations. Events are published through an in-process broadcast channel.
     pub fn new(repo_root: impl Into<PathBuf>, version: impl Into<String>) -> Self {
-        Self::with_session_factory(repo_root, version, DefaultSessionFactory::new())
-    }
-
-    /// Same as [`Self::new`], but over an explicit [`SessionFactory`] — the seam a test (or a
-    /// future non-`DefaultSessionFactory` embedder) uses instead of `DefaultSessionFactory`'s
-    /// own live-process-environment snapshot.
-    pub fn with_session_factory(
-        repo_root: impl Into<PathBuf>,
-        version: impl Into<String>,
-        session_factory: impl coducktor_core::workflows::run::SessionFactory + 'static,
-    ) -> Self {
         let workspace_config_path = coducktor_core::paths::workspace_config_path(&ProcessEnv);
-        Self::with_session_factory_at(repo_root, version, session_factory, workspace_config_path)
+        Self::at(repo_root, version, workspace_config_path)
     }
 
     /// Test/embedding seam for a fixed workspace registry. Production uses the process
-    /// environment through [`Self::with_session_factory`].
-    pub fn with_session_factory_at(
+    /// environment through [`Self::new`]. Pair it with [`Self::with_conversation_factory`] to
+    /// substitute the harness seam.
+    pub fn at(
         repo_root: impl Into<PathBuf>,
         version: impl Into<String>,
-        session_factory: impl coducktor_core::workflows::run::SessionFactory + 'static,
         workspace_config_path: impl Into<PathBuf>,
     ) -> Self {
         let repo_root = repo_root.into();
@@ -1126,37 +201,8 @@ impl InProcessEngine {
             .unwrap_or_else(|| project_state_dir(&repo_root, &ProcessEnv));
         let config = load_workspace_config(&workspace_config_path, &ProcessEnv);
         let boot_project_id = boot_project_id(&config, &repo_root);
-        let workspace_admission =
-            SharedWorkspaceAdmission::new(config.resources.max_parallel as usize);
-        let repository_leases = Arc::new(Mutex::new(BTreeMap::new()));
-        let boot_root = repo_root
-            .canonicalize()
-            .unwrap_or_else(|_| repo_root.clone());
-        let boot_repository_lease = SharedRepositoryLease::default();
-        if let Ok(mut leases) = repository_leases.lock() {
-            leases.insert(boot_root, boot_repository_lease.clone());
-        }
-        let session_factory: Arc<dyn SessionFactory> = Arc::new(session_factory);
-        let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
-        let mut manager = RunManager::with_session_factory_for_repo(
-            repo_root.clone(),
-            project_state_dir_in(&state_home, &repo_root),
-            SharedSessionFactory {
-                inner: session_factory.clone(),
-                state_home: state_home.clone(),
-                cancellations: cancellations.clone(),
-            },
-        );
+        let mut manager = RunManager::open(project_state_dir_in(&state_home, &repo_root));
         manager.set_project_id(boot_project_id.clone());
-        configure_production_manager(
-            &mut manager,
-            &repo_root,
-            &state_home,
-            &config,
-            &boot_project_id,
-            workspace_admission.clone(),
-            boot_repository_lease,
-        );
         if let Err(error) = manager.prune_stale_runs() {
             eprintln!("coducktor: could not apply run retention: {error}");
         }
@@ -1171,18 +217,12 @@ impl InProcessEngine {
             version: version.into(),
             manager: manager.clone(),
             managers: managers.clone(),
-            session_factory,
-            cancellations,
             boot_project_id: boot_project_id.clone(),
             project_id: boot_project_id.clone(),
             run_snapshot,
-            activation_workers: Arc::new(Mutex::new(BTreeMap::new())),
-            turn_workers: Arc::new(Mutex::new(BTreeMap::new())),
             live_event_topics,
             model_catalog: Arc::new(Mutex::new(Vec::new())),
             usage_cache: Arc::new(Mutex::new(None)),
-            workspace_admission,
-            repository_leases,
             conversations: Arc::new(Mutex::new(BTreeMap::new())),
             conversation_factory: Arc::new(DefaultSessionFactory::new()),
             conversation_workers: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1223,14 +263,6 @@ impl InProcessEngine {
         self.wire_manager(&project_id, &manager);
         if let Ok(mut managers) = self.managers.lock() {
             managers.insert(project_id, ProjectManager { root, manager });
-        }
-    }
-
-    fn repository_lease_for(&self, root: &Path) -> SharedRepositoryLease {
-        let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        match self.repository_leases.lock() {
-            Ok(mut leases) => leases.entry(canonical).or_default().clone(),
-            Err(_) => SharedRepositoryLease::default(),
         }
     }
 
@@ -1328,25 +360,8 @@ impl InProcessEngine {
         {
             return Ok(entry.clone());
         }
-        let mut manager = RunManager::with_session_factory_for_repo(
-            root.clone(),
-            self.project_data_dir(&root),
-            SharedSessionFactory {
-                inner: self.session_factory.clone(),
-                state_home: self.state_home.clone(),
-                cancellations: self.cancellations.clone(),
-            },
-        );
+        let mut manager = RunManager::open(self.project_data_dir(&root));
         manager.set_project_id(project_id.clone());
-        configure_production_manager(
-            &mut manager,
-            &root,
-            &self.state_home,
-            &config,
-            &project_id,
-            self.workspace_admission.clone(),
-            self.repository_lease_for(&root),
-        );
         if let Err(error) = manager.prune_stale_runs() {
             eprintln!("coducktor: could not apply run retention: {error}");
         }
@@ -1362,31 +377,6 @@ impl InProcessEngine {
         Ok(ProjectManager { root, manager })
     }
 
-    /// Refresh policy collaborators for managers that are already open. This deliberately keeps
-    /// their run/session state intact: changed limits govern subsequent admission, not a live
-    /// process whose environment, cwd, or reservation was already established.
-    fn reconfigure_open_managers(
-        &self,
-        workspace: &coducktor_core::workspace::config::WorkspaceConfig,
-    ) -> Result<(), EngineError> {
-        self.workspace_admission
-            .reconfigure(workspace.resources.max_parallel as usize);
-        let managers = self.managers.lock().map_err(|_| lock_err())?;
-        for (project_id, entry) in managers.iter() {
-            let mut manager = entry.manager.lock();
-            configure_production_manager(
-                &mut manager,
-                &entry.root,
-                &self.state_home,
-                workspace,
-                project_id,
-                self.workspace_admission.clone(),
-                self.repository_lease_for(&entry.root),
-            );
-        }
-        Ok(())
-    }
-
     /// Build a view whose repository and manager are the selected project. Existing inherent
     /// methods can therefore remain the compatibility surface while every scoped trait call
     /// executes against the same resolved pair.
@@ -1399,21 +389,15 @@ impl InProcessEngine {
             version: self.version.clone(),
             manager: entry.manager,
             managers: self.managers.clone(),
-            session_factory: self.session_factory.clone(),
-            cancellations: self.cancellations.clone(),
             boot_project_id: self.boot_project_id.clone(),
             project_id: match scope {
                 Scope::Project(id) if id != "default" => id.clone(),
                 Scope::Workspace | Scope::Project(_) => self.boot_project_id.clone(),
             },
             run_snapshot: self.run_snapshot.clone(),
-            activation_workers: self.activation_workers.clone(),
-            turn_workers: self.turn_workers.clone(),
             live_event_topics: self.live_event_topics.clone(),
             model_catalog: self.model_catalog.clone(),
             usage_cache: self.usage_cache.clone(),
-            workspace_admission: self.workspace_admission.clone(),
-            repository_leases: self.repository_leases.clone(),
             conversations: self.conversations.clone(),
             conversation_factory: self.conversation_factory.clone(),
             conversation_workers: self.conversation_workers.clone(),
@@ -1470,148 +454,6 @@ impl InProcessEngine {
             .cloned()
             .map(api_run)
             .ok_or(EngineError::NotFound)
-    }
-
-    /// Mirrors `create_run`'s handler exactly, including its `variants` validation.
-    pub(crate) async fn start_run(
-        &self,
-        input: CreateRunInput,
-    ) -> Result<CreateRunResponse, EngineError> {
-        // Admission is durable, but execution is deliberately separate. Starting a provider
-        // turn here used to hold the manager mutex throughout `RunManager::pump`, making the
-        // request path (and any caller sharing that manager) wait behind runner I/O. The TUI
-        // installs its live listener and then explicitly calls `activate_runs`; headless callers
-        // own the same activation boundary.
-        self.enqueue_run(input).await
-    }
-
-    /// Persist queued runs and return their ids before any agent process is opened.
-    pub(crate) async fn enqueue_run(
-        &self,
-        input: CreateRunInput,
-    ) -> Result<CreateRunResponse, EngineError> {
-        let workflow = {
-            let repo_root = self.repo_root.clone();
-            let name = input.workflow.clone();
-            let steps = input.steps.clone();
-            if let Some(steps) = steps {
-                if steps.is_empty() {
-                    return Err(EngineError::Conflict {
-                        reason: "steps must not be empty".to_owned(),
-                    });
-                }
-                coducktor_contract::WorkflowDef {
-                    name: "(planned)".to_owned(),
-                    description: None,
-                    steps,
-                    source: coducktor_contract::WorkflowSource::BuiltIn,
-                    path: None,
-                }
-            } else {
-                let Some(name) = name else {
-                    return Err(EngineError::Conflict {
-                        reason: "workflow or steps is required".to_owned(),
-                    });
-                };
-                load_workflows(&repo_root)
-                    .0
-                    .into_iter()
-                    .find(|workflow| workflow.name == name)
-                    .ok_or(EngineError::NotFound)?
-            }
-        };
-        let workspace = self.loaded_workspace_config();
-        let configured_runner = coducktor_core::config::load_config(
-            &repo_config_path_at(&self.repo_root, &self.state_home),
-            &workspace.agent_defaults,
-        )
-        .default_runner;
-        // The composer intentionally omits an untouched value that equals its configured
-        // default. Resolve that omission here so a configured `auto` default does not silently
-        // collapse to the core runtime's legacy Claude fallback.
-        let requested_runner = Some(effective_requested_runner(input.runner, configured_runner));
-        let routing_decision = if requested_runner == Some(RunnerSelection::Auto) {
-            let status = provider_status_response();
-            let quota_decision = self.fresh_cached_workspace_usage().map(|usage| {
-                quota_aware_routing_decision(&status, &usage, &workspace.quota_routing)
-            });
-            Some(match quota_decision {
-                Some(decision) if decision.selected.is_some() => decision,
-                _ => connectivity_routing_decision(&status),
-            })
-        } else {
-            None
-        };
-        let auto_runner_candidates = routing_decision
-            .as_ref()
-            .map(routing_decision_runners)
-            .unwrap_or_default();
-        let resolved_runner = if requested_runner == Some(RunnerSelection::Auto) {
-            Some(
-                *auto_runner_candidates
-                    .first()
-                    .ok_or_else(|| EngineError::Unavailable {
-                        reason: "no connected provider is eligible for Auto routing".to_owned(),
-                    })?,
-            )
-        } else {
-            None
-        };
-        let profile_provider = resolved_runner
-            .or_else(|| requested_runner.and_then(runner_selection_provider))
-            .ok_or_else(|| EngineError::Unavailable {
-                reason: "run provider could not be resolved".to_owned(),
-            })?;
-        let agent_profile = self.resolve_run_profile(profile_provider, input.agent_profile)?;
-        let images = prompt_images(input.images.unwrap_or_default());
-        if images.len() > 4 {
-            return Err(EngineError::Conflict {
-                reason: "task exceeds the 4 image limit".to_owned(),
-            });
-        }
-        let core_input = CoreStartRunInput {
-            task: input.task,
-            images,
-            model: input.model,
-            reasoning_effort: input.reasoning_effort,
-            runner: requested_runner,
-            resolved_runner,
-            auto_runner_candidates,
-            routing_decision,
-            agent_profile: Some(agent_profile),
-            system_prompt: input.system_prompt,
-            autonomous: input.autonomous,
-            git_auto: input.git_auto,
-            worktree: input.worktree,
-        };
-        let variants = input.variants.unwrap_or(1.0);
-        if !variants.is_finite() || variants.fract() != 0.0 || !(1.0..=3.0).contains(&variants) {
-            return Err(EngineError::Conflict {
-                reason: "variants must be an integer from 1 to 3".to_owned(),
-            });
-        }
-        let created = {
-            let mut manager = self.manager.lock();
-            if variants > 1.0 {
-                manager
-                    .enqueue_variants(&workflow, core_input, variants as usize)
-                    .map_err(io_err)?
-            } else {
-                vec![manager.enqueue_run(&workflow, core_input).map_err(io_err)?]
-            }
-        };
-        let runs = self.materialize_worktrees(created)?;
-        if variants > 1.0 {
-            Ok(CreateRunResponse::Group { runs })
-        } else {
-            let run = runs
-                .into_iter()
-                .next()
-                .ok_or_else(|| EngineError::Unavailable {
-                    reason: "run admission produced no record".to_owned(),
-                })?;
-            Ok(CreateRunResponse::Single(Box::new(run)))
-        }
     }
 
     fn resolve_run_profile(
@@ -1741,95 +583,19 @@ impl InProcessEngine {
         }
     }
 
-    /// Run the accepted queue on a worker so the engine loop can keep drawing and consuming the
-    /// live broadcast emitted by the manager's event sink.
-    pub(crate) fn activate_runs(&self) -> Result<(), EngineError> {
-        self.reap_finished_activation_workers()?;
-        let mut workers = self.activation_workers.lock().map_err(|_| lock_err())?;
-        if workers
-            .get(&self.project_id)
-            .is_some_and(|worker| !worker.is_finished())
-        {
-            return Ok(());
-        }
-        if let Some(finished) = workers.remove(&self.project_id) {
-            let _ = finished.join();
-        }
-        let dispatch = self.turn_dispatch();
-        let worker = std::thread::Builder::new()
-            .name("coducktor-runner".to_owned())
-            .spawn(move || {
-                let admitted = {
-                    let mut manager = dispatch.manager.lock();
-                    let _ = manager.pump();
-                    manager.take_pending_turns()
-                };
-                dispatch.dispatch(admitted);
-            })
-            .map_err(|error| EngineError::Unavailable {
-                reason: format!("could not start the agent worker: {error}"),
-            })?;
-        workers.insert(self.project_id.clone(), worker);
-        Ok(())
-    }
-
-    /// Build a handle any per-run turn can be dispatched through — cheap, since every field is
-    /// an `Arc` clone or owned small value.
-    fn turn_dispatch(&self) -> TurnDispatch {
-        self.turn_dispatch_for(self.manager.clone())
-    }
-
-    /// Same, but against an explicit manager rather than this engine's own scoped one — the
-    /// monitoring scheduler dispatches across every currently open project's manager while every
-    /// other field (the session factory, state home, cancellation registry, worker registry) is
-    /// shared engine-wide, not per-project.
-    fn turn_dispatch_for(&self, manager: Arc<RunManagerMutex<RunManager>>) -> TurnDispatch {
-        TurnDispatch {
-            manager,
-            session_factory: self.session_factory.clone(),
-            state_home: self.state_home.clone(),
-            cancellations: self.cancellations.clone(),
-            workers: self.turn_workers.clone(),
-        }
-    }
-
-    /// Join completed activation workers irrespective of the project that started them. This
-    /// keeps a dormant project from retaining a finished thread until it is activated again.
-    fn reap_finished_activation_workers(&self) -> Result<(), EngineError> {
-        let mut workers = self.activation_workers.lock().map_err(|_| lock_err())?;
-        let finished = workers
-            .iter()
-            .filter(|(_, worker)| worker.is_finished())
-            .map(|(project, _)| project.clone())
-            .collect::<Vec<_>>();
-        for project in finished {
-            if let Some(worker) = workers.remove(&project) {
-                let _ = worker.join();
-            }
-        }
-        drop(workers);
-        self.prune_terminal_cancellations();
-        Ok(())
-    }
-
-    /// Signal every currently in-flight run's cancellation token, wait up to `grace` for their
-    /// `turn_workers`/`activation_workers` threads to actually finish, then reap whichever ones
-    /// did. A confirmed TUI quit must not hang forever on a session that never notices
-    /// cancellation, so this always returns once `grace` elapses regardless of how many workers
-    /// are still running — a worker still running past the deadline is abandoned to the process's
-    /// own exit, same as before this method existed. `ChildProcess::next_line`'s read loop polls
-    /// its token at least every 50ms and sends SIGTERM the moment it notices (with the process's
-    /// existing `Drop` impl escalating to SIGKILL once that worker thread unwinds normally), so a
-    /// well-behaved worker reliably finishes well inside a sub-second grace; this only bounds the
-    /// wait for one that never notices at all.
+    /// Signal every in-flight conversation turn's cancellation token, wait up to `grace` for
+    /// their worker threads to actually finish, then reap whichever ones did. A confirmed TUI
+    /// quit must not hang forever on a session that never notices cancellation, so this always
+    /// returns once `grace` elapses regardless of how many workers are still running — a worker
+    /// still running past the deadline is abandoned to the process's own exit.
+    /// `ChildProcess::next_line`'s read loop polls its token at least every 50ms and sends
+    /// SIGTERM the moment it notices (with the process's existing `Drop` impl escalating to
+    /// SIGKILL once that worker thread unwinds normally), so a well-behaved worker reliably
+    /// finishes well inside a sub-second grace; this only bounds the wait for one that never
+    /// notices at all.
     pub fn shutdown(&self, grace: Duration) {
-        if let Ok(cancellations) = self.cancellations.lock() {
-            for cancellation in cancellations.values() {
-                cancellation.request();
-            }
-        }
         // Conversation turns hold their tokens inside their own manager, so signal every open
-        // project's in-flight turns too — otherwise a confirmed quit abandons a live harness
+        // project's in-flight turns — otherwise a confirmed quit abandons a live harness
         // process instead of asking it to stop.
         if let Ok(managers) = self.conversations.lock() {
             for entry in managers.values() {
@@ -1838,22 +604,7 @@ impl InProcessEngine {
         }
         let deadline = Instant::now() + grace;
         loop {
-            let pending: usize = [&self.turn_workers, &self.activation_workers]
-                .into_iter()
-                .map(|workers| {
-                    workers
-                        .lock()
-                        .map(|workers| {
-                            workers
-                                .values()
-                                .filter(|worker| !worker.is_finished())
-                                .count()
-                        })
-                        .unwrap_or(0)
-                })
-                .sum::<usize>()
-                + self.pending_conversation_workers();
-            if pending == 0 {
+            if self.pending_conversation_workers() == 0 {
                 break;
             }
             let now = Instant::now();
@@ -1862,8 +613,6 @@ impl InProcessEngine {
             }
             std::thread::sleep(Duration::from_millis(10).min(deadline - now));
         }
-        self.turn_dispatch().reap_finished();
-        let _ = self.reap_finished_activation_workers();
         reap_finished_conversation_workers(&self.conversation_workers);
     }
 
@@ -1879,31 +628,6 @@ impl InProcessEngine {
             .unwrap_or(0)
     }
 
-    /// Tokens belong to a live/parked session only. Worker reaping is the common terminal
-    /// boundary; retaining a token past it would turn ordinary completed runs into an unbounded
-    /// process-lifetime registry.
-    fn prune_terminal_cancellations(&self) {
-        let Ok(snapshot) = self.run_snapshot.read() else {
-            return;
-        };
-        let Ok(mut cancellations) = self.cancellations.lock() else {
-            return;
-        };
-        cancellations.retain(|run_id, _| {
-            snapshot.values().any(|runs| {
-                runs.get(run_id).is_some_and(|run| {
-                    !matches!(
-                        run.status,
-                        coducktor_contract::RunStatus::Done
-                            | coducktor_contract::RunStatus::Failed
-                            | coducktor_contract::RunStatus::Cancelled
-                            | coducktor_contract::RunStatus::Review
-                    )
-                })
-            })
-        });
-    }
-
     pub async fn archive_run(&self, run_id: &str, archived: bool) -> Result<ApiRun, EngineError> {
         let mut manager = self.manager.lock();
         manager
@@ -1917,11 +641,6 @@ impl InProcessEngine {
         let mut manager = self.manager.lock();
         if manager.get_run(run_id).is_none() {
             return Err(EngineError::NotFound);
-        }
-        if manager.is_active(run_id) {
-            return Err(EngineError::Conflict {
-                reason: "cannot delete an active run".to_owned(),
-            });
         }
         let deleted = manager.remove_run(run_id).map_err(io_err)?;
         drop(manager);
@@ -2000,66 +719,6 @@ impl InProcessEngine {
             })?
             .map(api_run)
             .ok_or(EngineError::NotFound)
-    }
-
-    pub(crate) async fn cancel_run(&self, run_id: &str) -> Result<CancelResponse, EngineError> {
-        let signalled = self
-            .cancellations
-            .lock()
-            .ok()
-            .and_then(|cancellations| cancellations.get(run_id).cloned())
-            .is_some_and(|cancellation| cancellation.request());
-        // Factories created before the token registry, or provider-specific child handles that
-        // outlive their turn token, still get their existing best-effort cancellation path. Do
-        // not take this mutex when the independent token has already reached the worker: `open`
-        // is allowed to block while the manager owns its transition lock.
-        let signalled = if signalled {
-            true
-        } else {
-            self.session_factory.request_cancel(run_id)
-        };
-        let mut manager = match self.manager.try_lock() {
-            Some(manager) => manager,
-            None if signalled => {
-                return Ok(CancelResponse { cancelled: true });
-            }
-            None => {
-                return Err(EngineError::Unavailable {
-                    reason: "run is busy and could not be interrupted".to_owned(),
-                });
-            }
-        };
-        if manager.get_run(run_id).is_none() {
-            return Err(EngineError::NotFound);
-        }
-        let cancelled = manager.cancel(run_id).map_err(io_err)?;
-        let admitted = manager.take_pending_turns();
-        drop(manager);
-        self.turn_dispatch().dispatch(admitted);
-        Ok(CancelResponse { cancelled })
-    }
-
-    pub(crate) async fn finish_run(&self, run_id: &str) -> Result<FinishResponse, EngineError> {
-        let mut manager = self.manager.lock();
-        if manager.get_run(run_id).is_none() {
-            return Err(EngineError::NotFound);
-        }
-        let finish = manager.begin_finish(run_id).map_err(io_err)?;
-        let admitted = manager.take_pending_turns();
-        drop(manager);
-        self.turn_dispatch().dispatch(admitted);
-        let finished = match finish {
-            FinishStart::Finished(finished) => finished,
-            FinishStart::Detached(active) => {
-                if !self.turn_dispatch().finish(run_id.to_owned(), *active) {
-                    return Err(EngineError::Unavailable {
-                        reason: "could not start the finish worker".to_owned(),
-                    });
-                }
-                true
-            }
-        };
-        Ok(FinishResponse { finished })
     }
 
     /// Build the cross-project global Tasks index from the observer-maintained snapshot. A project
@@ -2768,7 +1427,6 @@ impl InProcessEngine {
         })
         .await
         .map_err(|error| EngineError::Transport(error.to_string()))??;
-        self.reconfigure_open_managers(&self.loaded_workspace_config())?;
         Ok(response)
     }
 
@@ -3739,7 +2397,6 @@ impl InProcessEngine {
             apply_workspace_config_input(config, &input);
         })
         .map_err(io_err)?;
-        self.reconfigure_open_managers(&saved)?;
         Ok(workspace_config_response(&saved))
     }
 
@@ -3856,234 +2513,6 @@ impl InProcessEngine {
     }
 
     // ---- task-thread write paths -----------------------------------------------------------
-    // edit_queued_message/remove_queued_message/continue_run/cancel_auto_resume/
-    // run_git_commit/run_git_push/run_commits/run_pr/run_history/run_history_context/
-    // open_run_in_cli/open_run_in handlers) ---------------------------------------------
-
-    pub(crate) async fn send_message(
-        &self,
-        run_id: &str,
-        input: MessageInput,
-    ) -> Result<MessageResponse, EngineError> {
-        let text = input.text.unwrap_or_default();
-        let images = prompt_images(input.images.unwrap_or_default());
-        if text.trim().is_empty() && images.is_empty() {
-            return Err(EngineError::Conflict {
-                reason: "message needs text or at least one image".to_owned(),
-            });
-        }
-        if images.len() > 4 {
-            return Err(EngineError::Conflict {
-                reason: "message exceeds the 4 image limit".to_owned(),
-            });
-        }
-        let mut manager = self.manager.lock();
-        let Some(run) = manager.get_run(run_id).cloned() else {
-            return Err(EngineError::NotFound);
-        };
-        if run.status == coducktor_contract::RunStatus::Queued {
-            let message = queue_message_on_manager(&mut manager, &run, text, images)?;
-            return Ok(MessageResponse::Queued {
-                queued: true,
-                message,
-            });
-        }
-        let result = manager.begin_message(run_id, text.clone(), images.clone());
-        let admitted = manager.take_pending_turns();
-        match result {
-            Ok(Some(active)) => {
-                drop(manager);
-                self.turn_dispatch().dispatch(admitted);
-                if !self
-                    .turn_dispatch()
-                    .message(run_id.to_owned(), active, text, images)
-                {
-                    return Err(EngineError::Unavailable {
-                        reason: "could not start the follow-up worker".to_owned(),
-                    });
-                }
-                Ok(MessageResponse::Delivered { delivered: true })
-            }
-            Ok(None) if run.status == coducktor_contract::RunStatus::Running => {
-                let message = queue_message_on_manager(&mut manager, &run, text, images)?;
-                drop(manager);
-                self.turn_dispatch().dispatch(admitted);
-                Ok(MessageResponse::Queued {
-                    queued: true,
-                    message,
-                })
-            }
-            Ok(None) => {
-                drop(manager);
-                self.turn_dispatch().dispatch(admitted);
-                Err(EngineError::Conflict {
-                    reason: "session closed".to_owned(),
-                })
-            }
-            Err(error) => Err(io_err(error)),
-        }
-    }
-
-    pub(crate) async fn continue_run(
-        &self,
-        run_id: &str,
-        input: ContinueInput,
-    ) -> Result<ContinueResponse, EngineError> {
-        let images = prompt_images(input.images.unwrap_or_default());
-        if images.len() > 4 {
-            return Err(EngineError::Conflict {
-                reason: "continue exceeds the 4 image limit".to_owned(),
-            });
-        }
-        let options = coducktor_core::workflows::run::ContinueOptions {
-            text: input.text,
-            images,
-            runner: input.runner,
-            model: input.model,
-        };
-        let mut manager = self.manager.lock();
-        if manager.get_run(run_id).is_none() {
-            return Err(EngineError::NotFound);
-        }
-        let result = manager.continue_run(run_id, options);
-        let admitted = manager.take_pending_turns();
-        drop(manager);
-        self.turn_dispatch().dispatch(admitted);
-        match result {
-            Ok(result) if result.ok => Ok(ContinueResponse { continued: true }),
-            Ok(result) => Err(EngineError::Conflict {
-                reason: result
-                    .error
-                    .unwrap_or_else(|| "cannot continue run".to_owned()),
-            }),
-            Err(error) => Err(io_err(error)),
-        }
-    }
-
-    pub(crate) async fn edit_queued_message(
-        &self,
-        run_id: &str,
-        message_id: &str,
-        input: QueuedMessagePatchInput,
-    ) -> Result<EditQueuedMessageResponse, EngineError> {
-        let run = self.run_record(run_id)?;
-        if input.text.is_none() && input.images.is_none() {
-            return Err(EngineError::Conflict {
-                reason: "message edit needs text or images".to_owned(),
-            });
-        }
-        if input
-            .text
-            .as_deref()
-            .is_some_and(|text| !valid_queued_text(text))
-            || input.images.as_ref().is_some_and(|images| images.len() > 4)
-        {
-            return Err(EngineError::Conflict {
-                reason: "queued message exceeds its limits".to_owned(),
-            });
-        }
-        let Some(stack) = run.queued_messages.clone() else {
-            return Err(EngineError::NotFound);
-        };
-        let Some(current) = stack.iter().find(|message| message.id == message_id) else {
-            return Err(EngineError::NotFound);
-        };
-        if run.status != coducktor_contract::RunStatus::Queued {
-            return Err(EngineError::Conflict {
-                reason: "run already started".to_owned(),
-            });
-        }
-        let text = input.text.clone().unwrap_or_else(|| current.text.clone());
-        let images = input
-            .images
-            .as_deref()
-            .map(image_input_urls)
-            .or_else(|| current.images.clone());
-        let effective_images = images.as_ref().map_or(0, Vec::len);
-        let other_images = stack
-            .iter()
-            .filter(|message| message.id != message_id)
-            .map(|message| message.images.as_ref().map_or(0, Vec::len))
-            .sum::<usize>();
-        if text.trim().is_empty() && effective_images == 0 {
-            return Err(EngineError::Conflict {
-                reason: "message needs text or at least one image".to_owned(),
-            });
-        }
-        if other_images + effective_images > MAX_QUEUED_IMAGES {
-            return Err(EngineError::Conflict {
-                reason: "too many queued images — 8 image limit across the stack".to_owned(),
-            });
-        }
-        let mut prospective = stack.clone();
-        if let Some(message) = prospective
-            .iter_mut()
-            .find(|message| message.id == message_id)
-        {
-            message.text = text.clone();
-            message.images = images.clone().filter(|images| !images.is_empty());
-        }
-        if folded_task_length(&run.task, &prospective) > MAX_FOLDED_TASK_CHARS {
-            return Err(EngineError::Conflict {
-                reason: "prompt too long — 200000 character limit across the task and its queued messages"
-                    .to_owned(),
-            });
-        }
-        let replacement = prospective
-            .iter()
-            .find(|message| message.id == message_id)
-            .cloned();
-        let mut manager = self.manager.lock();
-        if manager
-            .edit_run(run_id, |record| record.queued_messages = Some(prospective))
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            return Err(EngineError::Conflict {
-                reason: "run already started".to_owned(),
-            });
-        }
-        Ok(EditQueuedMessageResponse {
-            message: replacement.unwrap_or_else(|| current.clone()),
-        })
-    }
-
-    pub(crate) async fn remove_queued_message(
-        &self,
-        run_id: &str,
-        message_id: &str,
-    ) -> Result<RemoveQueuedMessageResponse, EngineError> {
-        let run = self.run_record(run_id)?;
-        if !run
-            .queued_messages
-            .as_ref()
-            .is_some_and(|messages| messages.iter().any(|message| message.id == message_id))
-        {
-            return Err(EngineError::NotFound);
-        }
-        if run.status != coducktor_contract::RunStatus::Queued {
-            return Err(EngineError::Conflict {
-                reason: "run already started".to_owned(),
-            });
-        }
-        let mut manager = self.manager.lock();
-        let updated = manager
-            .edit_run(run_id, |record| {
-                if let Some(messages) = record.queued_messages.as_mut() {
-                    messages.retain(|message| message.id != message_id);
-                }
-            })
-            .ok()
-            .flatten();
-        if updated.is_none() {
-            return Err(EngineError::Conflict {
-                reason: "run already started".to_owned(),
-            });
-        }
-        Ok(RemoveQueuedMessageResponse { removed: true })
-    }
-
     pub(crate) async fn cancel_auto_resume(
         &self,
         run_id: &str,
@@ -4506,88 +2935,6 @@ impl InProcessEngine {
 const MAX_QUEUED_IMAGES: usize = 8;
 #[allow(dead_code)]
 const MAX_FOLDED_TASK_CHARS: usize = 200_000;
-
-#[allow(dead_code)]
-fn image_input_urls(images: &[ImageInput]) -> Vec<String> {
-    images
-        .iter()
-        .map(|image| format!("data:{};base64,{}", image.media_type, image.data))
-        .collect()
-}
-
-#[allow(dead_code)]
-fn prompt_images(images: Vec<ImageInput>) -> Vec<PromptImage> {
-    images
-        .into_iter()
-        .map(|image| PromptImage {
-            media_type: image.media_type,
-            data: image.data,
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-fn folded_task_length(task: &str, messages: &[coducktor_contract::QueuedMessage]) -> usize {
-    std::iter::once(task)
-        .chain(messages.iter().map(|message| message.text.as_str()))
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .len()
-}
-
-#[allow(dead_code)]
-fn valid_queued_text(text: &str) -> bool {
-    text.chars().count() <= 100_000
-}
-
-#[allow(dead_code)]
-fn queue_message_on_manager(
-    manager: &mut RunManager,
-    run: &coducktor_contract::RunRecord,
-    text: String,
-    images: Vec<PromptImage>,
-) -> Result<coducktor_contract::QueuedMessage, EngineError> {
-    if !valid_queued_text(&text) {
-        return Err(EngineError::Conflict {
-            reason: "queued message exceeds the 100,000 character limit".to_owned(),
-        });
-    }
-    let queued = run.queued_messages.as_deref().unwrap_or_default();
-    let queued_images = queued
-        .iter()
-        .map(|message| message.images.as_ref().map_or(0, Vec::len))
-        .sum::<usize>();
-    if queued_images.saturating_add(images.len()) > MAX_QUEUED_IMAGES {
-        return Err(EngineError::Conflict {
-            reason: format!("queued messages exceed the {MAX_QUEUED_IMAGES} image limit"),
-        });
-    }
-    let prospective = queued
-        .iter()
-        .cloned()
-        .chain(std::iter::once(coducktor_contract::QueuedMessage {
-            id: String::new(),
-            text: text.clone(),
-            images: None,
-            created_at: String::new(),
-        }))
-        .collect::<Vec<_>>();
-    if folded_task_length(&run.task, &prospective) > MAX_FOLDED_TASK_CHARS {
-        return Err(EngineError::Conflict {
-            reason: format!(
-                "task and queued messages exceed the {MAX_FOLDED_TASK_CHARS} character limit"
-            ),
-        });
-    }
-    manager
-        .queue_message(&run.id, text, images)
-        .map_err(io_err)?
-        .ok_or_else(|| EngineError::Conflict {
-            reason: "run is no longer accepting queued messages".to_owned(),
-        })
-}
 
 fn commit_all(root: &Path, message: &str) -> Result<String, String> {
     if message.trim().is_empty() {
@@ -5192,16 +3539,6 @@ fn provider_label(provider: Runner) -> &'static str {
         Runner::Codex => "Codex",
         Runner::OpenCode => "OpenCode",
         Runner::Pi => "pi",
-    }
-}
-
-fn runner_selection_provider(selection: RunnerSelection) -> Option<Runner> {
-    match selection {
-        RunnerSelection::Auto => None,
-        RunnerSelection::Claude => Some(Runner::Claude),
-        RunnerSelection::Codex => Some(Runner::Codex),
-        RunnerSelection::OpenCode => Some(Runner::OpenCode),
-        RunnerSelection::Pi => Some(Runner::Pi),
     }
 }
 
@@ -6161,281 +4498,52 @@ mod tests {
         .unwrap();
         assert_eq!(opencode_go_api_key(&auth).as_deref(), Some("go-key"));
     }
-    use coducktor_contract::WorkflowStepDef;
-    use coducktor_core::workflows::run::{
-        AgentSession, CancellationToken, EventInput, SessionFactory, SessionOutcome, SessionRequest,
-    };
-    use std::io;
-    use std::sync::Barrier;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use coducktor_core::agent_session::EventInput;
     use tempfile::TempDir;
 
-    /// A session that immediately completes with `DUCK:DONE` — enough to prove
-    /// `InProcessEngine`'s own wiring (queueing, persistence, event fan-out) without spawning a
-    /// real agent CLI; the four real backends already have their own dedicated subprocess
-    /// tests in `coducktor-runners`.
-    struct FakeSession;
-    impl AgentSession for FakeSession {
-        fn turn(
-            &mut self,
-            on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<coducktor_core::workflows::run::SessionOutcome, String> {
-            on_event(EventInput::new("text").field("text", "done (fake)"))
-                .map_err(|error| error.to_string())?;
-            Ok(coducktor_core::workflows::run::SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport {
-                    session_id: Some("fake-session".to_owned()),
-                    tokens_used: 10.0,
-                    input_tokens: Some(5.0),
-                    output_tokens: Some(5.0),
-                    cost_usd: None,
-                    turn_text: "done (fake)\n\nDUCK:DONE".to_owned(),
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Done),
-                    plan_entries: None,
-                },
-            ))
-        }
-
-        fn session_id(&self) -> Option<String> {
-            Some("fake-session".to_owned())
-        }
-    }
-
-    struct FakeFactory;
-    impl SessionFactory for FakeFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(FakeSession))
-        }
-    }
-
-    struct WritingSession {
-        cwd: PathBuf,
-    }
-
-    impl AgentSession for WritingSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            std::fs::write(self.cwd.join("agent.txt"), "agent change\n")
-                .map_err(|error| error.to_string())?;
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport {
-                    turn_text: "wrote agent.txt\n\nDUCK:DONE".to_owned(),
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Done),
-                    ..coducktor_core::workflows::run::SessionReport::default()
-                },
-            ))
-        }
-
-        fn session_id(&self) -> Option<String> {
-            Some("writing-session".to_owned())
-        }
-    }
-
-    struct WritingFactory;
-
-    impl SessionFactory for WritingFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(WritingSession { cwd: request.cwd }))
-        }
-    }
-
-    struct RecordingFactory {
-        cwds: Arc<Mutex<Vec<PathBuf>>>,
-    }
-
-    impl SessionFactory for RecordingFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            if let Ok(mut cwds) = self.cwds.lock() {
-                cwds.push(request.cwd);
-            }
-            Ok(Box::new(FakeSession))
-        }
-    }
-
-    struct ProfileRecordingFactory {
-        envs: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
-    }
-
-    impl SessionFactory for ProfileRecordingFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            self.envs.lock().unwrap().push(request.env);
-            Ok(Box::new(FakeSession))
-        }
-    }
-
-    struct BlockingFactory {
-        tokens: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
-    }
-
-    struct BlockingSession {
-        cancellation: CancellationToken,
-    }
-
-    struct GitAutoBlockingFactory {
-        entered_commit_prompt: Arc<AtomicBool>,
-    }
-
-    struct GitAutoBlockingSession {
-        cwd: PathBuf,
-        cancellation: CancellationToken,
-        entered_commit_prompt: Arc<AtomicBool>,
-    }
-
-    impl AgentSession for GitAutoBlockingSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            std::fs::write(self.cwd.join("agent-change.txt"), "changed\n")
-                .map_err(|error| error.to_string())?;
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport {
-                    turn_text: "work complete\n\nDUCK:DONE".to_owned(),
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Done),
-                    ..Default::default()
-                },
-            ))
-        }
-
-        fn send_message(
-            &mut self,
-            _prompt: &str,
-            _images: &[PromptImage],
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            self.entered_commit_prompt.store(true, Ordering::Release);
-            while !self.cancellation.is_requested() {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err("interrupted automatic commit prompt".to_owned())
-        }
-    }
-
-    impl SessionFactory for GitAutoBlockingFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(GitAutoBlockingSession {
-                cwd: request.cwd,
-                cancellation: request.cancellation,
-                entered_commit_prompt: self.entered_commit_prompt.clone(),
-            }))
-        }
-    }
-
-    impl AgentSession for BlockingSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<coducktor_core::workflows::run::SessionOutcome, String> {
-            while !self.cancellation.is_requested() {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err("interrupted".to_owned())
-        }
-    }
-
-    impl SessionFactory for BlockingFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            self.tokens
-                .lock()
-                .unwrap()
-                .insert(request.run_id, request.cancellation.clone());
-            Ok(Box::new(BlockingSession {
-                cancellation: request.cancellation,
-            }))
-        }
-
-        fn request_cancel(&self, run_id: &str) -> bool {
-            self.tokens
-                .lock()
-                .unwrap()
-                .get(run_id)
-                .is_some_and(CancellationToken::request)
-        }
-    }
-
-    struct FollowUpBoundaryFactory {
-        entered: Arc<AtomicBool>,
-        release: Arc<AtomicBool>,
-        messages: Arc<Mutex<Vec<String>>>,
-    }
-
-    struct FollowUpBoundarySession {
-        entered: Arc<AtomicBool>,
-        release: Arc<AtomicBool>,
-        messages: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl AgentSession for FollowUpBoundarySession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            self.entered.store(true, Ordering::Release);
-            while !self.release.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport {
-                    turn_text: "initial turn complete\n\nDUCK:DONE".to_owned(),
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Done),
-                    ..coducktor_core::workflows::run::SessionReport::default()
-                },
-            ))
-        }
-
-        fn send_message(
-            &mut self,
-            prompt: &str,
-            _images: &[PromptImage],
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            self.messages.lock().unwrap().push(prompt.to_owned());
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport {
-                    turn_text: "follow-up complete\n\nDUCK:DONE".to_owned(),
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Done),
-                    ..coducktor_core::workflows::run::SessionReport::default()
-                },
-            ))
-        }
-    }
-
-    impl SessionFactory for FollowUpBoundaryFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(FollowUpBoundarySession {
-                entered: self.entered.clone(),
-                release: self.release.clone(),
-                messages: self.messages.clone(),
-            }))
-        }
-    }
-
-    /// Models a provider setup that is blocked before it can return an `AgentSession`.
-    /// Cancellation must use the token captured by `SharedSessionFactory` before it entered the
-    /// factory.
-    struct BlockingOpenFactory {
-        opened: Arc<AtomicBool>,
-    }
-
-    impl SessionFactory for BlockingOpenFactory {
-        fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            self.opened.store(true, Ordering::Release);
-            while !request.cancellation.is_requested() {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err("interrupted while opening session".to_owned())
-        }
-    }
-
     fn engine(dir: &TempDir) -> InProcessEngine {
-        InProcessEngine::with_session_factory_at(
+        InProcessEngine::at(
             dir.path(),
             "0.0.0-test",
-            FakeFactory,
             dir.path().join(".coducktor/config.json"),
         )
+    }
+
+    /// Seed a workflow-era record directly on disk. Legacy runs can no longer be started, so the
+    /// read/archive/delete surface is exercised against records that already exist — exactly the
+    /// historical data those paths still serve.
+    fn seed_legacy_run(engine: &InProcessEngine, task: &str) -> String {
+        engine
+            .manager
+            .lock()
+            .create_run(coducktor_core::legacy_runs::CreateRunInput {
+                title: task.to_owned(),
+                workflow: "quick-task".to_owned(),
+                task: task.to_owned(),
+                // Workflow-era runs that were not isolated recorded an explicit `false`, which
+                // is what tells the Git/file readers to browse the repository root.
+                worktree: Some(false),
+                ..coducktor_core::legacy_runs::CreateRunInput::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    /// The same, settled to a terminal status — what a historical record looks like once its
+    /// workflow-era run had finished.
+    fn seed_finished_legacy_run(engine: &InProcessEngine, task: &str) -> String {
+        let run_id = seed_legacy_run(engine, task);
+        engine
+            .manager
+            .lock()
+            .update_run(
+                &run_id,
+                coducktor_core::legacy_runs::RunPatch::new()
+                    .set("status", coducktor_contract::RunStatus::Done)
+                    .set("finishedAt", "2026-01-01T00:00:00.000Z"),
+            )
+            .unwrap();
+        run_id
     }
 
     #[test]
@@ -6452,85 +4560,6 @@ mod tests {
         assert!(panic.is_err());
         assert!(engine.manager.lock().list_runs().is_empty());
     }
-
-    async fn activate_until_terminal(engine: &InProcessEngine, run_id: &str) {
-        engine.activate_runs().unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let status = engine.get_run(run_id).await.unwrap().record.status;
-                if matches!(
-                    status,
-                    coducktor_contract::RunStatus::Done
-                        | coducktor_contract::RunStatus::Failed
-                        | coducktor_contract::RunStatus::Cancelled
-                        | coducktor_contract::RunStatus::Review
-                ) {
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn starting_a_run_keeps_the_repository_free_of_coducktor_runtime_state() {
-        let workspace = TempDir::new().unwrap();
-        let repo = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            FakeFactory,
-            workspace.path().join("config.json"),
-        );
-
-        let CreateRunResponse::Single(run) = engine
-            .start_run(steps_input("keep it clean"))
-            .await
-            .unwrap()
-        else {
-            panic!("expected a single run");
-        };
-
-        assert!(!repo.path().join(".ai").exists());
-        assert!(
-            project_state_dir_in(workspace.path(), repo.path())
-                .join("runs.json")
-                .exists()
-        );
-        assert!(!run.id.is_empty());
-    }
-
-    fn steps_input(task: &str) -> CreateRunInput {
-        CreateRunInput {
-            workflow: None,
-            steps: Some(vec![WorkflowStepDef {
-                id: "task".to_owned(),
-                name: Some("Task".to_owned()),
-                prompt: Some("{{task}}".to_owned()),
-                skill: None,
-                model: None,
-                runner: None,
-                allowed_tools: None,
-                bash_allowlist: None,
-                command: None,
-                on_fail: None,
-            }]),
-            task: task.to_owned(),
-            model: None,
-            reasoning_effort: None,
-            runner: None,
-            agent_profile: None,
-            variants: None,
-            worktree: Some(false),
-            autonomous: None,
-            git_auto: None,
-            system_prompt: None,
-            images: None,
-        }
-    }
-
     #[tokio::test]
     async fn health_reports_the_configured_version_and_repo_root() {
         let dir = TempDir::new().unwrap();
@@ -6539,823 +4568,6 @@ mod tests {
         assert_eq!(health.version, "0.0.0-test");
         assert_eq!(health.repo_root, dir.path().to_string_lossy());
         assert!(!health.checks.is_empty());
-    }
-
-    #[tokio::test]
-    async fn start_admission_returns_before_a_blocked_provider_turn_is_activated() {
-        let dir = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: Arc::new(Mutex::new(BTreeMap::new())),
-            },
-        );
-        let started = Instant::now();
-        let CreateRunResponse::Single(run) = engine
-            .start_run(steps_input("block until explicitly activated"))
-            .await
-            .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        assert!(started.elapsed() < std::time::Duration::from_millis(100));
-        assert_eq!(run.status, coducktor_contract::RunStatus::Queued);
-        assert!(engine.activation_workers.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn an_in_flight_follow_up_is_queued_and_delivered_at_the_turn_boundary() {
-        let dir = TempDir::new().unwrap();
-        let entered = Arc::new(AtomicBool::new(false));
-        let release = Arc::new(AtomicBool::new(false));
-        let messages = Arc::new(Mutex::new(Vec::new()));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            FollowUpBoundaryFactory {
-                entered: entered.clone(),
-                release: release.clone(),
-                messages: messages.clone(),
-            },
-        );
-        let CreateRunResponse::Single(run) = engine
-            .start_run(steps_input("wait for a follow-up"))
-            .await
-            .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        engine.activate_runs().unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !entered.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let response = engine
-            .send_message(
-                &run.id,
-                MessageInput {
-                    text: Some("use the compact layout".to_owned()),
-                    images: None,
-                },
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            response,
-            MessageResponse::Queued { queued: true, .. }
-        ));
-        let second = engine
-            .send_message(
-                &run.id,
-                MessageInput {
-                    text: Some("then verify the narrow layout".to_owned()),
-                    images: None,
-                },
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            second,
-            MessageResponse::Queued { queued: true, .. }
-        ));
-        assert_eq!(
-            engine
-                .get_run(&run.id)
-                .await
-                .unwrap()
-                .record
-                .queued_messages
-                .as_deref()
-                .map(|queued| queued.len()),
-            Some(2)
-        );
-
-        release.store(true, Ordering::Release);
-        activate_until_terminal(&engine, &run.id).await;
-        assert_eq!(
-            messages.lock().unwrap().as_slice(),
-            &["use the compact layout", "then verify the narrow layout"]
-        );
-        let finished = engine.get_run(&run.id).await.unwrap();
-        assert_eq!(finished.record.status, coducktor_contract::RunStatus::Done);
-        assert!(finished.record.queued_messages.is_none());
-        let history = engine.run_history(&run.id, None).await.unwrap();
-        assert!(history.events.iter().any(|event| {
-            event.event_type == "user-message"
-                && event.extra.get("text").and_then(Value::as_str) == Some("use the compact layout")
-        }));
-        assert!(history.events.iter().any(|event| {
-            event.event_type == "user-message"
-                && event.extra.get("text").and_then(Value::as_str)
-                    == Some("then verify the narrow layout")
-        }));
-    }
-
-    #[tokio::test]
-    async fn cancel_interrupts_a_turn_while_the_manager_is_busy() {
-        let dir = TempDir::new().unwrap();
-        let tokens = Arc::new(Mutex::new(BTreeMap::new()));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: tokens.clone(),
-            },
-        );
-        let scope = Scope::Project("default".to_owned());
-        let CreateRunResponse::Single(run) =
-            legacy_start_run(&engine, &scope, steps_input("block until cancelled"))
-                .await
-                .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        legacy_activate_runs(&engine, &scope).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if tokens.lock().unwrap().contains_key(&run.id) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let read_started = Instant::now();
-        let current = <InProcessEngine as crate::Engine>::get_run(&engine, &scope, &run.id)
-            .await
-            .unwrap();
-        assert_eq!(current.record.id, run.id);
-        let listed = <InProcessEngine as crate::Engine>::list_runs(&engine, &scope)
-            .await
-            .unwrap();
-        assert!(listed.iter().any(|candidate| candidate.record.id == run.id));
-        assert!(read_started.elapsed() < std::time::Duration::from_millis(100));
-
-        let started = Instant::now();
-        let response = legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
-        assert!(response.cancelled);
-        assert!(started.elapsed() < std::time::Duration::from_millis(100));
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                let current = <InProcessEngine as crate::Engine>::get_run(&engine, &scope, &run.id)
-                    .await
-                    .unwrap();
-                if current.record.status == coducktor_contract::RunStatus::Cancelled {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-
-    /// A session that emits one event, then blocks until every session sharing its `barrier`
-    /// has reached the same point — satisfiable only if `barrier.wait()` is reached by all of
-    /// them concurrently, since none of them ever return before that happens.
-    struct RendezvousSession {
-        barrier: Arc<Barrier>,
-        reached: Arc<AtomicUsize>,
-        release: Arc<AtomicBool>,
-    }
-
-    impl AgentSession for RendezvousSession {
-        fn turn(
-            &mut self,
-            on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            on_event(EventInput::new("tool-call").field("name", "noop")).ok();
-            self.reached.fetch_add(1, Ordering::SeqCst);
-            self.barrier.wait();
-            while !self.release.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport::default(),
-            ))
-        }
-    }
-
-    struct RendezvousFactory {
-        barrier: Arc<Barrier>,
-        reached: Arc<AtomicUsize>,
-        release: Arc<AtomicBool>,
-    }
-
-    impl SessionFactory for RendezvousFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(RendezvousSession {
-                barrier: self.barrier.clone(),
-                reached: self.reached.clone(),
-                release: self.release.clone(),
-            }))
-        }
-    }
-
-    struct BlockingOpenRendezvousFactory {
-        opened: Arc<AtomicUsize>,
-        release: Arc<AtomicBool>,
-    }
-
-    impl SessionFactory for BlockingOpenRendezvousFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            self.opened.fetch_add(1, Ordering::SeqCst);
-            while !self.release.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Ok(Box::new(FakeSession))
-        }
-    }
-
-    /// Opening a provider session is potentially slow process I/O too. The two opens must reach
-    /// their shared gate before either completes; this catches accidentally restoring a mutex
-    /// around `SessionFactory::open`, which would serialize them before their turns begin.
-    #[tokio::test]
-    async fn two_same_project_session_opens_run_concurrently() {
-        let dir = TempDir::new().unwrap();
-        let opened = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(AtomicBool::new(false));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            BlockingOpenRendezvousFactory {
-                opened: opened.clone(),
-                release: release.clone(),
-            },
-        );
-        let CreateRunResponse::Single(first) =
-            engine.start_run(steps_input("first")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        let CreateRunResponse::Single(second) =
-            engine.start_run(steps_input("second")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        {
-            let mut manager = engine.manager.lock();
-            manager
-                .update_run_value(
-                    &first.id,
-                    json!({"worktreePath": dir.path().join("wt-first").to_string_lossy()}),
-                )
-                .unwrap();
-            manager
-                .update_run_value(
-                    &second.id,
-                    json!({"worktreePath": dir.path().join("wt-second").to_string_lossy()}),
-                )
-                .unwrap();
-        }
-        engine.activate_runs().unwrap();
-
-        let both_opened = tokio::time::timeout(Duration::from_secs(1), async {
-            while opened.load(Ordering::SeqCst) < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .is_ok();
-        release.store(true, Ordering::Release);
-        activate_until_terminal(&engine, &first.id).await;
-        activate_until_terminal(&engine, &second.id).await;
-        assert!(
-            both_opened,
-            "the second session open waited behind the first"
-        );
-    }
-
-    /// R1's central regression test: two runs admitted from the same project must actually
-    /// execute their provider turns concurrently, not merely be admitted concurrently. Before the
-    /// admit/apply split, `RunManager::pump` called `execute_job` synchronously in a loop, so the
-    /// second run's `AgentSession::turn` could not even start until the first one returned —
-    /// this two-party barrier is only satisfiable if both turns are genuinely in flight together.
-    #[tokio::test]
-    async fn two_blocked_sessions_in_the_same_project_reach_their_first_tool_event_together() {
-        let dir = TempDir::new().unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let reached = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(AtomicBool::new(false));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            RendezvousFactory {
-                barrier: barrier.clone(),
-                reached: reached.clone(),
-                release: release.clone(),
-            },
-        );
-        assert_eq!(engine.manager.lock().runtime_options().max_parallel, 2);
-
-        let CreateRunResponse::Single(first) =
-            engine.start_run(steps_input("first")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        let CreateRunResponse::Single(second) =
-            engine.start_run(steps_input("second")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        // Two in-place (non-worktree) runs against the same checkout are correctly serialized by
-        // the repository-root lease — that is a different, deliberate protection, not the R1
-        // defect under test here. Give each an independent worktree path so only the runtime
-        // parallelism limit (not the repository lease) gates their concurrency.
-        {
-            let mut manager = engine.manager.lock();
-            manager
-                .update_run_value(
-                    &first.id,
-                    json!({"worktreePath": dir.path().join("wt-first").to_string_lossy()}),
-                )
-                .unwrap();
-            manager
-                .update_run_value(
-                    &second.id,
-                    json!({"worktreePath": dir.path().join("wt-second").to_string_lossy()}),
-                )
-                .unwrap();
-        }
-        engine.activate_runs().unwrap();
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while reached.load(Ordering::SeqCst) < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("both sessions should reach their first tool event without waiting on each other");
-
-        release.store(true, Ordering::Release);
-        activate_until_terminal(&engine, &first.id).await;
-        activate_until_terminal(&engine, &second.id).await;
-        assert_eq!(
-            engine.get_run(&first.id).await.unwrap().record.status,
-            coducktor_contract::RunStatus::Done
-        );
-        assert_eq!(
-            engine.get_run(&second.id).await.unwrap().record.status,
-            coducktor_contract::RunStatus::Done
-        );
-    }
-
-    /// The mirror case: with effective parallelism of one, the second run must stay queued while
-    /// the first is in flight — proving the barrier test above is not passing merely because
-    /// admission no longer bounds concurrency at all.
-    #[tokio::test]
-    async fn a_single_slot_leaves_the_second_run_queued_behind_a_blocked_first() {
-        let dir = TempDir::new().unwrap();
-        let state = TempDir::new().unwrap();
-        let config_path = state.path().join("config.json");
-        std::fs::write(
-            &config_path,
-            json!({"resources": {"maxParallel": 1}}).to_string(),
-        )
-        .unwrap();
-        let tokens = Arc::new(Mutex::new(BTreeMap::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            dir.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: tokens.clone(),
-            },
-            config_path,
-        );
-        assert_eq!(engine.manager.lock().runtime_options().max_parallel, 1);
-
-        let CreateRunResponse::Single(first) =
-            engine.start_run(steps_input("first")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        let CreateRunResponse::Single(second) =
-            engine.start_run(steps_input("second")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        engine.activate_runs().unwrap();
-
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if tokens.lock().unwrap().contains_key(&first.id) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        // Give the second run every chance to have started too, if admission were not actually
-        // bounded — then assert it never did.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!tokens.lock().unwrap().contains_key(&second.id));
-        assert_eq!(
-            engine.get_run(&second.id).await.unwrap().record.status,
-            coducktor_contract::RunStatus::Queued
-        );
-
-        assert!(
-            tokens
-                .lock()
-                .unwrap()
-                .get(&first.id)
-                .is_some_and(CancellationToken::request)
-        );
-        activate_until_terminal(&engine, &first.id).await;
-    }
-
-    #[tokio::test]
-    async fn cancel_reaches_a_session_factory_blocked_during_open() {
-        let dir = TempDir::new().unwrap();
-        let opened = Arc::new(AtomicBool::new(false));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            BlockingOpenFactory {
-                opened: opened.clone(),
-            },
-        );
-        let scope = Scope::Project("default".to_owned());
-        let CreateRunResponse::Single(run) =
-            legacy_start_run(&engine, &scope, steps_input("block while opening"))
-                .await
-                .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        legacy_activate_runs(&engine, &scope).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !opened.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let started = Instant::now();
-        let response = legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
-        assert!(response.cancelled);
-        assert!(started.elapsed() < Duration::from_millis(100));
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let current = <InProcessEngine as crate::Engine>::get_run(&engine, &scope, &run.id)
-                    .await
-                    .unwrap();
-                if current.record.status == coducktor_contract::RunStatus::Cancelled {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn global_index_reads_the_snapshot_while_a_project_manager_is_busy() {
-        let repo = TempDir::new().unwrap();
-        let workspace = TempDir::new().unwrap();
-        let config_path = workspace.path().join("config.json");
-        std::fs::write(
-            &config_path,
-            json!({
-                "projects": [{ "id": "project-a", "root": repo.path(), "name": "A" }]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let tokens = Arc::new(Mutex::new(BTreeMap::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: tokens.clone(),
-            },
-            config_path,
-        );
-        let scope = Scope::Project("project-a".to_owned());
-        let CreateRunResponse::Single(run) =
-            legacy_start_run(&engine, &scope, steps_input("block while indexing"))
-                .await
-                .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        legacy_activate_runs(&engine, &scope).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if tokens.lock().unwrap().contains_key(&run.id) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let started = Instant::now();
-        let index = engine.runs_index().await.unwrap();
-        assert!(started.elapsed() < Duration::from_millis(100));
-        assert!(index.runs.iter().any(|entry| entry.id == run.id));
-
-        legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
-    }
-
-    /// R3's required refresh-at-scale case: a 300-run project (past the per-project index
-    /// truncation limit) plus several other registered projects, one of them blocked on a live
-    /// provider turn, must still refresh promptly — `runs_index` only ever reads
-    /// `run_snapshot`/registration, never a manager a blocked turn is holding.
-    #[tokio::test]
-    async fn a_three_hundred_run_project_refreshes_without_waiting_on_a_blocked_sibling() {
-        let large_repo = TempDir::new().unwrap();
-        let blocked_repo = TempDir::new().unwrap();
-        let sibling_b = TempDir::new().unwrap();
-        let sibling_c = TempDir::new().unwrap();
-        let workspace = TempDir::new().unwrap();
-        let config_path = workspace.path().join("config.json");
-        std::fs::write(
-            &config_path,
-            json!({
-                "projects": [
-                    {"id": "large", "root": large_repo.path(), "name": "Large"},
-                    {"id": "blocked", "root": blocked_repo.path(), "name": "Blocked"},
-                    {"id": "sibling-b", "root": sibling_b.path(), "name": "B"},
-                    {"id": "sibling-c", "root": sibling_c.path(), "name": "C"},
-                ]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let tokens = Arc::new(Mutex::new(BTreeMap::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            large_repo.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: tokens.clone(),
-            },
-            config_path,
-        );
-
-        let large_scope = Scope::Project("large".to_owned());
-        for index in 0..300 {
-            legacy_start_run(&engine, &large_scope, steps_input(&format!("run {index}")))
-                .await
-                .unwrap();
-        }
-
-        let blocked_scope = Scope::Project("blocked".to_owned());
-        let CreateRunResponse::Single(run) = legacy_start_run(
-            &engine,
-            &blocked_scope,
-            steps_input("block while the large project refreshes"),
-        )
-        .await
-        .unwrap() else {
-            panic!("expected one run");
-        };
-        legacy_activate_runs(&engine, &blocked_scope).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if tokens.lock().unwrap().contains_key(&run.id) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        let started = Instant::now();
-        let index = engine.runs_index().await.unwrap();
-        assert!(
-            started.elapsed() < Duration::from_millis(200),
-            "runs_index should not wait on the blocked sibling project's worker"
-        );
-        let large_count = index
-            .runs
-            .iter()
-            .filter(|entry| entry.project_id == "large")
-            .count();
-        assert_eq!(
-            large_count, 200,
-            "per-project truncation caps a 300-run project's entries at the limit"
-        );
-        assert!(index.truncated.iter().any(|id| id == "large"));
-
-        legacy_cancel_run(&engine, &blocked_scope, &run.id)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn completed_activation_workers_are_reaped_from_the_registry() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine
-            .enqueue_run(steps_input("complete on the worker"))
-            .await
-            .unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        // `activate_runs`'s own per-project thread only does admission — it finishes as soon as
-        // the turn is handed to its own worker, well before the turn itself (and the durable
-        // status this waits for) completes.
-        activate_until_terminal(&engine, &run.id).await;
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let finished = engine
-                    .activation_workers
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .all(std::thread::JoinHandle::is_finished);
-                if finished {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        engine.reap_finished_activation_workers().unwrap();
-        assert!(engine.activation_workers.lock().unwrap().is_empty());
-        assert!(engine.cancellations.lock().unwrap().is_empty());
-    }
-
-    /// R1/R9: `TurnDispatch` gives every admitted turn its own worker thread, so nothing else
-    /// reaps it. `TurnDispatch::dispatch` sweeps finished handles before spawning new ones, so a
-    /// later `activate_runs` call (with nothing new to admit) is enough to bring the registry back
-    /// to empty — proved here across several cycles, including one a worker only finishes because
-    /// it observed cancellation rather than completing normally (a worker that does not observe
-    /// cancellation, i.e. that ignores it entirely, has no bounded exit at all yet; that gap is
-    /// tracked in the plan as still-open R9 shutdown-escalation work, not covered by this test).
-    #[tokio::test]
-    async fn repeated_start_finish_and_cancel_cycles_return_turn_worker_counts_to_baseline() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        for iteration in 0..3 {
-            let CreateRunResponse::Single(run) = engine
-                .start_run(steps_input(&format!("cycle {iteration}")))
-                .await
-                .unwrap()
-            else {
-                panic!("expected one run");
-            };
-            activate_until_terminal(&engine, &run.id).await;
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !engine
-                    .turn_workers
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .all(std::thread::JoinHandle::is_finished)
-                {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap_or_else(|_| panic!("iteration {iteration}: turn worker did not finish"));
-            // Nothing new to admit, so this call's only effect is `TurnDispatch`'s reap sweep.
-            engine.activate_runs().unwrap();
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !engine.turn_workers.lock().unwrap().is_empty() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap_or_else(|_| panic!("iteration {iteration}: finished turn worker not reaped"));
-            assert!(
-                engine.cancellations.lock().unwrap().is_empty(),
-                "iteration {iteration}: cancellation token not pruned"
-            );
-        }
-
-        let tokens = Arc::new(Mutex::new(BTreeMap::new()));
-        let cancel_engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            BlockingFactory {
-                tokens: tokens.clone(),
-            },
-        );
-        for iteration in 0..2 {
-            let CreateRunResponse::Single(run) = cancel_engine
-                .start_run(steps_input(&format!("blocked {iteration}")))
-                .await
-                .unwrap()
-            else {
-                panic!("expected one run");
-            };
-            cancel_engine.activate_runs().unwrap();
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !tokens.lock().unwrap().contains_key(&run.id) {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            cancel_engine.cancel_run(&run.id).await.unwrap();
-            activate_until_terminal(&cancel_engine, &run.id).await;
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !cancel_engine
-                    .turn_workers
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .all(std::thread::JoinHandle::is_finished)
-                {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap_or_else(|_| panic!("cancel iteration {iteration}: turn worker did not finish"));
-            cancel_engine.activate_runs().unwrap();
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !cancel_engine.turn_workers.lock().unwrap().is_empty() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap_or_else(|_| {
-                panic!("cancel iteration {iteration}: finished turn worker not reaped")
-            });
-            assert!(
-                cancel_engine.cancellations.lock().unwrap().is_empty(),
-                "cancel iteration {iteration}: cancellation token not pruned"
-            );
-        }
-    }
-
-    struct IgnoresCancellationSession;
-
-    impl AgentSession for IgnoresCancellationSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            // Deliberately never reads its own cancellation token — models a worker whose
-            // session backend ignores the graceful signal entirely, unlike `BlockingSession`
-            // above (which polls it every 5ms).
-            std::thread::sleep(Duration::from_millis(400));
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport::default(),
-            ))
-        }
-    }
-
-    struct IgnoresCancellationFactory;
-
-    impl SessionFactory for IgnoresCancellationFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(IgnoresCancellationSession))
-        }
-    }
-
-    #[tokio::test]
-    async fn shutdown_does_not_wait_forever_for_a_worker_that_ignores_cancellation() {
-        let dir = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            IgnoresCancellationFactory,
-        );
-        let CreateRunResponse::Single(run) = engine
-            .start_run(steps_input("ignores cancellation"))
-            .await
-            .unwrap()
-        else {
-            panic!("expected one run");
-        };
-        engine.activate_runs().unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while engine.turn_workers.lock().unwrap().is_empty() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("worker for {} never started", run.id));
-
-        let started = Instant::now();
-        engine.shutdown(Duration::from_millis(50));
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed < Duration::from_millis(300),
-            "shutdown waited {elapsed:?} for a worker that never checks its cancellation token"
-        );
     }
 
     #[tokio::test]
@@ -7378,35 +4590,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_run_started_with_inline_steps_completes_via_the_fake_session() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        assert_eq!(run.status, coducktor_contract::RunStatus::Queued);
-        activate_until_terminal(&engine, &run.id).await;
-
-        let listed = engine.list_runs().await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].record.id, run.id);
-
-        let fetched = engine.get_run(&run.id).await.unwrap();
-        assert_eq!(fetched.record.id, run.id);
-    }
-
-    #[tokio::test]
-    async fn start_run_rejects_empty_steps() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let mut input = steps_input("x");
-        input.steps = Some(vec![]);
-        let error = engine.start_run(input).await.unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
     async fn get_run_reports_not_found_for_an_unknown_id() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
@@ -7417,47 +4600,31 @@ mod tests {
     async fn archive_delete_read_unread_round_trip() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("archive me")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        activate_until_terminal(&engine, &run.id).await;
-
-        let archived = engine.archive_run(&run.id, true).await.unwrap();
+        let run_id = seed_finished_legacy_run(&engine, "archive me");
+        let archived = engine.archive_run(&run_id, true).await.unwrap();
         assert!(archived.record.archived);
-        let unarchived = engine.archive_run(&run.id, false).await.unwrap();
+        let unarchived = engine.archive_run(&run_id, false).await.unwrap();
         assert!(!unarchived.record.archived);
 
-        let read = engine.read_run(&run.id).await.unwrap();
+        let read = engine.read_run(&run_id).await.unwrap();
         assert!(read.record.seen_at.is_some());
-        let unread = engine.unread_run(&run.id).await.unwrap();
+        let unread = engine.unread_run(&run_id).await.unwrap();
         assert!(unread.record.seen_at.is_none());
 
-        let deleted = engine.delete_run(&run.id).await.unwrap();
+        let deleted = engine.delete_run(&run_id).await.unwrap();
         assert!(deleted.deleted);
-        assert_eq!(engine.get_run(&run.id).await, Err(EngineError::NotFound));
+        assert_eq!(engine.get_run(&run_id).await, Err(EngineError::NotFound));
     }
 
     #[tokio::test]
     async fn archive_finished_and_mark_all_read_report_counts() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(one) = engine.start_run(steps_input("one")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        let CreateRunResponse::Single(two) = engine.start_run(steps_input("two")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        activate_until_terminal(&engine, &one.id).await;
-        activate_until_terminal(&engine, &two.id).await;
-        // A run completed via the fake session is already "seen" by the time `start_run`
-        // returns (there was no live cockpit watching it) — mark both explicitly unread first
-        // so `mark_all_read` has something real to count.
-        engine.unread_run(&one.id).await.unwrap();
-        engine.unread_run(&two.id).await.unwrap();
+        let one_id = seed_finished_legacy_run(&engine, "one");
+        let two_id = seed_finished_legacy_run(&engine, "two");
+        // Mark both explicitly unread first so `mark_all_read` has something real to count.
+        engine.unread_run(&one_id).await.unwrap();
+        engine.unread_run(&two_id).await.unwrap();
 
         // `mark_all_read` before `archive_finished`: `is_unread` excludes archived runs, so
         // order matters here the same way it would through any other caller.
@@ -7471,15 +4638,10 @@ mod tests {
     async fn patch_run_renames_a_queued_run_but_not_a_started_one() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("rename me")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        // Admission is durable but execution starts only at the explicit activation boundary.
+        let run_id = seed_legacy_run(&engine, "rename me");
         let patched = engine
             .patch_run(
-                &run.id,
+                &run_id,
                 PatchRunInput {
                     title: Some("new title".to_owned()),
                     task: None,
@@ -7489,11 +4651,20 @@ mod tests {
             .unwrap();
         assert_eq!(patched.record.title, "new title");
 
-        activate_until_terminal(&engine, &run.id).await;
+        // A settled historical record refuses a task rewrite.
+        engine
+            .manager
+            .lock()
+            .update_run(
+                &run_id,
+                coducktor_core::legacy_runs::RunPatch::new()
+                    .set("status", coducktor_contract::RunStatus::Done),
+            )
+            .unwrap();
 
         let error = engine
             .patch_run(
-                &run.id,
+                &run_id,
                 PatchRunInput {
                     title: None,
                     task: Some("swap the task".to_owned()),
@@ -7502,14 +4673,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
-    async fn cancel_and_finish_report_not_found_for_an_unknown_run() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        assert_eq!(engine.cancel_run("nope").await, Err(EngineError::NotFound));
-        assert_eq!(engine.finish_run("nope").await, Err(EngineError::NotFound));
     }
 
     #[tokio::test]
@@ -7575,36 +4738,12 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let cwds = Arc::new(Mutex::new(Vec::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            project_a.path(),
-            "0.0.0-test",
-            RecordingFactory { cwds: cwds.clone() },
-            &config_path,
-        );
+        let engine = InProcessEngine::at(project_a.path(), "0.0.0-test", &config_path);
         let scope_a = Scope::Project("project-a".to_owned());
         let scope_b = Scope::Project("project-b".to_owned());
 
         let mut workspace_events = engine.subscribe(Topic::Named("workspace".to_owned()));
-        let CreateRunResponse::Single(run_b) =
-            legacy_start_run(&engine, &scope_b, steps_input("only in B"))
-                .await
-                .unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        legacy_activate_runs(&engine, &scope_b).await.unwrap();
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                if !cwds.lock().unwrap().is_empty() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        let run_b_id = seed_legacy_run(&engine.scoped(&scope_b).unwrap(), "only in B");
 
         assert_eq!(
             <InProcessEngine as crate::Engine>::list_runs(&engine, &scope_a)
@@ -7619,10 +4758,6 @@ mod tests {
                 .unwrap()
                 .len(),
             1
-        );
-        assert_eq!(
-            cwds.lock().unwrap().as_slice(),
-            &[project_b.path().to_path_buf()]
         );
 
         let event =
@@ -7640,7 +4775,7 @@ mod tests {
             index
                 .runs
                 .iter()
-                .filter(|run| run.project_id == "project-b" && run.id == run_b.id)
+                .filter(|run| run.project_id == "project-b" && run.id == run_b_id)
                 .count(),
             1
         );
@@ -7665,7 +4800,7 @@ mod tests {
             Err(EngineError::NotFound)
         );
 
-        <InProcessEngine as crate::Engine>::delete_run(&engine, &scope_b, &run_b.id)
+        <InProcessEngine as crate::Engine>::delete_run(&engine, &scope_b, &run_b_id)
             .await
             .unwrap();
         assert!(
@@ -7682,164 +4817,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn explicit_profile_reaches_the_task_process_environment() {
-        let repo = TempDir::new().unwrap();
-        let state = TempDir::new().unwrap();
-        let profile = state.path().join("claude-work");
-        std::fs::create_dir(&profile).unwrap();
-        std::fs::write(
-            state.path().join("agent-accounts.json"),
-            json!({
-                "accounts": [{
-                    "id": "work",
-                    "provider": "claude",
-                    "configDir": profile,
-                    "label": "Work",
-                    "addedAt": "2026-08-18T00:00:00.000Z"
-                }]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let envs = Arc::new(Mutex::new(Vec::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            ProfileRecordingFactory { envs: envs.clone() },
-            state.path().join("config.json"),
-        );
-        let scope = Scope::Project("default".to_owned());
-        let mut input = steps_input("use the work login");
-        input.agent_profile = Some("work".to_owned());
-        legacy_start_run(&engine, &scope, input).await.unwrap();
-        legacy_activate_runs(&engine, &scope).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if !envs.lock().unwrap().is_empty() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            envs.lock().unwrap()[0]
-                .get("CLAUDE_CONFIG_DIR")
-                .map(String::as_str),
-            Some(profile.to_string_lossy().as_ref())
-        );
-    }
-
-    #[test]
-    fn production_manager_consumes_workspace_runtime_limits() {
-        let repo = TempDir::new().unwrap();
-        let state = TempDir::new().unwrap();
-        let config_path = state.path().join("config.json");
-        std::fs::write(
-            &config_path,
-            json!({
-                "resources": {
-                    "maxParallel": 1,
-                    "maxMonitoringSessions": 1,
-                    "monitoringWakeIntervalMinutes": 5,
-                    "autoResumeOnUsageLimit": false,
-                    "intelligentContextRefresh": true
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            FakeFactory,
-            config_path,
-        );
-        let manager = engine.manager.lock();
-        assert_eq!(manager.runtime_options().max_parallel, 1);
-        assert_eq!(manager.runtime_options().max_monitoring_sessions, 1);
-        assert_eq!(
-            manager.runtime_options().monitoring_wake_interval_minutes,
-            Some(5)
-        );
-        assert!(!manager.runtime_options().auto_resume_on_usage_limit);
-    }
-
     #[test]
     fn workspace_composer_defaults_to_isolated_worktrees() {
-        let response = workspace_config_response(&WorkspaceConfig::default_for(&ProcessEnv));
+        let response = workspace_config_response(
+            &coducktor_core::workspace::config::WorkspaceConfig::default_for(&ProcessEnv),
+        );
         assert_eq!(response.composer_defaults.worktree, None);
         assert!(response.composer_defaults.inherited_worktree);
-    }
-
-    #[tokio::test]
-    async fn workspace_resource_updates_reconfigure_only_retained_admission_limits() {
-        let repo = TempDir::new().unwrap();
-        let state = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            FakeFactory,
-            state.path().join("config.json"),
-        );
-
-        engine
-            .put_workspace_config(&SetWorkspaceConfigInput {
-                resources: Some(coducktor_contract::WorkspaceResourcesPatch {
-                    max_parallel: Some(1),
-                    max_monitoring_sessions: Some(1),
-                    monitoring_wake_interval_minutes: Some(Some(5)),
-                    auto_resume_on_usage_limit: Some(false),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-
-        let manager = engine.manager.lock();
-        assert_eq!(manager.runtime_options().max_parallel, 1);
-        assert_eq!(manager.runtime_options().max_monitoring_sessions, 2);
-        assert_eq!(
-            manager.runtime_options().monitoring_wake_interval_minutes,
-            Some(5)
-        );
-        assert!(manager.runtime_options().auto_resume_on_usage_limit);
-    }
-
-    #[test]
-    fn effective_runtime_options_apply_project_workspace_and_env_precedence() {
-        let mut workspace = WorkspaceConfig::default_for(&ProcessEnv);
-        workspace.resources.max_parallel = 3;
-        workspace.resources.max_monitoring_sessions = 1;
-        workspace.resources.monitoring_wake_interval_minutes = Some(5);
-        workspace.resources.auto_resume_on_usage_limit = false;
-        workspace
-            .projects
-            .push(coducktor_core::workspace::config::WorkspaceProject {
-                id: "alpha".to_owned(),
-                root: "/tmp/alpha".to_owned(),
-                name: "Alpha".to_owned(),
-                added_at: String::new(),
-                last_opened_at: String::new(),
-                source: coducktor_core::workspace::config::ProjectSource::Local,
-                max_parallel: Some(2),
-                tags: None,
-                extra: Map::new(),
-            });
-        let repo = RepoConfig {
-            max_parallel: 8,
-            ..RepoConfig::default()
-        };
-
-        let options = effective_runtime_options(&workspace, &repo, "alpha");
-
-        assert_eq!(options.max_parallel, 2);
-        assert_eq!(options.max_monitoring_sessions, 1);
-        assert_eq!(options.monitoring_wake_interval_minutes, Some(5));
-        assert!(!options.auto_resume_on_usage_limit);
     }
 
     #[tokio::test]
@@ -7932,19 +4916,10 @@ mod tests {
     async fn lag_is_explicit_topic_local_and_the_durable_log_remains_complete() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let run = engine
-            .manager
-            .lock()
-            .create_run(coducktor_core::workflows::run::CreateRunInput {
-                title: "Flooded thread".to_owned(),
-                workflow: "manual".to_owned(),
-                task: "stream many events".to_owned(),
-                ..coducktor_core::workflows::run::CreateRunInput::default()
-            })
-            .unwrap();
+        let run_id = seed_legacy_run(&engine, "stream many events");
         let mut run_stream = engine.subscribe(Topic::Run {
             project: "default".to_owned(),
-            id: run.id.clone(),
+            id: run_id.clone(),
         });
         let mut workspace_stream = engine.subscribe(Topic::Named("workspace".to_owned()));
         let flood_count = LIVE_TOPIC_CAPACITY + 64;
@@ -7953,12 +4928,12 @@ mod tests {
             for index in 0..flood_count {
                 manager
                     .append_event(
-                        &run.id,
+                        &run_id,
                         EventInput::new("note").field("message", format!("event {index}")),
                     )
                     .unwrap();
             }
-            assert_eq!(manager.read_events(&run.id).len(), flood_count);
+            assert_eq!(manager.read_events(&run_id).len(), flood_count);
         }
 
         let event = run_stream.next().await.unwrap();
@@ -8832,68 +5807,6 @@ mod tests {
         ]);
         dir
     }
-
-    #[tokio::test]
-    async fn cancelling_a_blocked_automatic_commit_prompt_settles_the_run_as_cancelled() {
-        let repo = fixture_repo();
-        let state = TempDir::new().unwrap();
-        let entered_commit_prompt = Arc::new(AtomicBool::new(false));
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            GitAutoBlockingFactory {
-                entered_commit_prompt: entered_commit_prompt.clone(),
-            },
-            state.path().join("config.json"),
-        );
-        let mut input = steps_input("make a change and commit it automatically");
-        input.git_auto = Some(true);
-        let CreateRunResponse::Single(run) = engine.start_run(input).await.unwrap() else {
-            panic!("expected one run");
-        };
-        engine.activate_runs().unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !entered_commit_prompt.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        assert!(engine.cancel_run(&run.id).await.unwrap().cancelled);
-        activate_until_terminal(&engine, &run.id).await;
-        assert_eq!(
-            engine.get_run(&run.id).await.unwrap().record.status,
-            coducktor_contract::RunStatus::Cancelled
-        );
-    }
-
-    #[tokio::test]
-    async fn a_clean_worktree_commit_is_not_an_automatic_commit_candidate() {
-        let repo = fixture_repo();
-        let state = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            FakeFactory,
-            state.path().join("config.json"),
-        );
-        let mut input = steps_input("inspect a committed worktree");
-        input.worktree = None;
-        let CreateRunResponse::Single(run) = engine.start_run(input).await.unwrap() else {
-            panic!("expected one run");
-        };
-        let worktree = Path::new(run.worktree_path.as_deref().unwrap());
-        std::fs::write(worktree.join("committed.txt"), "committed\n").unwrap();
-        commit_all_git(worktree, "agent committed this already");
-
-        let mut inspector = ProductionDiffInspector {
-            repo_root: repo.path().to_path_buf(),
-        };
-        assert!(inspector.has_diff(&run));
-        assert!(!inspector.has_uncommitted_diff(&run));
-    }
-
     fn commit_all_git(root: &Path, message: &str) {
         assert!(
             Command::new("git")
@@ -8942,86 +5855,6 @@ mod tests {
             result.unwrap().trim(),
             "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
         );
-    }
-
-    #[tokio::test]
-    async fn admitted_worktree_is_persisted_and_used_as_the_runner_cwd() {
-        let repo = fixture_repo();
-        let state = TempDir::new().unwrap();
-        let config_path = state.path().join("config.json");
-        let cwds = Arc::new(Mutex::new(Vec::new()));
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            RecordingFactory { cwds: cwds.clone() },
-            config_path,
-        );
-        let scope = Scope::Project("default".to_owned());
-        let mut input = steps_input("write only in the isolated checkout");
-        input.worktree = None;
-        let CreateRunResponse::Single(accepted) =
-            legacy_start_run(&engine, &scope, input).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        let worktree = accepted
-            .worktree_path
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap();
-        assert!(worktree.is_dir());
-        assert_ne!(worktree, repo.path());
-        let expected_branch = format!("duck/{}", &accepted.id[..8]);
-        assert_eq!(accepted.branch.as_deref(), Some(expected_branch.as_str()));
-
-        legacy_activate_runs(&engine, &scope).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if !cwds.lock().unwrap().is_empty() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(cwds.lock().unwrap().as_slice(), &[worktree]);
-    }
-
-    #[tokio::test]
-    async fn completed_isolated_run_autosaves_at_run_finalize_without_touching_repo_root() {
-        let repo = fixture_repo();
-        let state = TempDir::new().unwrap();
-        let engine = InProcessEngine::with_session_factory_at(
-            repo.path(),
-            "0.0.0-test",
-            WritingFactory,
-            state.path().join("config.json"),
-        );
-        let mut input = steps_input("save the isolated agent change");
-        input.worktree = None;
-        let CreateRunResponse::Single(run) = engine.start_run(input).await.unwrap() else {
-            panic!("expected one run");
-        };
-        let worktree = PathBuf::from(run.worktree_path.as_deref().unwrap());
-
-        activate_until_terminal(&engine, &run.id).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let subject =
-                    git_capture(&worktree, &["log", "-1", "--format=%s"]).unwrap_or_default();
-                if subject.trim() == "coducktor autosave (run finalize)" {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-
-        assert!(worktree.join("agent.txt").is_file());
-        assert!(!repo.path().join("agent.txt").exists());
-        assert!(git_capture(repo.path(), &["diff", "--quiet"]).is_ok());
     }
 
     #[tokio::test]
@@ -9128,12 +5961,8 @@ mod tests {
     async fn run_files_lists_the_repo_root_when_the_run_has_no_worktree() {
         let dir = fixture_repo();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("look around")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        let files = engine.run_files(&run.id, None).await.unwrap();
+        let run_id = seed_legacy_run(&engine, "look around");
+        let files = engine.run_files(&run_id, None).await.unwrap();
         match files {
             WorktreeEntry::Dir { entries, .. } => {
                 assert!(entries.iter().any(|entry| entry.name == "base.txt"));
@@ -9146,14 +5975,10 @@ mod tests {
     async fn run_changes_lists_a_modification_relative_to_the_runs_base_branch() {
         let dir = fixture_repo();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("look around")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "look around");
         commit_all_git(dir.path(), "second"); // moves HEAD past the run's implicit base
         std::fs::write(dir.path().join("base.txt"), "changed again\n").unwrap();
-        let changes = engine.run_changes(&run.id).await.unwrap();
+        let changes = engine.run_changes(&run_id).await.unwrap();
         assert!(changes.files.iter().any(|file| file.path == "base.txt"));
     }
 
@@ -9182,12 +6007,8 @@ mod tests {
     async fn run_file_raw_rejects_a_non_image_file() {
         let dir = fixture_repo();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("look around")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        let error = engine.run_file_raw(&run.id, "base.txt").await.unwrap_err();
+        let run_id = seed_legacy_run(&engine, "look around");
+        let error = engine.run_file_raw(&run_id, "base.txt").await.unwrap_err();
         assert!(matches!(error, EngineError::Conflict { .. }));
     }
 
@@ -9389,11 +6210,7 @@ mod tests {
     async fn worktrees_reports_empty_when_no_run_has_a_worktree() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(_run) =
-            engine.start_run(steps_input("no worktree")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
+        let _run_id = seed_legacy_run(&engine, "no worktree");
         let worktrees = engine.worktrees().await.unwrap();
         assert!(worktrees.worktrees.is_empty());
         assert_eq!(worktrees.total_bytes, Some(0));
@@ -9419,13 +6236,8 @@ mod tests {
     async fn remove_run_worktree_succeeds_trivially_for_a_finished_run_with_no_worktree() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("no worktree")).await.unwrap()
-        else {
-            panic!("expected a single run");
-        };
-        activate_until_terminal(&engine, &run.id).await;
-        let response = engine.remove_run_worktree(&run.id).await.unwrap();
+        let run_id = seed_finished_legacy_run(&engine, "no worktree");
+        let response = engine.remove_run_worktree(&run_id).await.unwrap();
         assert!(response.removed);
     }
 
@@ -9616,13 +6428,13 @@ mod tests {
         let mut ids = Vec::new();
         for (variant, title) in [("A", "first"), ("B", "second")] {
             let run = manager
-                .create_run(coducktor_core::workflows::run::CreateRunInput {
+                .create_run(coducktor_core::legacy_runs::CreateRunInput {
                     title: title.to_owned(),
                     workflow: "manual".to_owned(),
                     task: title.to_owned(),
                     group_id: Some(group_id.to_owned()),
                     variant: Some(variant.to_owned()),
-                    ..coducktor_core::workflows::run::CreateRunInput::default()
+                    ..coducktor_core::legacy_runs::CreateRunInput::default()
                 })
                 .expect("seed variant");
             ids.push(run.id);
@@ -10170,34 +6982,6 @@ mod tests {
     // -- pure helpers --
 
     #[test]
-    fn valid_queued_text_enforces_the_100k_character_cap() {
-        assert!(valid_queued_text("hello"));
-        assert!(!valid_queued_text(&"x".repeat(100_001)));
-    }
-
-    #[test]
-    fn folded_task_length_joins_task_and_queued_text_ignoring_blanks() {
-        let messages = vec![
-            coducktor_contract::QueuedMessage {
-                id: "1".to_owned(),
-                text: "  ".to_owned(),
-                images: None,
-                created_at: "now".to_owned(),
-            },
-            coducktor_contract::QueuedMessage {
-                id: "2".to_owned(),
-                text: "second".to_owned(),
-                images: None,
-                created_at: "now".to_owned(),
-            },
-        ];
-        assert_eq!(
-            folded_task_length("first", &messages),
-            "first\n\nsecond".len()
-        );
-    }
-
-    #[test]
     fn prompt_preview_collapses_whitespace_and_truncates_on_character_boundaries() {
         assert_eq!(
             prompt_preview("  ship\n\tthis  "),
@@ -10256,25 +7040,6 @@ mod tests {
         assert_eq!(linux_program, "alacritty");
         assert_eq!(&linux_args[3..], ["codex", "resume", "session-123"]);
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn production_check_executor_uses_the_run_cwd_and_preserves_exit_status() {
-        let directory = TempDir::new().unwrap();
-        let mut executor = ProductionCheckExecutor;
-        let result = executor
-            .run("pwd; printf 'check failed' >&2; exit 7", directory.path())
-            .unwrap();
-        assert!(!result.success);
-        assert_eq!(result.exit_code, 7);
-        assert!(
-            result
-                .output
-                .contains(directory.path().to_string_lossy().as_ref())
-        );
-        assert!(result.output.contains("check failed"));
-    }
-
     #[test]
     fn cursor_round_trips_through_encode_and_decode() {
         let cursor = PageCursor {
@@ -10311,125 +7076,6 @@ mod tests {
     // restraint elsewhere in this file: exercise what returns before deep RunManager session
     // state is needed — RunManager's own continue/session semantics are coducktor-core's own
     // test responsibility, this suite only proves the wiring) --
-
-    #[tokio::test]
-    async fn send_message_rejects_blank_text() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let error = engine
-            .send_message(
-                &run.id,
-                MessageInput {
-                    text: Some("   ".to_owned()),
-                    images: None,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "message needs text or at least one image".to_owned()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn send_message_reports_not_found_for_an_unknown_run() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine
-            .send_message(
-                "no-such-run",
-                MessageInput {
-                    text: Some("hi".to_owned()),
-                    images: None,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn continue_run_reports_not_found_for_an_unknown_run() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine
-            .continue_run("no-such-run", ContinueInput::default())
-            .await
-            .unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn edit_queued_message_reports_not_found_when_the_run_has_no_queue() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let error = engine
-            .edit_queued_message(
-                &run.id,
-                "msg-1",
-                QueuedMessagePatchInput {
-                    text: Some("edited".to_owned()),
-                    images: None,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn edit_queued_message_rejects_an_empty_patch() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let error = engine
-            .edit_queued_message(
-                &run.id,
-                "msg-1",
-                QueuedMessagePatchInput {
-                    text: None,
-                    images: None,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "message edit needs text or images".to_owned()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn remove_queued_message_reports_not_found_when_the_run_has_no_queue() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let error = engine
-            .remove_queued_message(&run.id, "msg-1")
-            .await
-            .unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
     #[tokio::test]
     async fn cancel_auto_resume_reports_not_found_for_an_unknown_run() {
         let dir = TempDir::new().unwrap();
@@ -10442,11 +7088,8 @@ mod tests {
     async fn cancel_auto_resume_reports_cancelled_for_a_real_run() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let response = engine.cancel_auto_resume(&run.id).await.unwrap();
+        let run_id = seed_legacy_run(&engine, "do the thing");
+        let response = engine.cancel_auto_resume(&run_id).await.unwrap();
         assert!(response.cancelled);
     }
 
@@ -10454,13 +7097,10 @@ mod tests {
     async fn git_commit_reports_no_worktree_for_a_worktree_less_run() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "do the thing");
         let error = engine
             .git_commit(
-                &run.id,
+                &run_id,
                 GitCommitInput {
                     message: "a commit".to_owned(),
                 },
@@ -10479,11 +7119,8 @@ mod tests {
     async fn git_push_reports_no_worktree_for_a_worktree_less_run() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        let error = engine.git_push(&run.id).await.unwrap_err();
+        let run_id = seed_legacy_run(&engine, "do the thing");
+        let error = engine.git_push(&run_id).await.unwrap_err();
         assert_eq!(
             error,
             EngineError::Conflict {
@@ -10496,10 +7133,7 @@ mod tests {
     async fn run_commits_reports_no_worktree_for_a_worktree_less_run() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "do the thing");
         // `create_run` persists `worktree: Some(false)` when worktree creation was skipped in
         // this environment (the temp dir is not a real git repo) — `working_directory_of` reads
         // that as "ran directly in the repo working tree" and legitimately resolves to
@@ -10510,10 +7144,10 @@ mod tests {
         {
             let mut manager = engine.manager.lock();
             manager
-                .update_run_value(&run.id, json!({ "worktree": null }))
+                .update_run_value(&run_id, json!({ "worktree": null }))
                 .unwrap();
         }
-        let error = engine.run_commits(&run.id).await.unwrap_err();
+        let error = engine.run_commits(&run_id).await.unwrap_err();
         assert_eq!(
             error,
             EngineError::Conflict {
@@ -10526,12 +7160,8 @@ mod tests {
     async fn create_pr_reports_no_worktree_for_a_worktree_less_run() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        activate_until_terminal(&engine, &run.id).await;
-        let error = engine.create_pr(&run.id).await.unwrap_err();
+        let run_id = seed_finished_legacy_run(&engine, "do the thing");
+        let error = engine.create_pr(&run_id).await.unwrap_err();
         assert_eq!(
             error,
             EngineError::Conflict {
@@ -10553,12 +7183,16 @@ mod tests {
     async fn run_history_reads_a_real_runs_events() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
-        activate_until_terminal(&engine, &run.id).await;
-        let page = engine.run_history(&run.id, None).await.unwrap();
+        let run_id = seed_finished_legacy_run(&engine, "do the thing");
+        engine
+            .manager
+            .lock()
+            .append_event(
+                &run_id,
+                EventInput::new("assistant-message").field("text", "done"),
+            )
+            .unwrap();
+        let page = engine.run_history(&run_id, None).await.unwrap();
         assert!(!page.events.is_empty());
     }
 
@@ -10566,12 +7200,9 @@ mod tests {
     async fn run_history_rejects_a_garbage_cursor() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "do the thing");
         let error = engine
-            .run_history(&run.id, Some("not a cursor"))
+            .run_history(&run_id, Some("not a cursor"))
             .await
             .unwrap_err();
         assert_eq!(
@@ -10594,13 +7225,10 @@ mod tests {
     async fn open_in_rejects_an_empty_target() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "do the thing");
         let error = engine
             .open_in(
-                &run.id,
+                &run_id,
                 OpenInInput {
                     target: "  ".to_owned(),
                     path: None,
@@ -10620,13 +7248,10 @@ mod tests {
     async fn open_in_rejects_a_native_harness_target() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let response = engine.start_run(steps_input("do the thing")).await.unwrap();
-        let CreateRunResponse::Single(run) = response else {
-            panic!("expected a single run");
-        };
+        let run_id = seed_legacy_run(&engine, "do the thing");
         let error = engine
             .open_in(
-                &run.id,
+                &run_id,
                 OpenInInput {
                     target: "cli:claude".to_owned(),
                     path: None,
@@ -10641,26 +7266,4 @@ mod tests {
             }
         );
     }
-}
-#[cfg(test)]
-async fn legacy_start_run(
-    engine: &InProcessEngine,
-    scope: &Scope,
-    input: CreateRunInput,
-) -> Result<CreateRunResponse, EngineError> {
-    engine.scoped(scope)?.start_run(input).await
-}
-
-#[cfg(test)]
-async fn legacy_activate_runs(engine: &InProcessEngine, scope: &Scope) -> Result<(), EngineError> {
-    engine.scoped(scope)?.activate_runs()
-}
-
-#[cfg(test)]
-async fn legacy_cancel_run(
-    engine: &InProcessEngine,
-    scope: &Scope,
-    run_id: &str,
-) -> Result<CancelResponse, EngineError> {
-    engine.scoped(scope)?.cancel_run(run_id).await
 }

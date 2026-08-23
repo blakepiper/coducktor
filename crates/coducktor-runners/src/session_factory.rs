@@ -1,4 +1,4 @@
-//! A concrete `coducktor_core::workflows::run::SessionFactory` dispatching to the four real
+//! A concrete `coducktor_core::agent_session::SessionFactory` dispatching to the four real
 //! backends (claude/codex/opencode/pi) by `RunnerSelection`.
 //!
 //! Binary resolution follows each runner's supported configuration:
@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use coducktor_contract::{Runner, RunnerSelection};
-use coducktor_core::workflows::run::{
+use coducktor_core::agent_session::{
     AgentSession, CancellationToken, EventInput, PromptImage, SessionFactory, SessionOutcome,
     SessionRequest,
 };
@@ -380,7 +380,7 @@ mod tests {
     fn to_agent_run_spec_carries_the_session_request_fields_through() {
         let request = SessionRequest {
             cancellation: CancellationToken::default(),
-            images: vec![coducktor_core::workflows::run::PromptImage {
+            images: vec![coducktor_core::agent_session::PromptImage {
                 media_type: "image/png".to_owned(),
                 data: "AQID".to_owned(),
             }],
@@ -463,7 +463,7 @@ mod tests {
         assert!(event_types.contains(&"text".to_owned()));
         assert!(matches!(
             outcome,
-            coducktor_core::workflows::run::SessionOutcome::Completed(_)
+            coducktor_core::agent_session::SessionOutcome::Completed(_)
         ));
         session.finish(&mut |_| Ok(())).unwrap();
         drop(session);

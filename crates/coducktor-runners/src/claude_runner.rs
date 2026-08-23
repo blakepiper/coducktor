@@ -13,7 +13,7 @@ use std::io;
 use std::time::Duration;
 
 use coducktor_contract::Runner;
-use coducktor_core::workflows::run::{
+use coducktor_core::agent_session::{
     AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport, TurnMarkerDecision,
     decide_turn_marker,
 };
@@ -396,7 +396,6 @@ impl ClaudeSession {
             cost_usd,
             turn_text,
             decision: Some(decision),
-            plan_entries: None,
         };
         Ok(if let Some(message) = error {
             SessionOutcome::Failed { message, report }

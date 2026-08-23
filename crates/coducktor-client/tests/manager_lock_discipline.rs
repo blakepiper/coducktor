@@ -12,7 +12,6 @@ use coducktor_core::conversations::{
     ConversationEventInput, ConversationSession, ConversationSessionFactory,
     ConversationTurnRequest, TurnCancellation, TurnOutcome, TurnReport,
 };
-use coducktor_runners::session_factory::DefaultSessionFactory;
 use tempfile::TempDir;
 
 struct HeldTurnFactory {
@@ -177,10 +176,9 @@ async fn conversation_calls_do_not_wait_for_a_live_provider_turn() {
     let entered = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
     let engine = Arc::new(
-        InProcessEngine::with_session_factory_at(
+        InProcessEngine::at(
             repo.path(),
             "0.0.0-lock-test",
-            DefaultSessionFactory::new(),
             workspace.path().join("config.json"),
         )
         .with_conversation_factory(HeldTurnFactory {

@@ -29,7 +29,7 @@
 //! `text_seen`/`tools_seen`/the coalescer are session-scoped fields here (not reset per turn),
 //! matching the session's instance fields — a part id is assumed unique for
 //! the life of the session, not just one turn. `text_chunks` is session-scoped too; each turn's
-//! [`coducktor_core::workflows::run::SessionReport::turn_text`] is a slice of it from an index
+//! [`coducktor_core::agent_session::SessionReport::turn_text`] is a slice of it from an index
 //! captured at that turn's start, and token/cost totals are session-cumulative counters with the
 //! same before/after snapshot taken per turn — the wire's own `tokens`/`cost` fields are already
 //! cumulative-over-the-session, not per-turn deltas.
@@ -45,11 +45,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use coducktor_contract::Runner;
-use coducktor_core::runs::ask;
-use coducktor_core::workflows::run::{
+use coducktor_core::agent_session::{
     AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport, TurnMarkerDecision,
     decide_turn_marker,
 };
+use coducktor_core::runs::ask;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -502,7 +502,6 @@ impl OpencodeSession {
             cost_usd: (cost_delta > 0.0).then_some(cost_delta),
             turn_text,
             decision: Some(decision),
-            plan_entries: None,
         };
         Ok(if decision == TurnMarkerDecision::Done {
             SessionOutcome::Completed(report)

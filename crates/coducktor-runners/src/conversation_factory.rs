@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use coducktor_contract::{
     ConversationQuestionAnswer, ConversationSkillAttachment, ImageInput, Runner,
 };
+use coducktor_core::agent_session::{
+    AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport,
+};
 use coducktor_core::conversations::{
     ConversationEventInput, ConversationSession, ConversationSessionFactory,
     ConversationTurnRequest, PendingQuestion, PendingRequest, TurnOutcome, TurnReport,
 };
 use coducktor_core::skills::{BUILT_IN_PLANNING_SKILL_BODY, read_skill_body};
-use coducktor_core::workflows::run::{
-    AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport,
-};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -434,7 +434,7 @@ impl ConversationSessionFactory for DefaultSessionFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coducktor_core::workflows::run::{SessionReport, TurnMarkerDecision};
+    use coducktor_core::agent_session::{SessionReport, TurnMarkerDecision};
     use std::sync::{Arc, Mutex};
 
     struct FakeSession {

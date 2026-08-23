@@ -1,6 +1,6 @@
 # AGENTS.md — working in this repository
 
-Coducktor is a local terminal cockpit for coding-agent workflows. The shipped product is one
+Coducktor is a local terminal cockpit for coding agents. The shipped product is one
 Rust binary (`coducktor`, with the short `duck` alias) and the workspace crates under `crates/`.
 It owns durable JSON, NDJSON, Markdown and YAML state under `.ai/coducktor/` and
 `~/.coducktor/`; there is no database, browser cockpit, npm workspace or service to start.
@@ -13,7 +13,7 @@ changes intact.
 
 ## Zero configuration
 
-The default binary discovers the current repository, local skills, workflows, Git, available
+The default binary discovers the current repository, local skills, Git, available
 agent CLIs and the per-user registry. Missing GitHub CLI, agent CLI, credentials, network access,
 or writable state degrades to the smaller capability; it must not prevent startup. Optional
 environment overrides use the `DUCK_*` namespace and are documented in `.env.example`. The
@@ -31,7 +31,7 @@ and reports the stray directory without deleting it.
 | --- | --- |
 | CLI and startup migrations | `crates/coducktor-tui/src/main.rs`, `src/cli.rs`, `src/headless.rs`, `crates/coducktor-core/src/workspace/migrations.rs` |
 | Engine seam and live events | `crates/coducktor-client/src/engine.rs`, `src/in_process.rs`, `src/events.rs` |
-| Durable files, workflows and run lifecycle | `crates/coducktor-core/src/` |
+| Durable files and conversation lifecycle | `crates/coducktor-core/src/` |
 | Contract and normalized events | `crates/coducktor-contract/src/`, `crates/coducktor-protocol/src/` |
 | Agent backends | `AGENT_PROTOCOL.md`, `crates/coducktor-runners/src/` |
 | Terminal UI | `crates/coducktor-tui/src/`, `docs/tui/` |

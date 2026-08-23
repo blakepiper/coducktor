@@ -4,7 +4,7 @@
 //! The agent emits this as a trailing `DUCK:ASK <compact-json>` control marker (a sibling of
 //! `DUCK:DONE` / `DUCK:MONITORING`), detected on the *assembled* turn text so delta-streaming
 //! backends can't split it. The legacy `DUCK:ASK` spelling parses identically (dual-read shim,
-//! the compatibility regex). [`super::super::workflows::run::decide_turn_marker`]'s `valid_ask`
+//! the compatibility regex). [`crate::legacy_runs::decide_turn_marker`]'s `valid_ask`
 //! parameter is
 //! exactly [`parse_ask_marker`] returning `Some`.
 //!
@@ -464,7 +464,7 @@ pub fn parse_ask_marker_result(turn_text: &str) -> AskMarkerParseResult {
 /// Extract and validate a trailing `DUCK:ASK <json>` marker (or its legacy `DUCK:ASK` twin) from
 /// assembled turn text. `None` when there is no marker or its payload remains invalid — callers
 /// degrade to plain text, the prose fallback is never made worse. This is also
-/// [`super::super::workflows::run::decide_turn_marker`]'s `valid_ask` input: `is_some()`.
+/// [`crate::legacy_runs::decide_turn_marker`]'s `valid_ask` input: `is_some()`.
 pub fn parse_ask_marker(turn_text: &str) -> Option<AskRequest> {
     match parse_ask_marker_result(turn_text) {
         AskMarkerParseResult::Valid { request, .. } => Some(request),

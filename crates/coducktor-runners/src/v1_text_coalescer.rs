@@ -1,7 +1,7 @@
 //! Per-item coalescing of streamed assistant text into whole v1 `text` events, shared by the
 //! Codex and OpenCode backends.
 //!
-//! The v1 `AgentEvent`/[`coducktor_core::workflows::run::EventInput`] contract treats `text` as
+//! The v1 `AgentEvent`/[`coducktor_core::agent_session::EventInput`] contract treats `text` as
 //! a complete assistant block — that is what the RunManager persists one NDJSON line per event,
 //! and what every consumer renders as one paragraph. Emitting each delta as its own `text` event
 //! would persist one line per token, and a turn-end marker split across deltas (`CE`+`Z`+`:D`+

@@ -159,26 +159,13 @@ fn create_input(
 
 fn engine(repo: &TempDir, workspace: &TempDir, factory: ScriptedFactory) -> Arc<InProcessEngine> {
     Arc::new(
-        InProcessEngine::with_session_factory_at(
+        InProcessEngine::at(
             repo.path(),
             "0.0.0-conversation-test",
-            NoWorkflowFactory,
             workspace.path().join("config.json"),
         )
         .with_conversation_factory(factory),
     )
-}
-
-/// The workflow runtime is not under test here; it must simply exist for the engine to build.
-struct NoWorkflowFactory;
-
-impl coducktor_core::workflows::run::SessionFactory for NoWorkflowFactory {
-    fn open(
-        &self,
-        _request: coducktor_core::workflows::run::SessionRequest,
-    ) -> Result<Box<dyn coducktor_core::workflows::run::AgentSession + Send>, String> {
-        Err("the workflow runtime is not used by conversation tests".to_owned())
-    }
 }
 
 async fn wait_for_idle(engine: &InProcessEngine, scope: &Scope, id: &str) -> ConversationState {

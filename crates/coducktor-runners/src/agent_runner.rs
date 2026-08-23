@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use coducktor_contract::ConcreteReasoningEffort;
+use coducktor_core::agent_session::{CancellationToken, PromptImage};
 use coducktor_core::conversations::TurnCancellation;
-use coducktor_core::workflows::run::{CancellationToken, PromptImage};
 use serde::{Deserialize, Serialize};
 
 /// Everything one agent-CLI backend needs to spawn and drive a session.

@@ -9,8 +9,8 @@ use coducktor_contract::{
     BackendCheckName, ConversationGitMode, ConversationSkillSelection, ConversationState,
     CreateConversationInput, Runner,
 };
+use coducktor_core::legacy_runs::RunManager;
 use coducktor_core::paths::{ProcessEnv, project_state_dir, workspace_config_path};
-use coducktor_core::workflows::run::RunManager;
 use coducktor_core::workspace::config::ProjectSource;
 use coducktor_core::workspace::projects;
 use coducktor_protocol::{MessageRole, UiItem};
@@ -660,13 +660,8 @@ mod tests {
 
     fn dry_run_engine(repo: &Path) -> InProcessEngine {
         let config = repo.join("workspace-config.json");
-        InProcessEngine::with_session_factory_at(
-            repo,
-            "0.0.0-headless-test",
-            dry_run_factory(),
-            config,
-        )
-        .with_conversation_factory(dry_run_factory())
+        InProcessEngine::at(repo, "0.0.0-headless-test", config)
+            .with_conversation_factory(dry_run_factory())
     }
 
     #[tokio::test]

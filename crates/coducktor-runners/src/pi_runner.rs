@@ -40,11 +40,11 @@ use std::io;
 use std::time::Duration;
 
 use coducktor_contract::Runner;
-use coducktor_core::runs::ask;
-use coducktor_core::workflows::run::{
+use coducktor_core::agent_session::{
     AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport, TurnMarkerDecision,
     decide_turn_marker,
 };
+use coducktor_core::runs::ask;
 use serde_json::{Map, Value, json};
 
 use crate::agent_runner::{AgentRunSpec, ContentBlock, prompt_content, selected_reasoning};
@@ -359,7 +359,6 @@ impl PiSession {
             cost_usd,
             turn_text,
             decision: Some(decision),
-            plan_entries: None,
         };
         Ok(if decision == TurnMarkerDecision::Done {
             SessionOutcome::Completed(report)

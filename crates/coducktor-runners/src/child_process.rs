@@ -18,7 +18,7 @@ use crate::agent_runner::AgentCancellation;
 use coducktor_contract::Runner;
 
 #[cfg(test)]
-use coducktor_core::workflows::run::CancellationToken;
+use coducktor_core::agent_session::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {

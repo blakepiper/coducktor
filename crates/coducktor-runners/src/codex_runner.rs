@@ -33,11 +33,11 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use coducktor_contract::Runner;
-use coducktor_core::runs::ask::{self, AskQuestion};
-use coducktor_core::workflows::run::{
+use coducktor_core::agent_session::{
     AgentSession, EventInput, PromptImage, SessionOutcome, SessionReport, TurnMarkerDecision,
     decide_turn_marker,
 };
+use coducktor_core::runs::ask::{self, AskQuestion};
 use serde_json::{Map, Value, json};
 
 use crate::agent_runner::{AgentRunSpec, ContentBlock, prepend_system_prompt, selected_reasoning};
@@ -979,7 +979,6 @@ impl CodexSession {
             cost_usd: None,
             turn_text,
             decision: Some(decision),
-            plan_entries: None,
         }
     }
 
