@@ -5,6 +5,7 @@
 //! atomicity rules; presentation and agent-wire details stay in their owning crates.
 
 pub mod config;
+pub mod conversations;
 pub mod git;
 pub mod handoff;
 pub mod paths;

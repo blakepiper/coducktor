@@ -122,7 +122,27 @@ fn write_run_index_with_hooks(
     after_rename: impl FnOnce(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let sorted = list_runs_by_recency(runs);
-    let json = serde_json::to_vec_pretty(&sorted).map_err(io::Error::other)?;
+    let value = serde_json::to_value(sorted).map_err(io::Error::other)?;
+    write_index_value_with_hooks(index_path, &value, before_rename, after_rename)
+}
+
+/// Crate-internal mixed-record writer using the same crash-safe boundary as legacy run writes.
+pub(crate) fn write_index_value(index_path: &Path, value: &Value) -> io::Result<()> {
+    write_index_value_with_hooks(
+        index_path,
+        value,
+        |_| Ok(()),
+        |_| directory_sync(index_path),
+    )
+}
+
+fn write_index_value_with_hooks(
+    index_path: &Path,
+    value: &Value,
+    before_rename: impl FnOnce(&Path) -> io::Result<()>,
+    after_rename: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let json = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
     if let Some(parent) = index_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -334,7 +354,7 @@ fn strip_unless(object: &mut Map<String, Value>, key: &str, valid: impl Fn(&Valu
     }
 }
 
-fn try_parse_run_record(mut value: Value) -> Option<RunRecord> {
+pub(crate) fn try_parse_run_record(mut value: Value) -> Option<RunRecord> {
     normalize_run_record_value(&mut value)?;
     serde_json::from_value(value).ok()
 }
