@@ -30,15 +30,6 @@ fn executable_in_path(binary: &str, path: Option<&std::ffi::OsStr>) -> bool {
     false
 }
 
-fn configured_executable(provider: &str, default: &str) -> bool {
-    let env_name = format!("DUCK_{}_BIN", provider.to_ascii_uppercase());
-    std::env::var(&env_name)
-        .ok()
-        .filter(|path| !path.trim().is_empty())
-        .is_some_and(|path| Path::new(&path).is_file())
-        || executable_on_path(default)
-}
-
 fn installed_mac_app(target: &str) -> Option<&'static str> {
     if !cfg!(target_os = "macos") {
         return None;
@@ -155,20 +146,6 @@ fn open_targets_list() -> Vec<coducktor_contract::OpenTarget> {
         if installed_mac_app(id).is_some() && !targets.iter().any(|target| target.id == id) {
             targets.push(coducktor_contract::OpenTarget {
                 id: id.to_owned(),
-                label: label.to_owned(),
-                icon: Some(icon.to_owned()),
-            });
-        }
-    }
-    for (provider, label, icon, binary) in [
-        ("claude", "Claude CLI", "claude", "claude"),
-        ("codex", "Codex CLI", "codex", "codex"),
-        ("opencode", "OpenCode", "opencode", "opencode"),
-        ("pi", "pi CLI", "pi", "pi"),
-    ] {
-        if configured_executable(provider, binary) {
-            targets.push(coducktor_contract::OpenTarget {
-                id: format!("cli:{provider}"),
                 label: label.to_owned(),
                 icon: Some(icon.to_owned()),
             });
@@ -872,4 +849,3 @@ fn create_repo_branch(
         created: !exists,
     })
 }
-

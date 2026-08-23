@@ -483,13 +483,6 @@ pub struct RemoveQueuedMessageResponse {
     pub removed: bool,
 }
 
-/// `OpenInCliResponse` contract shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenInCliResponse {
-    pub opened: bool,
-    pub command: String,
-}
-
 /// `RemoveWorktreeResponse` contract shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoveWorktreeResponse {

@@ -262,18 +262,14 @@ enum BackgroundResult {
         result: Result<(), coducktor_client::EngineError>,
     },
     RefreshChatsIndex {
-        result: Result<
-            coducktor_contract::ConversationsIndexResponse,
-            coducktor_client::EngineError,
-        >,
+        result:
+            Result<coducktor_contract::ConversationsIndexResponse, coducktor_client::EngineError>,
     },
     RefreshChats {
         project: String,
         generation: u64,
-        result: Result<
-            Vec<coducktor_contract::ConversationIndexEntry>,
-            coducktor_client::EngineError,
-        >,
+        result:
+            Result<Vec<coducktor_contract::ConversationIndexEntry>, coducktor_client::EngineError>,
     },
     ActivateRuns {
         result: Result<(), coducktor_client::EngineError>,
@@ -282,9 +278,6 @@ enum BackgroundResult {
         project: String,
         id: String,
         result: Result<coducktor_contract::CreatePrResponse, coducktor_client::EngineError>,
-    },
-    OpenInCli {
-        result: Result<coducktor_contract::OpenInCliResponse, coducktor_client::EngineError>,
     },
     ResolveIdeEditorRoot {
         project: String,
@@ -998,7 +991,11 @@ fn execute_pending(
                                 .map(|_| ())
                         }
                     },
-                    move |result| BackgroundResult::ConversationTurn { project, id, result },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result,
+                    },
                 );
             }
             PendingAction::UnreadConversation { project, id } => {
@@ -1014,7 +1011,11 @@ fn execute_pending(
                             .await
                             .map(|_| ())
                     },
-                    move |result| BackgroundResult::ConversationTurn { project, id, result },
+                    move |result| BackgroundResult::ConversationTurn {
+                        project,
+                        id,
+                        result,
+                    },
                 );
             }
             PendingAction::DeleteConversation { project, id } => {
@@ -1093,17 +1094,20 @@ fn execute_pending(
                     background_handle,
                     background_sender,
                     async move {
-                        engine_for_task.list_conversations(&scope).await.map(|records| {
-                            records
-                                .iter()
-                                .map(|record| {
-                                    coducktor_client::conversation_index_entry(
-                                        &project_for_rows,
-                                        record,
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                        })
+                        engine_for_task
+                            .list_conversations(&scope)
+                            .await
+                            .map(|records| {
+                                records
+                                    .iter()
+                                    .map(|record| {
+                                        coducktor_client::conversation_index_entry(
+                                            &project_for_rows,
+                                            record,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
                     },
                     move |result| BackgroundResult::RefreshChats {
                         project,
@@ -1320,21 +1324,19 @@ fn execute_pending(
                     async move {
                         // The browser hands over an opaque id. A conversation read decides the
                         // subject; only when no conversation owns that id is it a legacy record.
-                        let subject = match engine_for_task
-                            .get_conversation(&scope, &id_for_task)
-                            .await
-                        {
-                            Ok(record) => Ok(screens::thread::ThreadSubject::Conversation(
-                                Box::new(record),
-                            )),
-                            Err(coducktor_client::EngineError::NotFound) => engine_for_task
-                                .get_run(&scope, &id_for_task)
-                                .await
-                                .map(|run| {
-                                    screens::thread::ThreadSubject::LegacyRun(Box::new(run))
-                                }),
-                            Err(other) => Err(other),
-                        };
+                        let subject =
+                            match engine_for_task.get_conversation(&scope, &id_for_task).await {
+                                Ok(record) => Ok(screens::thread::ThreadSubject::Conversation(
+                                    Box::new(record),
+                                )),
+                                Err(coducktor_client::EngineError::NotFound) => engine_for_task
+                                    .get_run(&scope, &id_for_task)
+                                    .await
+                                    .map(|run| {
+                                        screens::thread::ThreadSubject::LegacyRun(Box::new(run))
+                                    }),
+                                Err(other) => Err(other),
+                            };
                         let history = engine_for_task
                             .run_history(&scope, &id_for_task, None)
                             .await;
@@ -1489,16 +1491,6 @@ fn execute_pending(
                         id,
                         result,
                     },
-                );
-            }
-            PendingAction::OpenInCli { project, id } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.open_in_cli(&scope, &id).await },
-                    |result| BackgroundResult::OpenInCli { result },
                 );
             }
             PendingAction::RemoveQueuedMessage {
@@ -2658,11 +2650,6 @@ fn drain_background_results(
                 }
                 app.pending.push(PendingAction::LoadThread { project, id });
             }
-            BackgroundResult::OpenInCli { result } => {
-                if let Err(error) = result {
-                    app.notice = Some(format!("open in terminal failed: {error}"));
-                }
-            }
             BackgroundResult::ResolveIdeEditorRoot {
                 project,
                 path,
@@ -3505,7 +3492,7 @@ fn thread_history_event(
 fn queue_global_index_refresh(app: &mut App) {
     if matches!(app.route(), app::Route::GlobalTasks) {
         app.queue_pending(PendingAction::RefreshIndex);
-                app.queue_pending(PendingAction::RefreshChatsIndex);
+        app.queue_pending(PendingAction::RefreshChatsIndex);
     }
 }
 
@@ -4029,7 +4016,10 @@ mod tests {
 
         assert_eq!(
             app.pending,
-            vec![PendingAction::RefreshIndex, PendingAction::RefreshChatsIndex]
+            vec![
+                PendingAction::RefreshIndex,
+                PendingAction::RefreshChatsIndex
+            ]
         );
     }
 
@@ -4643,28 +4633,6 @@ mod tests {
                 project: "main".to_owned(),
                 id: "run-1".to_owned(),
             }]
-        );
-    }
-
-    #[test]
-    fn failed_cli_handoff_reports_after_background_completion() {
-        let (sender, receiver) = channel();
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::OpenInCli {
-                result: Err(coducktor_client::EngineError::Conflict {
-                    reason: "no terminal launcher".to_owned(),
-                }),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("open in terminal failed: conflict: no terminal launcher")
         );
     }
 

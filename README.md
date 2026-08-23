@@ -130,8 +130,8 @@ workflow steps, tool calls, agent questions, plan progress, diff statistics, tok
 when the selected backend reports them.
 
 When a run stops, the available actions depend on its state. You can answer questions, continue a
-closed session, finish a waiting or review run, cancel active work, open the native agent CLI, or
-archive and delete terminal runs.
+closed session, finish a waiting or review run, cancel active work, or archive and delete terminal
+runs.
 
 Use the task Git tabs to inspect **Changes**, **Files**, and **Commits**. The **Compare** view appears
 for multi-variant runs; selecting one variant archives the others and removes their worktrees.

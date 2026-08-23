@@ -151,9 +151,7 @@ fn build_conversation_cards(
         .conversations
         .iter()
         .filter(|entry| entry.archived == (view == TaskView::Archived))
-        .filter(|entry| {
-            tag.is_none_or(|tag| project_id_has_tag(registry, &entry.project_id, tag))
-        })
+        .filter(|entry| tag.is_none_or(|tag| project_id_has_tag(registry, &entry.project_id, tag)))
         .collect();
     let owned: Vec<coducktor_contract::ConversationIndexEntry> =
         entries.iter().map(|entry| (*entry).clone()).collect();
@@ -166,9 +164,7 @@ fn build_conversation_cards(
     entries.sort_by(|a, b| {
         chats_util::group(a)
             .cmp(&chats_util::group(b))
-            .then_with(|| {
-                chats_util::meaningful_at(b).cmp(chats_util::meaningful_at(a))
-            })
+            .then_with(|| chats_util::meaningful_at(b).cmp(chats_util::meaningful_at(a)))
             .then_with(|| a.project_id.cmp(&b.project_id))
             .then_with(|| a.id.cmp(&b.id))
     });

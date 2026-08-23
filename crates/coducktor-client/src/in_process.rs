@@ -29,10 +29,10 @@ use coducktor_contract::{
     GroupVariant, HealthProject, HealthResponse, IdeDirectoryResponse, IdeEntry, IdeEntryType,
     IdeFileResponse, ImageInput, LogEntry, MarkAllReadResponse, MessageInput, MessageResponse,
     ModelCatalogSource, ModelDiscoveryRunner, ModelUsageEntry, OpenAgentAccountFileInput,
-    OpenAgentAccountFileResponse, OpenInCliResponse, OpenInInput, OpenProjectInResponse,
-    OpenTargetsResponse, ParsedWorkflow, PatchRunInput, PickVariantRequest, PickVariantResponse,
-    PlanResponse, PresentRepoResponse, ProjectListEntry, ProjectSource, ProjectStatus,
-    ProjectsResponse, ProviderConnectAlreadyConnected, ProviderConnectInput, ProviderConnectOpened,
+    OpenAgentAccountFileResponse, OpenInInput, OpenProjectInResponse, OpenTargetsResponse,
+    ParsedWorkflow, PatchRunInput, PickVariantRequest, PickVariantResponse, PlanResponse,
+    PresentRepoResponse, ProjectListEntry, ProjectSource, ProjectStatus, ProjectsResponse,
+    ProviderConnectAlreadyConnected, ProviderConnectInput, ProviderConnectOpened,
     ProviderConnectResponse, ProviderConnectionState, ProviderStatus, ProviderStatusResponse,
     ProviderUsageError, ProviderUsageHealth, ProviderUsageSnapshot, ProviderUsageWindow,
     ProviderUsageWindowKind, QueuedMessagePatchInput, QuotaProvider, RUN_HISTORY_PAGE_ITEMS,
@@ -2511,10 +2511,10 @@ impl InProcessEngine {
             .map_err(|error| EngineError::Transport(error.to_string()))
     }
 
-    /// Open the provider's own interactive login flow in a new terminal window — the same
-    /// hand-off `open_in_cli` uses to resume a session, so auth stays entirely with the agent
-    /// CLI and never touches this process's stdio. Only the default profile is supported: a
-    /// non-default `profile_id` needs a config-dir environment override this seam doesn't set.
+    /// Open the provider's own interactive login flow in a new terminal window, so auth stays
+    /// entirely with the agent CLI and never touches this process's stdio. Only the default
+    /// profile is supported: a non-default `profile_id` needs a config-dir environment override
+    /// this seam doesn't set.
     pub async fn connect_provider(
         &self,
         input: &ProviderConnectInput,
@@ -2847,11 +2847,6 @@ impl InProcessEngine {
         input: &OpenAgentAccountFileInput,
     ) -> Result<OpenAgentAccountFileResponse, EngineError> {
         if let Some(target) = input.target.as_deref() {
-            if target.starts_with("cli:") {
-                return Err(EngineError::Conflict {
-                    reason: "agent CLIs open a task worktree, not a config folder".to_owned(),
-                });
-            }
             if target == "terminal" && input.file != "folder" {
                 return Err(EngineError::Conflict {
                     reason: "a terminal opens a folder, not a file".to_owned(),
@@ -3535,11 +3530,6 @@ impl InProcessEngine {
         if target.is_empty() || target.chars().count() > 200 {
             return Err(EngineError::Conflict {
                 reason: "target required".to_owned(),
-            });
-        }
-        if target.starts_with("cli:") {
-            return Err(EngineError::Conflict {
-                reason: "agent CLIs open a task worktree, not the project folder".to_owned(),
             });
         }
         if !open_targets_list()
@@ -4806,29 +4796,6 @@ impl InProcessEngine {
         })
     }
 
-    pub async fn open_in_cli(&self, run_id: &str) -> Result<OpenInCliResponse, EngineError> {
-        let run = self.run_record(run_id)?;
-        let Some((program, args)) = run_resume_invocation(&run) else {
-            return Err(EngineError::Conflict {
-                reason: "no agent session to resume".to_owned(),
-            });
-        };
-        let command = std::iter::once(program.as_str())
-            .chain(args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let directory = run_worktree_of(&run).unwrap_or_else(|| self.repo_root.clone());
-        if !open_terminal_for_command(&directory, &program, &args) {
-            return Err(EngineError::Conflict {
-                reason: "no supported terminal launcher found".to_owned(),
-            });
-        }
-        Ok(OpenInCliResponse {
-            opened: true,
-            command,
-        })
-    }
-
     pub async fn open_in(&self, run_id: &str, input: OpenInInput) -> Result<Value, EngineError> {
         let run = self.run_record(run_id)?;
         let target = input.target.trim();
@@ -4861,25 +4828,6 @@ impl InProcessEngine {
                 });
             }
             return Ok(json!({ "opened": true, "path": file }));
-        }
-        if let Some(provider) = target.strip_prefix("cli:") {
-            let command = match provider {
-                "claude" => "claude",
-                "codex" => "codex",
-                "opencode" => "opencode",
-                "pi" => "pi",
-                _ => {
-                    return Err(EngineError::Conflict {
-                        reason: "unknown target".to_owned(),
-                    });
-                }
-            };
-            if !open_terminal_for_command(&directory, command, &[]) {
-                return Err(EngineError::Conflict {
-                    reason: "no supported terminal launcher found".to_owned(),
-                });
-            }
-            return Ok(json!({ "opened": true, "path": directory, "command": command }));
         }
         if !open_targets_list()
             .iter()
@@ -5102,47 +5050,6 @@ fn collect_run_commits(root: &Path, base: &str) -> Result<Vec<RunCommit>, String
             }
         })
         .collect())
-}
-
-fn run_resume_invocation(run: &coducktor_contract::RunRecord) -> Option<(String, Vec<String>)> {
-    let session_id = run
-        .steps
-        .iter()
-        .rev()
-        .find_map(|step| step.session_id.as_deref())?;
-    if !safe_session_id(session_id) {
-        return None;
-    }
-    Some(match run.runner {
-        Some(Runner::Codex) => (
-            "codex".to_owned(),
-            vec!["resume".to_owned(), session_id.to_owned()],
-        ),
-        Some(Runner::OpenCode) => (
-            "opencode".to_owned(),
-            vec!["--session".to_owned(), session_id.to_owned()],
-        ),
-        Some(Runner::Pi) => (
-            "pi".to_owned(),
-            vec!["--session".to_owned(), session_id.to_owned()],
-        ),
-        Some(Runner::Claude) | None => (
-            "claude".to_owned(),
-            vec!["--resume".to_owned(), session_id.to_owned()],
-        ),
-    })
-}
-
-fn safe_session_id(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    value.len() <= 200
-        && (first.is_ascii_alphanumeric() || matches!(first, '.' | '_'))
-        && chars.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        })
 }
 
 #[derive(Clone, Copy)]
@@ -9054,7 +8961,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_account_file_rejects_a_cli_target_before_touching_disk() {
+    async fn open_agent_account_file_rejects_an_unknown_target_before_touching_disk() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
         // No account with this id exists either, but an explicit `target` must be rejected
@@ -9064,7 +8971,7 @@ mod tests {
                 "coducktor-test-account-that-does-not-exist",
                 &OpenAgentAccountFileInput {
                     file: "folder".to_owned(),
-                    target: Some("cli:codex".to_owned()),
+                    target: Some("not-an-installed-app".to_owned()),
                 },
             )
             .await
@@ -10120,15 +10027,22 @@ mod tests {
     }
 
     // ---- open-targets ---------------------------------------------------------------------
-    // `open_target_routes_list_local_apps_and_reject_project_cli_handoffs`) --------------------
+    // The target registry contains only ordinary local apps; provider health and login use their
+    // own seams rather than masquerading as project-open targets.
 
     #[tokio::test]
-    async fn open_targets_always_lists_the_file_manager_and_terminal_first() {
+    async fn open_targets_list_local_apps_without_native_harness_handoffs() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
         let response = engine.open_targets().await.unwrap();
         assert_eq!(response.targets[0].id, "finder");
         assert_eq!(response.targets[1].id, "terminal");
+        assert!(
+            response
+                .targets
+                .iter()
+                .all(|target| !target.id.starts_with("cli:"))
+        );
     }
 
     #[tokio::test]
@@ -10160,22 +10074,6 @@ mod tests {
             error,
             EngineError::Conflict {
                 reason: "target required".to_owned()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn open_project_in_rejects_agent_cli_handoffs() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine
-            .open_project_in(&Scope::Project("default".to_owned()), "cli:claude")
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "agent CLIs open a task worktree, not the project folder".to_owned()
             }
         );
     }
@@ -10948,7 +10846,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_resume_commands_keep_the_cwd_and_session_in_separate_arguments() {
+    fn terminal_commands_keep_the_cwd_and_arguments_separate() {
         let directory = Path::new("/tmp/a project/it's-safe");
         let command_args = vec!["resume".to_owned(), "session-123".to_owned()];
 
@@ -11010,15 +10908,6 @@ mod tests {
                 .contains(directory.path().to_string_lossy().as_ref())
         );
         assert!(result.output.contains("check failed"));
-    }
-
-    #[test]
-    fn safe_session_id_rejects_path_and_shell_shaped_values() {
-        assert!(safe_session_id("abc123.def_ghi-1"));
-        assert!(!safe_session_id(""));
-        assert!(!safe_session_id("../etc/passwd"));
-        assert!(!safe_session_id("$(rm -rf /)"));
-        assert!(!safe_session_id(&"a".repeat(201)));
     }
 
     #[test]
@@ -11337,14 +11226,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_in_cli_reports_no_session_for_a_fresh_run_or_reports_not_found() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine.open_in_cli("no-such-run").await.unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
     async fn open_in_rejects_an_empty_target() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
@@ -11371,7 +11252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_in_rejects_an_unknown_cli_provider() {
+    async fn open_in_rejects_a_native_harness_target() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
         let response = engine.start_run(steps_input("do the thing")).await.unwrap();
@@ -11382,7 +11263,7 @@ mod tests {
             .open_in(
                 &run.id,
                 OpenInInput {
-                    target: "cli:nonsense".to_owned(),
+                    target: "cli:claude".to_owned(),
                     path: None,
                 },
             )

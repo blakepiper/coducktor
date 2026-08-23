@@ -372,7 +372,9 @@ pub fn build_create_conversation_input(opts: &CreateConversationOpts) -> CreateC
 }
 
 /// Where a successful create navigates: the new conversation's thread.
-pub fn started_conversation_id(response: &coducktor_contract::CreateConversationResponse) -> String {
+pub fn started_conversation_id(
+    response: &coducktor_contract::CreateConversationResponse,
+) -> String {
     response.conversation.id.clone()
 }
 

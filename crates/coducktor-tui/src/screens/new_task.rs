@@ -9,8 +9,8 @@
 //! the first successful submission; skills are per-message attachments.
 
 use coducktor_contract::{
-    ProviderStatusResponse, ReasoningEffort, RepoInfo, Runner, RunnerModelCatalogResponse,
-    Skill, UiState, WorkflowDef, WorkspaceConfigResponse,
+    ProviderStatusResponse, ReasoningEffort, RepoInfo, Runner, RunnerModelCatalogResponse, Skill,
+    UiState, WorkflowDef, WorkspaceConfigResponse,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -713,12 +713,8 @@ fn refresh_picker_items(app: &mut App) {
                 .ui_state
                 .as_ref()
                 .and_then(|state| state.skill_usage.as_ref());
-            let mut items = skills_picker_items(
-                &app.new_task_ui.draft,
-                &app.new_task_ui.data,
-                &query,
-                usage,
-            );
+            let mut items =
+                skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, &query, usage);
             picker.set_items(std::mem::take(&mut items));
             return;
         }
@@ -763,11 +759,7 @@ fn skills_picker_items(
             let attached = draft.skills.contains(&skill.name);
             items.push(PickerItem {
                 value: format!("skill:{}", skill.name),
-                label: format!(
-                    "{} {}",
-                    if attached { "[x]" } else { "[ ]" },
-                    skill.name
-                ),
+                label: format!("{} {}", if attached { "[x]" } else { "[ ]" }, skill.name),
                 description: skill.description.clone(),
                 group: Some(group.to_owned()),
                 emphasized: attached,
@@ -1793,7 +1785,11 @@ mod tests {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(creates.len(), 1, "one submission is one create at {width}x{height}");
+            assert_eq!(
+                creates.len(),
+                1,
+                "one submission is one create at {width}x{height}"
+            );
             let input = creates.into_iter().next().unwrap();
             assert_eq!(input.text, "ship the shell");
 
@@ -1844,10 +1840,9 @@ mod tests {
                  {width}x{height}"
             );
             assert!(
-                !app.pending.iter().any(|action| matches!(
-                    action,
-                    PendingAction::CreateConversation { .. }
-                )),
+                !app.pending
+                    .iter()
+                    .any(|action| matches!(action, PendingAction::CreateConversation { .. })),
                 "a follow-up must resume the chat, not start a new one"
             );
         }
@@ -1923,15 +1918,23 @@ mod tests {
         assert_eq!(tiers, ["most used", "project skills"]);
 
         // A typed query narrows and re-ranks: an exact name match beats the rest.
-        let filtered =
-            skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, "om-fix", None);
+        let filtered = skills_picker_items(
+            &app.new_task_ui.draft,
+            &app.new_task_ui.data,
+            "om-fix",
+            None,
+        );
         let labels: Vec<&str> = filtered.iter().map(|item| item.label.as_str()).collect();
         assert_eq!(labels, ["[ ] om-fix"]);
 
         // An attached skill is marked in place.
         app.new_task_ui.draft.skills = vec!["om-fix".to_owned()];
-        let attached =
-            skills_picker_items(&app.new_task_ui.draft, &app.new_task_ui.data, "om-fix", None);
+        let attached = skills_picker_items(
+            &app.new_task_ui.draft,
+            &app.new_task_ui.data,
+            "om-fix",
+            None,
+        );
         assert_eq!(attached[0].label, "[x] om-fix");
     }
 

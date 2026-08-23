@@ -1,6 +1,6 @@
 //! The run header's action policy — which actions a run offers, as a pure function of the record.
 
-use coducktor_contract::{RunRecord, RunStatus, Runner};
+use coducktor_contract::{RunRecord, RunStatus};
 
 use crate::screens::runs_util::{can_be_unread, is_unread};
 
@@ -14,54 +14,6 @@ pub fn is_run_active(status: RunStatus) -> bool {
     )
 }
 
-/// The latest agent session across steps — what Continue/Terminal resume.
-pub fn last_session_id(run: &RunRecord) -> Option<&str> {
-    run.steps
-        .iter()
-        .rev()
-        .find_map(|step| step.session_id.as_deref())
-}
-
-/// Validate a session id before placing it in a shell command.
-fn is_safe_session_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if id.len() > 200 {
-        return false;
-    }
-    let first_ok = first.is_ascii_alphanumeric() || first == '.' || first == '_';
-    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-}
-
-/// Build the per-backend take-over command. Records without a runner predate the runner choice and
-/// default to Claude. Return `None` for an unsafe id rather than splicing it into a shell command.
-pub fn resume_command(runner: Option<Runner>, session_id: &str) -> Option<String> {
-    if !is_safe_session_id(session_id) {
-        return None;
-    }
-    Some(match runner {
-        Some(Runner::Codex) => format!("codex resume {session_id}"),
-        Some(Runner::OpenCode) => format!("opencode --session {session_id}"),
-        _ => format!("claude --resume {session_id}"),
-    })
-}
-
-/// The copyable "take over interactively" line under the header — only once the engine has
-/// let go of the session (same gate as the Terminal button).
-pub fn resume_hint(run: &RunRecord) -> Option<String> {
-    if is_run_active(run.status) {
-        return None;
-    }
-    let session_id = last_session_id(run)?;
-    let command = resume_command(run.runner, session_id)?;
-    Some(match &run.worktree_path {
-        Some(path) => format!("cd {path} && {command}"),
-        None => command,
-    })
-}
-
 /// The run header's action policy — which actions a run offers, as a pure function of status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunActionFlags {
@@ -69,8 +21,6 @@ pub struct RunActionFlags {
     pub finish: bool,
     /// Reopen the last agent session in-process.
     pub continue_run: bool,
-    /// Hand the session to a real terminal (open-in-cli).
-    pub terminal: bool,
     /// Archive when live, unarchive when archived.
     pub archive: bool,
     /// Put a read, finished task back into the unread list.
@@ -83,17 +33,14 @@ pub struct RunActionFlags {
 
 pub fn run_action_flags(run: &coducktor_contract::ApiRun) -> RunActionFlags {
     let active = is_run_active(run.record.status);
-    let has_session = last_session_id(&run.record).is_some();
     RunActionFlags {
         finish: matches!(
             run.record.status,
             RunStatus::Idle | RunStatus::Waiting | RunStatus::Review
         ),
-        // A finished run can always take a follow-up: the engine starts a fresh step in the same
-        // worktree even without a prior session to resume. Only the terminal hand-off needs a
-        // real session id, since it literally runs `<runner> --resume <session_id>`.
+        // A finished run can always take a follow-up: the legacy engine starts a fresh step in the
+        // same worktree even without a prior session to resume.
         continue_run: !active,
-        terminal: !active && has_session,
         archive: !active,
         mark_unread: can_be_unread(run) && !is_unread(run),
         cancel: active,
@@ -226,24 +173,18 @@ mod tests {
     }
 
     #[test]
-    fn continue_needs_only_a_closed_run_terminal_also_needs_a_session() {
+    fn continue_needs_only_a_closed_run() {
         let closed_with_session = run(RunStatus::Done, false, Some("abc123"));
         let flags = run_action_flags(&closed_with_session);
         assert!(flags.continue_run);
-        assert!(flags.terminal);
 
-        // No prior session still offers Continue — the engine starts a fresh step in the same
-        // run/worktree instead of resuming a transcript — but there's no session id for the
-        // terminal hand-off to `--resume`.
         let closed_without_session = run(RunStatus::Done, false, None);
         let flags = run_action_flags(&closed_without_session);
         assert!(flags.continue_run);
-        assert!(!flags.terminal);
 
         let active_with_session = run(RunStatus::Running, false, Some("abc123"));
         let flags = run_action_flags(&active_with_session);
         assert!(!flags.continue_run);
-        assert!(!flags.terminal);
     }
 
     #[test]
@@ -268,36 +209,6 @@ mod tests {
             assert!(!flags.cancel);
             assert!(flags.delete_run);
         }
-    }
-
-    #[test]
-    fn resume_command_fails_closed_on_an_unsafe_session_id() {
-        assert_eq!(
-            resume_command(None, "abc-123.ok"),
-            Some("claude --resume abc-123.ok".to_owned())
-        );
-        assert_eq!(
-            resume_command(Some(Runner::Codex), "abc"),
-            Some("codex resume abc".to_owned())
-        );
-        assert_eq!(resume_command(None, "../../etc/passwd"), None);
-        assert_eq!(resume_command(None, "rm -rf ~"), None);
-    }
-
-    #[test]
-    fn resume_hint_is_absent_while_active_and_prefixes_the_worktree_cd() {
-        let mut active = run(RunStatus::Running, false, Some("abc"));
-        assert_eq!(resume_hint(&active.record), None);
-
-        let mut closed = run(RunStatus::Done, false, Some("abc"));
-        closed.record.worktree_path = Some("/tmp/wt".to_owned());
-        assert_eq!(
-            resume_hint(&closed.record),
-            Some("cd /tmp/wt && claude --resume abc".to_owned())
-        );
-
-        active.record.status = RunStatus::Done;
-        assert!(resume_hint(&active.record).is_some());
     }
 
     #[test]

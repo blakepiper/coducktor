@@ -10,19 +10,19 @@ use coducktor_contract::{
     GithubData, GithubMergeInput, GithubMergeResponse, GithubPrChangesData,
     GithubPrMergeStateResponse, GithubRefStatusData, GroupResponse, HealthResponse,
     IdeDirectoryResponse, IdeFileResponse, MarkAllReadResponse, MessageInput, MessageResponse,
-    OpenAgentAccountFileInput, OpenAgentAccountFileResponse, OpenInCliResponse, OpenInInput,
-    OpenProjectInResponse, OpenTargetsResponse, ParsedWorkflow, PatchRunInput, PickVariantRequest,
-    PickVariantResponse, PlanResponse, ProjectsResponse, ProviderConnectInput,
-    ProviderConnectResponse, ProviderStatusResponse, QueuedMessagePatchInput,
-    ReclaimWorktreesResponse, RegisterProjectInput, RegisterProjectResponse,
-    RemoveAgentProfileResponse, RemoveProjectResponse, RemoveQueuedMessageResponse,
-    RemoveWorktreeResponse, RepoBranchRequest, RepoBranchResponse, RepoCommitPayload, RepoResponse,
-    RunCommitsResponse, RunHistoryContext, RunHistoryPage, Runner, RunnerModelCatalogResponse,
-    RunsIndexResponse, SaveWorkflowInput, SaveWorkflowResponse, Scratchpad,
-    SelectAgentProfileInput, SetAgentConfigInput, SetConfigInput, SetScratchpadInput,
-    SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill, UiState, UpdateAgentProfileInput,
-    UpdateProjectInput, UpdateProjectResponse, WorkflowsResponse, WorkspaceConfigResponse,
-    WorkspaceUiState, WorkspaceUsageResponse, WorktreeEntry, WorktreesResponse,
+    OpenAgentAccountFileInput, OpenAgentAccountFileResponse, OpenInInput, OpenProjectInResponse,
+    OpenTargetsResponse, ParsedWorkflow, PatchRunInput, PickVariantRequest, PickVariantResponse,
+    PlanResponse, ProjectsResponse, ProviderConnectInput, ProviderConnectResponse,
+    ProviderStatusResponse, QueuedMessagePatchInput, ReclaimWorktreesResponse,
+    RegisterProjectInput, RegisterProjectResponse, RemoveAgentProfileResponse,
+    RemoveProjectResponse, RemoveQueuedMessageResponse, RemoveWorktreeResponse, RepoBranchRequest,
+    RepoBranchResponse, RepoCommitPayload, RepoResponse, RunCommitsResponse, RunHistoryContext,
+    RunHistoryPage, Runner, RunnerModelCatalogResponse, RunsIndexResponse, SaveWorkflowInput,
+    SaveWorkflowResponse, Scratchpad, SelectAgentProfileInput, SetAgentConfigInput, SetConfigInput,
+    SetScratchpadInput, SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill, UiState,
+    UpdateAgentProfileInput, UpdateProjectInput, UpdateProjectResponse, WorkflowsResponse,
+    WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsageResponse, WorktreeEntry,
+    WorktreesResponse,
 };
 use coducktor_contract::{
     AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
@@ -218,11 +218,6 @@ pub trait Engine: Send + Sync {
         run_id: &str,
         input: ContinueInput,
     ) -> Result<ContinueResponse, EngineError>;
-    async fn open_in_cli(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-    ) -> Result<OpenInCliResponse, EngineError>;
     async fn open_in(
         &self,
         scope: &Scope,
@@ -918,14 +913,6 @@ impl Engine for InProcessEngine {
         input: ContinueInput,
     ) -> Result<ContinueResponse, EngineError> {
         self.scoped(scope)?.continue_run(run_id, input).await
-    }
-
-    async fn open_in_cli(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-    ) -> Result<OpenInCliResponse, EngineError> {
-        self.scoped(scope)?.open_in_cli(run_id).await
     }
 
     async fn open_in(

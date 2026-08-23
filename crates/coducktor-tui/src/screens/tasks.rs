@@ -13,9 +13,9 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, NavItem, RowMenu, RowMenuItem};
 use crate::input::hitmap::HitAction;
 use crate::screens::runs_util::{
-    Attention, TaskView, UsageKind, attention, clock_time, filter_runs,
-    finished_run_count, format_cost, format_diff, format_tokens, is_read_done_item, is_unread,
-    queue_positions, run_title, short_age, sort_runs, task_reference, usage_cells, workflow_label,
+    Attention, TaskView, UsageKind, attention, clock_time, filter_runs, finished_run_count,
+    format_cost, format_diff, format_tokens, is_read_done_item, is_unread, queue_positions,
+    run_title, short_age, sort_runs, task_reference, usage_cells, workflow_label,
 };
 use crate::theme::Theme;
 use crate::widgets::table::{ColumnId, SortState, Table, TableCell, TableRow};

@@ -828,10 +828,6 @@ pub enum PendingAction {
         project: String,
         id: String,
     },
-    OpenInCli {
-        project: String,
-        id: String,
-    },
     RemoveQueuedMessage {
         project: String,
         id: String,
@@ -1991,8 +1987,7 @@ impl App {
     pub fn apply_workspace_event(&mut self, event: WorkspaceEvent) {
         match event {
             WorkspaceEvent::Conversation { project, record } => {
-                let entry =
-                    coducktor_client::conversation_index_entry(&project, &record);
+                let entry = coducktor_client::conversation_index_entry(&project, &record);
                 let state = self.project_tasks.entry(project.clone()).or_default();
                 if let Some(existing) = state
                     .conversations
@@ -2016,8 +2011,7 @@ impl App {
                 }
                 // The open thread needs the new state immediately: it is what re-enables the
                 // composer at the end of a turn.
-                if self.thread_ui.data.project == project
-                    && self.thread_ui.data.run_id == record.id
+                if self.thread_ui.data.project == project && self.thread_ui.data.run_id == record.id
                 {
                     self.thread_ui.set_conversation(*record);
                 }
@@ -4042,7 +4036,7 @@ impl App {
                         self.sidebar_focus = false;
                         self.request_navigate(Route::GlobalTasks);
                         self.queue_pending(PendingAction::RefreshIndex);
-                self.queue_pending(PendingAction::RefreshChatsIndex);
+                        self.queue_pending(PendingAction::RefreshChatsIndex);
                     }
                     SidebarRow::GlobalSettings => {
                         self.sidebar_focus = false;

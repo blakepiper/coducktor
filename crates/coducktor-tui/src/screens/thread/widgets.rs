@@ -19,7 +19,7 @@ use crate::theme::Theme;
 use crate::widgets::run_end::{self, RunOutcome};
 
 use super::ThreadAction;
-use super::actions::{resume_hint, run_action_flags};
+use super::actions::run_action_flags;
 use super::reducer::{ThreadAsk, ThreadEntry, ThreadState};
 
 /// The header: title, status pill, meta row, tabs, action bar. Returns the height it used.
@@ -356,15 +356,6 @@ pub fn render_header(
     }
     lines.push(Line::from(action_spans));
 
-    if let Some(hint) = resume_hint(record) {
-        lines.push(Line::from(Span::styled(
-            format!("take over: {hint}"),
-            Style::default()
-                .fg(theme.palette.soft_fg)
-                .add_modifier(Modifier::DIM),
-        )));
-    }
-
     let height = (lines.len() as u16).min(area.height);
     frame.render_widget(
         Paragraph::new(Text::from(lines)).style(Style::default().fg(theme.palette.fg)),
@@ -398,9 +389,6 @@ pub(crate) fn header_actions(run: &ApiRun) -> Vec<(&'static str, ThreadAction)> 
     }
     if flags.continue_run {
         actions.push(("Continue", ThreadAction::Continue));
-    }
-    if flags.terminal {
-        actions.push(("Terminal", ThreadAction::Terminal));
     }
     if flags.archive {
         actions.push((

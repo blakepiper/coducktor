@@ -266,7 +266,10 @@ mod tests {
                 "{state:?} must not render a workflow-era label"
             );
         }
-        assert_eq!(attention(&entry("l", ConversationState::Idle)).label, "idle");
+        assert_eq!(
+            attention(&entry("l", ConversationState::Idle)).label,
+            "idle"
+        );
     }
 
     #[test]

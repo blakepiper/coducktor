@@ -43,7 +43,6 @@ pub enum ThreadAction {
     ToggleTimelineItem(usize),
     Finish,
     Continue,
-    Terminal,
     Archive,
     MarkUnread,
     Cancel,
@@ -1505,13 +1504,12 @@ fn apply_conversation_action(
             id,
             archived: !record.archived,
         }),
-        ThreadAction::MarkUnread => {
-            app.pending.push(PendingAction::UnreadConversation { project, id })
-        }
+        ThreadAction::MarkUnread => app
+            .pending
+            .push(PendingAction::UnreadConversation { project, id }),
         ThreadAction::Delete => {
             if record.state.is_active() {
-                app.notice =
-                    Some("stop the current turn before deleting this chat".to_owned());
+                app.notice = Some("stop the current turn before deleting this chat".to_owned());
                 return;
             }
             let mut targets = vec![format!("the transcript for \"{}\"", record.title)];
@@ -1528,8 +1526,7 @@ fn apply_conversation_action(
         }
         ThreadAction::ToggleGitMode => {
             if record.state.is_active() {
-                app.notice =
-                    Some("git mode can only change while the chat is idle".to_owned());
+                app.notice = Some("git mode can only change while the chat is idle".to_owned());
                 return;
             }
             let next = match record.git_mode {
@@ -1618,8 +1615,7 @@ fn render_conversation(
             .unwrap_or_else(|| "0s".to_owned());
         format!(
             "{throbber} {} · {elapsed} · {} tok",
-            app.thread_ui.data.view_model.current_status,
-            record.tokens_used as i64
+            app.thread_ui.data.view_model.current_status, record.tokens_used as i64
         )
     } else {
         app.thread_ui.data.view_model.current_status.clone()
@@ -1711,7 +1707,12 @@ pub fn can_send_followup(app: &App) -> bool {
         // Legacy records are historical and never accept a message.
         return false;
     };
-    if app.thread_ui.data.conversation().is_some_and(|record| record.archived) {
+    if app
+        .thread_ui
+        .data
+        .conversation()
+        .is_some_and(|record| record.archived)
+    {
         return false;
     }
     matches!(
@@ -1726,7 +1727,13 @@ pub fn followup_blocked_reason(app: &App) -> Option<&'static str> {
 
     match app.thread_ui.data.conversation_state() {
         None => Some("this is a historical task record — start a new chat to continue"),
-        Some(_) if app.thread_ui.data.conversation().is_some_and(|r| r.archived) => {
+        Some(_)
+            if app
+                .thread_ui
+                .data
+                .conversation()
+                .is_some_and(|r| r.archived) =>
+        {
             Some("unarchive this chat to send a message")
         }
         Some(ConversationState::Queued) => Some("waiting for the harness to start — Esc cancels"),
@@ -1926,26 +1933,24 @@ fn send_ask_answer(app: &mut App, ask: &ThreadAsk) {
                     .cloned()
                     .unwrap_or_default();
                 let question_id = question.id.clone()?;
-                (!values.is_empty())
-                    .then_some(coducktor_contract::ConversationQuestionAnswer {
-                        question_id,
-                        values,
-                    })
+                (!values.is_empty()).then_some(coducktor_contract::ConversationQuestionAnswer {
+                    question_id,
+                    values,
+                })
             })
             .collect::<Vec<_>>();
         if answers.is_empty() {
             app.notice = Some("choose an answer first".to_owned());
             return;
         }
-        app.pending
-            .push(PendingAction::AnswerConversationQuestion {
-                project: app.thread_ui.data.project.clone(),
-                id: record.id,
-                input: coducktor_contract::AnswerConversationQuestionInput {
-                    request_id: ask.id.clone(),
-                    answers,
-                },
-            });
+        app.pending.push(PendingAction::AnswerConversationQuestion {
+            project: app.thread_ui.data.project.clone(),
+            id: record.id,
+            input: coducktor_contract::AnswerConversationQuestionInput {
+                request_id: ask.id.clone(),
+                answers,
+            },
+        });
         return;
     }
     let Some(run) = app.thread_ui.data.run().cloned() else {
@@ -2044,7 +2049,6 @@ fn apply_action(app: &mut App, action: ThreadAction) {
             text: None,
             images: None,
         }),
-        ThreadAction::Terminal => app.pending.push(PendingAction::OpenInCli { project, id }),
         ThreadAction::Archive => app.pending.push(PendingAction::Archive {
             project,
             id,
@@ -2230,7 +2234,9 @@ mod tests {
         app
     }
 
-    fn conversation(state: coducktor_contract::ConversationState) -> coducktor_contract::ConversationRecord {
+    fn conversation(
+        state: coducktor_contract::ConversationState,
+    ) -> coducktor_contract::ConversationRecord {
         coducktor_contract::ConversationRecord {
             record_kind: coducktor_contract::RecordKind::Conversation,
             id: "chat-1".to_owned(),
@@ -2335,9 +2341,7 @@ mod tests {
             let sends = app
                 .pending
                 .iter()
-                .filter(|action| {
-                    matches!(action, PendingAction::SubmitConversationMessage { .. })
-                })
+                .filter(|action| matches!(action, PendingAction::SubmitConversationMessage { .. }))
                 .count();
             assert_eq!(sends, 1, "one user message is exactly one queued turn");
         }
@@ -2351,7 +2355,11 @@ mod tests {
             followup_blocked_reason(&app).is_some_and(|reason| reason.contains("question")),
             "the composer explains why it is unavailable"
         );
-        assert!(!submit_composer(&mut app, "unrelated".to_owned(), Vec::new()));
+        assert!(!submit_composer(
+            &mut app,
+            "unrelated".to_owned(),
+            Vec::new()
+        ));
     }
 
     #[test]
@@ -2376,16 +2384,18 @@ mod tests {
 
         let Some(PendingAction::AnswerConversationQuestion { input, .. }) = app.pending.first()
         else {
-            panic!("the answer travels the runner-owned path: {:?}", app.pending);
+            panic!(
+                "the answer travels the runner-owned path: {:?}",
+                app.pending
+            );
         };
         assert_eq!(input.request_id, "req-7");
         assert_eq!(input.answers[0].question_id, "library");
         assert_eq!(input.answers[0].values, vec!["serde".to_owned()]);
         assert!(
-            !app.pending.iter().any(|action| matches!(
-                action,
-                PendingAction::SubmitConversationMessage { .. }
-            )),
+            !app.pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::SubmitConversationMessage { .. })),
             "answering must not open a second provider turn"
         );
     }
@@ -2395,7 +2405,10 @@ mod tests {
         use coducktor_contract::ConversationState;
 
         let mut app = app_with_conversation(ConversationState::Running);
-        assert!(!can_send_followup(&app), "a running turn holds the composer");
+        assert!(
+            !can_send_followup(&app),
+            "a running turn holds the composer"
+        );
 
         // This is the event the engine publishes when the provider's turn ends.
         let mut settled = conversation(ConversationState::Idle);
@@ -2446,18 +2459,21 @@ mod tests {
             "a chat must not be routed through run actions: {:?}",
             app.pending
         );
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::ArchiveConversation { .. }
-        )));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::UnreadConversation { .. }
-        )));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::DeleteConversation { .. }
-        )));
+        assert!(
+            app.pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::ArchiveConversation { .. }))
+        );
+        assert!(
+            app.pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::UnreadConversation { .. }))
+        );
+        assert!(
+            app.pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::DeleteConversation { .. }))
+        );
     }
 
     #[test]
@@ -2477,13 +2493,12 @@ mod tests {
     }
 
     #[test]
-    fn a_conversation_offers_no_finish_continue_or_terminal() {
+    fn a_conversation_offers_no_finish_or_continue() {
         use coducktor_contract::ConversationState;
 
         for action in [
             ThreadAction::Finish,
             ThreadAction::Continue,
-            ThreadAction::Terminal,
             ThreadAction::ReviewAccept,
         ] {
             let mut app = app_with_conversation(ConversationState::Idle);
@@ -2504,10 +2519,10 @@ mod tests {
         running.pending.clear();
         apply_action(&mut running, ThreadAction::Cancel);
         assert!(
-            running.pending.iter().any(|action| matches!(
-                action,
-                PendingAction::CancelConversationTurn { .. }
-            )),
+            running
+                .pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::CancelConversationTurn { .. })),
             "cancel needs no confirmation — it leaves the chat follow-up capable"
         );
         assert!(running.confirm.is_none());
@@ -2515,7 +2530,10 @@ mod tests {
         let mut active = app_with_conversation(ConversationState::Running);
         active.pending.clear();
         apply_action(&mut active, ThreadAction::Delete);
-        assert!(active.confirm.is_none(), "delete is refused while a turn runs");
+        assert!(
+            active.confirm.is_none(),
+            "delete is refused while a turn runs"
+        );
         assert!(active.notice.is_some());
 
         let mut idle = app_with_conversation(ConversationState::Idle);
@@ -2766,10 +2784,7 @@ mod tests {
         open(&mut app, "main", "run-1");
 
         assert_eq!(
-            app.thread_ui
-                .data
-                .run()
-                .map(|run| run.record.task.as_str()),
+            app.thread_ui.data.run().map(|run| run.record.task.as_str()),
             Some("Fix the task experience")
         );
         assert!(matches!(
@@ -3189,7 +3204,11 @@ mod tests {
         }
     }
 
-    fn conversation_screen(state: coducktor_contract::ConversationState, width: u16, height: u16) -> String {
+    fn conversation_screen(
+        state: coducktor_contract::ConversationState,
+        width: u16,
+        height: u16,
+    ) -> String {
         let mut app = app_with_conversation(state);
         app.thread_ui.push_event(
             1.0,
@@ -3220,7 +3239,10 @@ mod tests {
                 screen.contains("claude"),
                 "the immutable harness is in the header at {width}x{height}"
             );
-            assert!(screen.contains("git: manual"), "git mode is shown in the header");
+            assert!(
+                screen.contains("git: manual"),
+                "git mode is shown in the header"
+            );
             assert!(screen.contains("worktree"));
             // Scan only for strings the thread itself would draw. "Terminal" is excluded here
             // because the workspace sidebar legitimately offers an embedded terminal tab; the
@@ -3304,7 +3326,9 @@ mod tests {
 
         assert!(app.pending.is_empty());
         assert!(
-            app.notice.as_deref().is_some_and(|n| n.contains("worktree")),
+            app.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("worktree")),
             "auto commits need a managed checkout"
         );
     }
