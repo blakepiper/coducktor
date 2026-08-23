@@ -8,7 +8,6 @@
 //! are the small decisions the eventual session/lifecycle modules can share without recreating
 //! the run lifecycle rules in each caller.
 
-pub mod auto_resume;
 pub mod context_refresh;
 pub mod lifecycle;
 #[path = "manager/dispatch.rs"]
@@ -18,15 +17,10 @@ mod manager_lifecycle;
 #[path = "manager/persistence.rs"]
 mod manager_persistence;
 pub mod monitoring;
-pub mod quota;
-pub mod recovery;
-pub mod review_gate;
 pub mod semaphore;
 pub mod session;
 pub mod variants;
 
-pub use quota::{MAX_AUTO_RESUME_ATTEMPTS, QuotaReconciliation, reconcile_quota};
-pub use review_gate::{enabled as review_gate_enabled, settle_status as success_status};
 pub use semaphore::{RepositoryRootLease, WorkspaceSemaphore};
 pub use session::{
     MAX_AUTONOMOUS_CONTINUES, TurnMarkerDecision, append_turn_text, decide_turn_marker,
@@ -549,21 +543,6 @@ pub fn derive_account_holds(runs: &[RunRecord], now: &str) -> AccountHolds {
     holds
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AutoResumeReport {
-    pub plan: QuotaReconciliation,
-    pub requeued: Vec<String>,
-    pub retired: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RecoveryReport {
-    pub queued: Vec<String>,
-    pub settled: Vec<String>,
-    pub resumed: Vec<String>,
-    pub failed: Vec<String>,
-}
-
 /// Input accepted by [`RunManager::start_run`]. It deliberately contains policy and prompt data,
 /// not a backend client or process handle.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -830,7 +809,6 @@ pub struct RuntimeOptions {
     /// A durable deadline for a parked monitoring turn. `None` deliberately disables timer
     /// driven wake-up; callers can still deliver an explicit monitoring message.
     pub monitoring_wake_interval_minutes: Option<u64>,
-    pub review_gate: bool,
     pub auto_resume_on_usage_limit: bool,
 }
 
@@ -853,7 +831,6 @@ impl Default for RuntimeOptions {
             max_parallel: 2,
             max_monitoring_sessions: 2,
             monitoring_wake_interval_minutes: None,
-            review_gate: false,
             auto_resume_on_usage_limit: true,
         }
     }
@@ -1863,12 +1840,6 @@ mod tests {
             decide_turn_marker("ordinary final answer", true, false),
             TurnMarkerDecision::Idle
         );
-        assert!(!review_gate_enabled(None, Some("true")));
-        assert!(review_gate_enabled(None, Some("1")));
-        assert!(!review_gate_enabled(Some(false), Some("1")));
-        assert_eq!(success_status(true, true, false), RunStatus::Review);
-        assert_eq!(success_status(true, true, true), RunStatus::Done);
-        assert_eq!(success_status(false, true, false), RunStatus::Done);
     }
 
     #[test]
@@ -2677,7 +2648,6 @@ mod tests {
         let mut manager = RunManager::with_session_factory(dir.path(), factory);
         manager.set_runtime_options(RuntimeOptions {
             max_parallel: 1,
-            review_gate: false,
             ..RuntimeOptions::default()
         });
         let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
@@ -2983,26 +2953,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settles_changed_runs_at_review_and_finish_accepts_them() {
-        let dir = tempdir().unwrap();
-        let (factory, _requests) = fake_factory(vec![completed_session("review-session")]);
-        let mut manager = RunManager::with_session_factory(dir.path(), factory);
-        manager.set_runtime_options(RuntimeOptions {
-            max_parallel: 1,
-            review_gate: true,
-            ..RuntimeOptions::default()
-        });
-        manager.set_diff_inspector(FakeDiff(true));
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let run = manager
-            .start_run(&workflow, start_input("review me"))
-            .unwrap();
-        assert_eq!(run.status, RunStatus::Review);
-        assert!(manager.finish(&run.id).unwrap());
-        assert_eq!(manager.get_run(&run.id).unwrap().status, RunStatus::Done);
-    }
-
-    #[test]
     fn runtime_starts_three_variants_with_one_group_and_fixed_hints() {
         let dir = tempdir().unwrap();
         let (factory, requests) = fake_factory(vec![
@@ -3041,69 +2991,6 @@ mod tests {
                 .prompt
                 .contains("thorough, structural")
         );
-    }
-
-    #[test]
-    fn recover_rebuilds_queued_jobs_from_the_durable_workflow_definition() {
-        let dir = tempdir().unwrap();
-        let (factory, _requests) = fake_factory(vec![completed_session("recovered")]);
-        let mut first = RunManager::with_session_factory(dir.path(), factory);
-        first.set_runtime_options(RuntimeOptions {
-            max_parallel: 0,
-            review_gate: false,
-            ..RuntimeOptions::default()
-        });
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let queued = first
-            .start_run(&workflow, start_input("recover queued"))
-            .unwrap();
-        assert_eq!(queued.status, RunStatus::Queued);
-        drop(first);
-
-        let (factory, _requests) = fake_factory(vec![completed_session("recovered")]);
-        let mut recovered = RunManager::with_session_factory(dir.path(), factory);
-        let report = recovered.recover().unwrap();
-        assert_eq!(report.queued, vec![queued.id.clone()]);
-        assert_eq!(
-            recovered.get_run(&queued.id).unwrap().status,
-            RunStatus::Done
-        );
-        assert!(!recovered.is_active(&queued.id));
-    }
-
-    #[test]
-    fn recover_settles_a_durable_waiting_session_without_resuming_it() {
-        let dir = tempdir().unwrap();
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let mut first = RunManager::open(dir.path());
-        let run = first
-            .create_workflow_run(&workflow, "recover waiting")
-            .unwrap();
-        first
-            .update_step(
-                &run.id,
-                "work",
-                StepPatch::new()
-                    .set("status", StepStatus::Waiting)
-                    .set("iterations", 1.0)
-                    .set("sessionId", "waiting-session")
-                    .set("backend", Runner::Claude),
-            )
-            .unwrap();
-        first
-            .update_run(&run.id, RunPatch::new().set("status", RunStatus::Waiting))
-            .unwrap();
-        drop(first);
-
-        let mut recovered = RunManager::open(dir.path());
-        let report = recovered.recover().unwrap();
-        assert_eq!(report.settled, vec![run.id.clone()]);
-        assert_eq!(recovered.get_run(&run.id).unwrap().status, RunStatus::Done);
-        assert_eq!(
-            recovered.get_run(&run.id).unwrap().steps[0].status,
-            StepStatus::Done
-        );
-        assert!(!recovered.is_active(&run.id));
     }
 
     #[test]
@@ -3194,169 +3081,6 @@ mod tests {
         assert_eq!(settled.steps[0].status, StepStatus::Done);
         assert!(settled.finished_at.is_some());
         assert!(!reopened.is_active(&run.id));
-    }
-
-    #[test]
-    fn recover_marks_a_running_record_interrupted_and_requeues_a_continuation() {
-        let dir = tempdir().unwrap();
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let mut first = RunManager::open(dir.path());
-        let run = first
-            .create_workflow_run(&workflow, "recover running")
-            .unwrap();
-        first
-            .update_step(
-                &run.id,
-                "work",
-                StepPatch::new()
-                    .set("status", StepStatus::Running)
-                    .set("iterations", 1.0)
-                    .set("sessionId", "running-session")
-                    .set("backend", Runner::Claude),
-            )
-            .unwrap();
-        first
-            .update_run(&run.id, RunPatch::new().set("status", RunStatus::Running))
-            .unwrap();
-        drop(first);
-
-        let (factory, requests) = fake_factory(vec![completed_session("continued")]);
-        let mut recovered = RunManager::with_session_factory(dir.path(), factory);
-        let report = recovered.recover().unwrap();
-        assert_eq!(report.resumed, vec![run.id.clone()]);
-        assert_eq!(recovered.get_run(&run.id).unwrap().status, RunStatus::Done);
-        assert_eq!(
-            requests.lock().unwrap()[0].session_id.as_deref(),
-            Some("running-session")
-        );
-        assert!(
-            recovered
-                .get_run(&run.id)
-                .unwrap()
-                .steps
-                .iter()
-                .any(|step| step.id == "continue-1" && step.status == StepStatus::Done)
-        );
-    }
-
-    #[test]
-    fn quota_reconciliation_uses_deadlines_and_account_holds_without_timers() {
-        let dir = tempdir().unwrap();
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let mut first = RunManager::open(dir.path());
-        let future = first
-            .create_workflow_run(&workflow, "future limit")
-            .unwrap();
-        first
-            .update_step(
-                &future.id,
-                "work",
-                StepPatch::new().set("sessionId", "future-session"),
-            )
-            .unwrap();
-        first
-            .update_run(
-                &future.id,
-                RunPatch::new()
-                    .set("status", RunStatus::Failed)
-                    .set("autoResumeAt", "2099-01-01T00:00:00.000Z"),
-            )
-            .unwrap();
-        let queued = first
-            .create_workflow_run(&workflow, "blocked fresh work")
-            .unwrap();
-        first
-            .update_run(
-                &queued.id,
-                RunPatch::new()
-                    .set("runner", Runner::Claude)
-                    .set("agentProfile", "default"),
-            )
-            .unwrap();
-        let plan = first.reconcile_quota_at("2026-01-01T00:00:00.000Z");
-        assert_eq!(plan.scheduled, vec![future.id.clone()]);
-        assert_eq!(plan.blocked_queue, vec![queued.id.clone()]);
-        assert!(plan.holds.deadline.contains("claude:default"));
-
-        let due = first.create_workflow_run(&workflow, "due limit").unwrap();
-        first
-            .update_step(
-                &due.id,
-                "work",
-                StepPatch::new().set("sessionId", "due-session"),
-            )
-            .unwrap();
-        first
-            .update_run(
-                &due.id,
-                RunPatch::new()
-                    .set("status", RunStatus::Failed)
-                    .set("autoResumeAt", "2020-01-01T00:00:00.000Z")
-                    .set("agentProfile", "second"),
-            )
-            .unwrap();
-        first.set_runtime_options(RuntimeOptions {
-            max_parallel: 0,
-            review_gate: false,
-            ..RuntimeOptions::default()
-        });
-        let report = first
-            .reconcile_auto_resumes("2026-01-01T00:00:00.000Z")
-            .unwrap();
-        assert_eq!(report.requeued, vec![due.id.clone()]);
-        assert_eq!(first.get_run(&due.id).unwrap().status, RunStatus::Queued);
-        assert_eq!(
-            first.get_run(&due.id).unwrap().auto_resume_attempts,
-            Some(1.0)
-        );
-        assert!(
-            first
-                .reconcile_quota_at("2026-01-01T00:00:00.000Z")
-                .holds
-                .in_flight
-                .contains("claude:second")
-        );
-    }
-
-    #[test]
-    fn disabled_auto_resume_keeps_due_usage_limited_runs_parked() {
-        let dir = tempdir().unwrap();
-        let workflow = workflow_with_steps(vec![agent_workflow_step("work")]);
-        let mut manager = RunManager::open(dir.path());
-        let run = manager
-            .create_workflow_run(&workflow, "wait for quota")
-            .unwrap();
-        manager
-            .update_step(
-                &run.id,
-                "work",
-                StepPatch::new().set("sessionId", "quota-session"),
-            )
-            .unwrap();
-        manager
-            .update_run(
-                &run.id,
-                RunPatch::new()
-                    .set("status", RunStatus::Failed)
-                    .set("autoResumeAt", "2020-01-01T00:00:00.000Z"),
-            )
-            .unwrap();
-        manager.set_runtime_options(RuntimeOptions {
-            auto_resume_on_usage_limit: false,
-            ..RuntimeOptions::default()
-        });
-
-        let report = manager
-            .reconcile_auto_resumes("2026-01-01T00:00:00.000Z")
-            .unwrap();
-
-        assert_eq!(report.plan.due, vec![run.id.clone()]);
-        assert!(report.requeued.is_empty());
-        assert_eq!(manager.get_run(&run.id).unwrap().status, RunStatus::Failed);
-        assert_eq!(
-            manager.get_run(&run.id).unwrap().auto_resume_at.as_deref(),
-            Some("2020-01-01T00:00:00.000Z")
-        );
     }
 
     #[test]

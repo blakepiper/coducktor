@@ -20,17 +20,16 @@ use coducktor_contract::{
     BackendCheck, BackendCheckName, CancelAutoResumeResponse, CancelResponse, Capabilities,
     ChangedFile, ChangedFileStatus, ChangesPayload, ConfigResponse, ContinueInput,
     ContinueResponse, CreateAgentProfileInput, CreatePrResponse, CreateRunInput, CreateRunResponse,
-    DeleteRunResponse, DeleteWorkflowResponse, EditQueuedMessageResponse, EmptyRepoResponse,
-    FinishResponse, ForgeInfo, ForgeKind, GitCommitInput, GitCommitResponse, GitPushResponse,
-    GithubChecksAvailable, GithubChecksData, GithubChecksUnavailable, GithubCommentsData,
-    GithubData, GithubItemKind, GithubMergeInput, GithubMergeResponse, GithubPrChangesAvailable,
-    GithubPrChangesData, GithubPrChangesUnavailable, GithubPrMergeStateResponse,
-    GithubRefStatusAvailable, GithubRefStatusData, GithubRefStatusUnavailable, GroupResponse,
-    GroupVariant, HealthProject, HealthResponse, IdeDirectoryResponse, IdeEntry, IdeEntryType,
-    IdeFileResponse, ImageInput, LogEntry, MarkAllReadResponse, MessageInput, MessageResponse,
-    ModelCatalogSource, ModelDiscoveryRunner, ModelUsageEntry, OpenAgentAccountFileInput,
-    OpenAgentAccountFileResponse, OpenInInput, OpenProjectInResponse, OpenTargetsResponse,
-    ParsedWorkflow, PatchRunInput, PickVariantRequest, PickVariantResponse, PlanResponse,
+    DeleteRunResponse, EditQueuedMessageResponse, EmptyRepoResponse, FinishResponse, ForgeInfo,
+    ForgeKind, GitCommitInput, GitCommitResponse, GitPushResponse, GithubChecksAvailable,
+    GithubChecksData, GithubChecksUnavailable, GithubCommentsData, GithubData, GithubItemKind,
+    GithubMergeInput, GithubMergeResponse, GithubPrChangesAvailable, GithubPrChangesData,
+    GithubPrChangesUnavailable, GithubPrMergeStateResponse, GithubRefStatusAvailable,
+    GithubRefStatusData, GithubRefStatusUnavailable, GroupResponse, GroupVariant, HealthProject,
+    HealthResponse, IdeDirectoryResponse, IdeEntry, IdeEntryType, IdeFileResponse, ImageInput,
+    LogEntry, MarkAllReadResponse, MessageInput, MessageResponse, ModelCatalogSource,
+    ModelDiscoveryRunner, ModelUsageEntry, OpenAgentAccountFileInput, OpenAgentAccountFileResponse,
+    OpenInInput, OpenProjectInResponse, OpenTargetsResponse, PatchRunInput, PlanResponse,
     PresentRepoResponse, ProjectListEntry, ProjectSource, ProjectStatus, ProjectsResponse,
     ProviderConnectAlreadyConnected, ProviderConnectInput, ProviderConnectOpened,
     ProviderConnectResponse, ProviderConnectionState, ProviderStatus, ProviderStatusResponse,
@@ -41,13 +40,13 @@ use coducktor_contract::{
     RemoveWorktreeResponse, RepoBranchRequest, RepoBranchResponse, RepoCommitPayload, RepoDiffStat,
     RepoInfo, RepoResponse, RunCommit, RunCommitsResponse, RunEvent, RunHistoryContext,
     RunHistoryEvent, RunHistoryPage, RunIndexEntry, Runner, RunnerModelCatalogResponse,
-    RunnerModelOption, RunnerSelection, RunsIndexResponse, SaveWorkflowInput, SaveWorkflowResponse,
-    SelectAgentProfileInput, SetAgentConfigInput, SetConfigInput, SetWorkspaceConfigInput,
-    SetWorkspaceUiStateInput, Skill, StatusEntry, UpdateAgentProfileInput, UpdateProjectInput,
-    UpdateProjectResponse, UsageAggregate, UsageAggregateScope, UsageConfidence, UserMcpListing,
-    WorkflowStepDef, WorkflowsResponse, WorkspaceConfigResponse, WorkspaceUiState,
-    WorkspaceUsagePolicyHealth, WorkspaceUsageRefresh, WorkspaceUsageResponse, WorktreeDirEntry,
-    WorktreeEntry, WorktreeEntryType, WorktreeInfo, WorktreeRunStatus, WorktreesResponse,
+    RunnerModelOption, RunnerSelection, RunsIndexResponse, SelectAgentProfileInput,
+    SetAgentConfigInput, SetConfigInput, SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill,
+    StatusEntry, UpdateAgentProfileInput, UpdateProjectInput, UpdateProjectResponse,
+    UsageAggregate, UsageAggregateScope, UsageConfidence, UserMcpListing, WorkflowStepDef,
+    WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsagePolicyHealth, WorkspaceUsageRefresh,
+    WorkspaceUsageResponse, WorktreeDirEntry, WorktreeEntry, WorktreeEntryType, WorktreeInfo,
+    WorktreeRunStatus, WorktreesResponse,
 };
 use coducktor_contract::{
     AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
@@ -65,21 +64,19 @@ use coducktor_core::conversations::{
     PendingConversationAnswer,
 };
 use coducktor_core::git::worktree::{AutosaveReason, AutosaveResult, autosave_commit};
-use coducktor_core::handoff::{append_handoff_heartbeat, handoff_progress_excerpt, read_handoff};
+use coducktor_core::handoff::{handoff_progress_excerpt, read_handoff};
 use coducktor_core::paths::{
     ProcessEnv, agent_accounts_path, agent_home_paths, expand_tilde, is_absolute_config_dir,
     project_state_dir, project_state_dir_in, real_home_dir,
 };
 use coducktor_core::skills::discover_skills;
-use coducktor_core::workflows::load::{WORKFLOWS_DIR, load_workflows};
+use coducktor_core::workflows::load::load_workflows;
 use coducktor_core::workflows::run::{
     AUTOMATIC_COMMIT_MESSAGE_NUDGE, AUTONOMOUS_NUDGE, AdmittedTurn, CancellationToken,
     CheckExecutor, CheckResult, DiffInspector, EventInput, FinishStart, GitAutoMessage,
     PromptImage, RepositoryRootLease, RunManager, RuntimeActive, RuntimeOptions, SessionFactory,
     SessionOutcome, StartRunInput as CoreStartRunInput, TurnStep, WorkspaceSemaphore,
-    review_gate_enabled,
 };
-use coducktor_core::workflows::types::{parse_workflow_file_doc, steps_issue};
 use coducktor_core::workspace::agent_accounts::{
     AgentAccount, has_control_chars, is_valid_account_id, load_agent_accounts,
     merge_write_agent_accounts, supports_profiles,
@@ -1047,12 +1044,7 @@ fn configure_production_manager(
         &repo_config_path_at(repo_root, state_home),
         &workspace.agent_defaults,
     );
-    manager.set_runtime_options(effective_runtime_options(
-        workspace,
-        &repo,
-        project_id,
-        std::env::var("DUCK_REVIEW_GATE").ok().as_deref(),
-    ));
+    manager.set_runtime_options(effective_runtime_options(workspace, &repo, project_id));
     manager.set_intelligent_context_refresh(workspace.resources.intelligent_context_refresh);
     manager.set_workspace_semaphore(workspace_admission);
     manager.set_repository_lease(repository_lease);
@@ -1068,7 +1060,6 @@ fn effective_runtime_options(
     workspace: &WorkspaceConfig,
     repo: &RepoConfig,
     project_id: &str,
-    review_gate_override: Option<&str>,
 ) -> RuntimeOptions {
     let project_limit = workspace
         .projects
@@ -1083,7 +1074,6 @@ fn effective_runtime_options(
             .max(1),
         max_monitoring_sessions: workspace.resources.max_monitoring_sessions as usize,
         monitoring_wake_interval_minutes: workspace.resources.monitoring_wake_interval_minutes,
-        review_gate: review_gate_enabled(repo.review_gate, review_gate_override),
         auto_resume_on_usage_limit: workspace.resources.auto_resume_on_usage_limit,
     }
 }
@@ -2113,102 +2103,8 @@ impl InProcessEngine {
         })
     }
 
-    // ---- workflows + skills ----------------------------------------------------------------
-
-    pub(crate) async fn workflows(&self) -> Result<WorkflowsResponse, EngineError> {
-        let (workflows, issues) = load_workflows(&self.repo_root);
-        Ok(WorkflowsResponse { workflows, issues })
-    }
-
     pub async fn skills(&self) -> Result<Vec<Skill>, EngineError> {
         Ok(discover_skills(&self.repo_root, &ProcessEnv))
-    }
-
-    // ---- workflow builder writes ------------------------------------------------------------
-
-    /// Validate and save a workflow definition as YAML.
-    pub(crate) async fn save_workflow(
-        &self,
-        input: &SaveWorkflowInput,
-    ) -> Result<SaveWorkflowResponse, EngineError> {
-        let (name, description, steps, compact) =
-            workflow_input(input).map_err(|reason| EngineError::Conflict { reason })?;
-        let directory = self.repo_root.join(WORKFLOWS_DIR);
-        let path = directory.join(format!("{}.yaml", workflow_slug(&name)));
-        let yaml = workflow_yaml(&name, description.as_deref(), &steps, compact)
-            .map_err(|reason| EngineError::Conflict { reason })?;
-        std::fs::create_dir_all(&directory).map_err(io_err)?;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true);
-        if input.overwrite.unwrap_or(false) {
-            options.truncate(true);
-        } else {
-            options.create_new(true);
-        }
-        let mut file = match options.open(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(EngineError::Conflict {
-                    reason: format!("workflow file already exists: {}", path.display()),
-                });
-            }
-            Err(error) => return Err(io_err(error)),
-        };
-        use std::io::Write as _;
-        file.write_all(yaml.as_bytes()).map_err(io_err)?;
-        Ok(SaveWorkflowResponse {
-            path: path.to_string_lossy().into_owned(),
-            name,
-        })
-    }
-
-    /// Delete a user-authored workflow.
-    pub(crate) async fn delete_workflow(
-        &self,
-        name: &str,
-    ) -> Result<DeleteWorkflowResponse, EngineError> {
-        let (workflows, _) = load_workflows(&self.repo_root);
-        let workflow = workflows
-            .into_iter()
-            .find(|workflow| workflow.name == name)
-            .ok_or(EngineError::NotFound)?;
-        let Some(path) = workflow.path else {
-            return Err(EngineError::Conflict {
-                reason: "built-in workflows cannot be deleted".to_owned(),
-            });
-        };
-        let directory = self.repo_root.join(WORKFLOWS_DIR);
-        let target = PathBuf::from(&path);
-        if !target.starts_with(&directory) {
-            return Err(EngineError::Conflict {
-                reason: "refusing to delete a file outside the workflows dir".to_owned(),
-            });
-        }
-        std::fs::remove_file(&target).map_err(io_err)?;
-        Ok(DeleteWorkflowResponse {
-            ok: true,
-            path: target.to_string_lossy().into_owned(),
-        })
-    }
-
-    /// Parse and validate workflow YAML.
-    pub(crate) async fn parse_workflow(&self, yaml: &str) -> Result<ParsedWorkflow, EngineError> {
-        if yaml.trim().is_empty() || yaml.chars().count() > 100_000 {
-            return Err(EngineError::Conflict {
-                reason: "yaml must be between 1 and 100000 characters".to_owned(),
-            });
-        }
-        let value: Value =
-            serde_yaml_ng::from_str(yaml).map_err(|error| EngineError::Conflict {
-                reason: format!("not valid YAML: {error}"),
-            })?;
-        let (name, description, steps) =
-            parse_workflow_file_doc(&value).map_err(|reason| EngineError::Conflict { reason })?;
-        Ok(ParsedWorkflow {
-            name,
-            description,
-            steps,
-        })
     }
 
     // ---- ui-state --------------------------------------------------------------------------
@@ -3267,107 +3163,6 @@ impl InProcessEngine {
             })
             .collect();
         Ok(GroupResponse { group_id, runs })
-    }
-
-    pub(crate) async fn pick_variant(
-        &self,
-        group_id: &str,
-        input: &PickVariantRequest,
-    ) -> Result<PickVariantResponse, EngineError> {
-        if input.run_id.is_empty() {
-            return Err(EngineError::Conflict {
-                reason: "runId is required".to_owned(),
-            });
-        }
-        let mut manager = self.manager.lock();
-        let runs: Vec<_> = manager
-            .list_runs()
-            .into_iter()
-            .filter(|run| run.group_id.as_deref() == Some(group_id))
-            .collect();
-        if runs.is_empty() {
-            return Err(EngineError::NotFound);
-        }
-        let Some(winner) = runs.iter().find(|run| run.id == input.run_id).cloned() else {
-            return Err(EngineError::Conflict {
-                reason: "runId is not part of this group".to_owned(),
-            });
-        };
-        if manager.is_active(&winner.id) {
-            return Err(EngineError::Conflict {
-                reason: "this variant is still active — wait for it to finish first".to_owned(),
-            });
-        }
-
-        let losers: Vec<_> = runs.into_iter().filter(|run| run.id != winner.id).collect();
-        let repo_root = self.repo_root.clone();
-        let data_dir = self.project_data_dir(&repo_root);
-        let config = load_config(
-            &repo_config_path_at(&repo_root, &self.state_home),
-            &self.loaded_workspace_config().agent_defaults,
-        );
-        let review_gate = review_gate_enabled(
-            config.review_gate,
-            std::env::var("DUCK_REVIEW_GATE").ok().as_deref(),
-        );
-        if winner.status != coducktor_contract::RunStatus::Review
-            && winner.autonomous != Some(true)
-            && review_gate
-            && let Some(worktree_path) = winner.worktree_path.as_deref()
-            && Path::new(worktree_path).exists()
-        {
-            let diff = coducktor_core::git::worktree::worktree_diff(
-                Path::new(worktree_path),
-                winner.base_branch.as_deref().unwrap_or("HEAD"),
-                1_000_000,
-            );
-            if !diff.trim().is_empty() && !diff.starts_with("(diff failed") {
-                let _ = manager.update_run_value(
-                    &winner.id,
-                    serde_json::json!({ "status": coducktor_contract::RunStatus::Review }),
-                );
-            }
-        }
-        let _ = manager.append_event(
-            &winner.id,
-            lifecycle_event(format!(
-                "picked from {} variants — {} other variant(s) archived",
-                losers.len() + 1,
-                losers.len()
-            )),
-        );
-        append_handoff_heartbeat(
-            &data_dir,
-            &winner.id,
-            &format!("picked from {} variants", losers.len() + 1),
-        );
-        for loser in losers {
-            if manager.is_active(&loser.id) {
-                let _ = manager.cancel(&loser.id);
-            }
-            if let Some(path) = loser.worktree_path.as_deref() {
-                coducktor_core::git::worktree::remove_worktree(
-                    &repo_root,
-                    Path::new(path),
-                    loser.branch.as_deref(),
-                );
-            }
-            let _ = manager.update_run_value(
-                &loser.id,
-                serde_json::json!({ "worktreePath": null, "branch": null }),
-            );
-            let _ = manager.set_archived(&loser.id, true);
-            let _ = manager.append_event(
-                &loser.id,
-                lifecycle_event(format!(
-                    "variant {} was picked — this variant is archived, its worktree removed",
-                    winner.variant.as_deref().unwrap_or("?")
-                )),
-            );
-        }
-        Ok(PickVariantResponse {
-            winner: manager.get_run(&winner.id).cloned(),
-        })
     }
 
     // ---- open-targets -----------------------------------------------------------------------
@@ -7718,18 +7513,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflows_and_skills_read_from_the_repo_root() {
+    async fn skills_read_from_the_repo_root() {
         let dir = TempDir::new().unwrap();
-        let workflows_dir = dir.path().join(".ai/coducktor/workflows");
-        std::fs::create_dir_all(&workflows_dir).unwrap();
-        std::fs::write(
-            workflows_dir.join("demo.yaml"),
-            "name: demo\nsteps:\n  - id: task\n    prompt: \"{{task}}\"\n",
-        )
-        .unwrap();
         let engine = engine(&dir);
-        let workflows = engine.workflows().await.unwrap();
-        assert!(workflows.workflows.iter().any(|w| w.name == "demo"));
 
         // `discover_skills` also reads global, host-level locations, so this asserts only that
         // the call succeeds rather than that the (sandbox-dependent) count is zero.
@@ -8045,17 +7831,15 @@ mod tests {
             });
         let repo = RepoConfig {
             max_parallel: 8,
-            review_gate: None,
             ..RepoConfig::default()
         };
 
-        let options = effective_runtime_options(&workspace, &repo, "alpha", Some("1"));
+        let options = effective_runtime_options(&workspace, &repo, "alpha");
 
         assert_eq!(options.max_parallel, 2);
         assert_eq!(options.max_monitoring_sessions, 1);
         assert_eq!(options.monitoring_wake_interval_minutes, Some(5));
         assert!(!options.auto_resume_on_usage_limit);
-        assert!(options.review_gate);
     }
 
     #[tokio::test]
@@ -8225,130 +8009,6 @@ mod tests {
         );
         assert!(usage.refresh.is_some());
         assert!(usage.policy_health.is_some());
-    }
-
-    fn save_input(name: &str, steps: Vec<WorkflowStepDef>) -> SaveWorkflowInput {
-        SaveWorkflowInput {
-            name: name.to_owned(),
-            description: None,
-            steps: Some(steps),
-            skills: None,
-            overwrite: None,
-        }
-    }
-
-    fn one_step() -> Vec<WorkflowStepDef> {
-        vec![WorkflowStepDef {
-            id: "task".to_owned(),
-            name: Some("Task".to_owned()),
-            prompt: Some("{{task}}".to_owned()),
-            skill: None,
-            model: None,
-            runner: None,
-            allowed_tools: None,
-            bash_allowlist: None,
-            command: None,
-            on_fail: None,
-        }]
-    }
-
-    #[tokio::test]
-    async fn save_workflow_writes_a_yaml_file_the_loader_can_read_back() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let response = engine
-            .save_workflow(&save_input("My Workflow", one_step()))
-            .await
-            .unwrap();
-        assert!(response.path.ends_with("my-workflow.yaml"));
-        assert_eq!(response.name, "My Workflow");
-
-        let (workflows, issues) = load_workflows(dir.path());
-        assert!(issues.is_empty());
-        assert!(workflows.iter().any(|w| w.name == "My Workflow"));
-    }
-
-    #[tokio::test]
-    async fn save_workflow_conflicts_on_an_existing_file_without_overwrite() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        engine
-            .save_workflow(&save_input("Dup", one_step()))
-            .await
-            .unwrap();
-        let error = engine
-            .save_workflow(&save_input("Dup", one_step()))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
-    async fn save_workflow_rejects_steps_and_skills_together() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let mut input = save_input("Both", one_step());
-        input.skills = Some(vec!["a-skill".to_owned()]);
-        let error = engine.save_workflow(&input).await.unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
-    async fn delete_workflow_removes_a_file_the_builder_saved() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        engine
-            .save_workflow(&save_input("To Delete", one_step()))
-            .await
-            .unwrap();
-        let response = engine.delete_workflow("To Delete").await.unwrap();
-        assert!(response.ok);
-        let (workflows, _) = load_workflows(dir.path());
-        assert!(!workflows.iter().any(|w| w.name == "To Delete"));
-    }
-
-    #[tokio::test]
-    async fn delete_workflow_refuses_a_built_in_workflow() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        // `quick-task` is the built-in with no on-disk `path` — see `workflows::types`.
-        let error = engine.delete_workflow("quick-task").await.unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
-    async fn delete_workflow_reports_not_found_for_an_unknown_name() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine.delete_workflow("nope").await.unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn parse_workflow_normalizes_valid_yaml() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let yaml = "name: Parsed\nsteps:\n  - id: task\n    prompt: \"{{task}}\"\n";
-        let parsed = engine.parse_workflow(yaml).await.unwrap();
-        assert_eq!(parsed.name, "Parsed");
-        assert_eq!(parsed.steps.len(), 1);
-        assert_eq!(parsed.steps[0].id, "task");
-    }
-
-    #[tokio::test]
-    async fn parse_workflow_rejects_malformed_yaml() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine.parse_workflow("not: [valid").await.unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
-    }
-
-    #[tokio::test]
-    async fn parse_workflow_rejects_an_empty_document() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine.parse_workflow("   ").await.unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
     }
 
     // ---- provider status + agent-profile accounts ------------------------------------------
@@ -9990,90 +9650,6 @@ mod tests {
         assert_eq!(response.runs[0].variant, "A");
         assert_eq!(response.runs[1].variant, "B");
         assert!(response.runs[0].diff_stat.is_empty());
-    }
-
-    #[tokio::test]
-    async fn pick_variant_rejects_a_blank_run_id() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        seed_group(&engine, "group-1");
-        let error = engine
-            .pick_variant(
-                "group-1",
-                &PickVariantRequest {
-                    run_id: String::new(),
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "runId is required".to_owned()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn pick_variant_reports_not_found_for_an_unknown_group() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine
-            .pick_variant(
-                "no-such-group",
-                &PickVariantRequest {
-                    run_id: "whatever".to_owned(),
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error, EngineError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn pick_variant_rejects_a_run_id_outside_the_group() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        seed_group(&engine, "group-1");
-        let error = engine
-            .pick_variant(
-                "group-1",
-                &PickVariantRequest {
-                    run_id: "not-in-this-group".to_owned(),
-                },
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "runId is not part of this group".to_owned()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn pick_variant_archives_the_losers_and_keeps_the_winner_unarchived() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let ids = seed_group(&engine, "group-1");
-        let winner_id = ids[0].clone();
-        let response = engine
-            .pick_variant(
-                "group-1",
-                &PickVariantRequest {
-                    run_id: winner_id.clone(),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.winner.map(|run| run.id), Some(winner_id.clone()));
-
-        let group = engine.group("group-1").await.unwrap();
-        let winner = group.runs.iter().find(|run| run.id == winner_id).unwrap();
-        let loser = group.runs.iter().find(|run| run.id != winner_id).unwrap();
-        assert!(!winner.archived);
-        assert!(loser.archived);
     }
 
     // ---- host model catalog (`models`) -----------------------------------------------------

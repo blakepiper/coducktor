@@ -40,8 +40,6 @@ use reducer::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadAction {
     ToggleTimelineItem(usize),
-    Finish,
-    Continue,
     Archive,
     MarkUnread,
     Cancel,
@@ -73,7 +71,6 @@ impl ThreadAction {
     pub(crate) fn command_name(&self) -> &'static str {
         match self {
             Self::Cancel => ":stop",
-            Self::Finish => ":finish",
             Self::Archive => ":archive",
             Self::Delete => ":delete",
             _ => "chat action",
@@ -1986,10 +1983,6 @@ fn apply_action(app: &mut App, action: ThreadAction) {
     match action {
         // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
         ThreadAction::ToggleGitMode => {}
-        ThreadAction::Finish | ThreadAction::Continue => {
-            app.notice =
-                Some("this historical task is read-only — start a new chat to continue".to_owned())
-        }
         ThreadAction::Archive => app.pending.push(PendingAction::Archive {
             project,
             id,
@@ -2415,22 +2408,17 @@ mod tests {
     }
 
     #[test]
-    fn a_conversation_offers_no_finish_or_continue() {
+    fn a_conversation_offers_no_review_accept() {
         use coducktor_contract::ConversationState;
 
-        for action in [
-            ThreadAction::Finish,
-            ThreadAction::Continue,
-            ThreadAction::ReviewAccept,
-        ] {
-            let mut app = app_with_conversation(ConversationState::Idle);
-            app.pending.clear();
-            apply_action(&mut app, action.clone());
-            assert!(
-                app.pending.is_empty(),
-                "{action:?} must not be reachable on a conversation"
-            );
-        }
+        let action = ThreadAction::ReviewAccept;
+        let mut app = app_with_conversation(ConversationState::Idle);
+        app.pending.clear();
+        apply_action(&mut app, action.clone());
+        assert!(
+            app.pending.is_empty(),
+            "{action:?} must not be reachable on a conversation"
+        );
     }
 
     #[test]

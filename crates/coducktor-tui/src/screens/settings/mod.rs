@@ -2023,7 +2023,6 @@ mod tests {
             memory_limit_mb: None,
             worktree_retention: 5,
             live_title_updates: Some(true),
-            review_gate: Some(true),
         }
     }
 

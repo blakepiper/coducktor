@@ -3280,7 +3280,6 @@ impl App {
         let flags = crate::screens::thread::actions::run_action_flags(run);
         let allowed = match &action {
             crate::screens::thread::ThreadAction::Cancel => flags.cancel,
-            crate::screens::thread::ThreadAction::Finish => flags.finish,
             crate::screens::thread::ThreadAction::Archive => flags.archive,
             crate::screens::thread::ThreadAction::Delete => flags.delete_run,
             _ => false,

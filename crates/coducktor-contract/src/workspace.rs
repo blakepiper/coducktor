@@ -603,7 +603,6 @@ pub struct ConfigResponse {
     pub memory_limit_mb: Option<u64>,
     pub worktree_retention: u64,
     pub live_title_updates: Option<bool>,
-    pub review_gate: Option<bool>,
 }
 
 /// The composer defaults explicitly configured by one project. Missing fields inherit from the
@@ -648,8 +647,6 @@ pub struct SetConfigInput {
     pub worktree_retention: Option<Option<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_title_updates: Option<Option<bool>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_gate: Option<Option<bool>>,
 }
 
 /// The provider id alias.

@@ -384,12 +384,6 @@ pub(crate) fn header_actions(run: &ApiRun) -> Vec<(&'static str, ThreadAction)> 
     let record = &run.record;
     let flags = run_action_flags(run);
     let mut actions = Vec::new();
-    if flags.finish {
-        actions.push(("Finish", ThreadAction::Finish));
-    }
-    if flags.continue_run {
-        actions.push(("Continue", ThreadAction::Continue));
-    }
     if flags.archive {
         actions.push((
             if record.archived {

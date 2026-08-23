@@ -17,10 +17,6 @@ pub fn is_run_active(status: RunStatus) -> bool {
 /// The run header's action policy — which actions a run offers, as a pure function of status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunActionFlags {
-    /// waiting → close the session; review → accept the changes without a PR.
-    pub finish: bool,
-    /// Reopen the last agent session in-process.
-    pub continue_run: bool,
     /// Archive when live, unarchive when archived.
     pub archive: bool,
     /// Put a read, finished task back into the unread list.
@@ -34,8 +30,6 @@ pub struct RunActionFlags {
 pub fn run_action_flags(run: &coducktor_contract::ApiRun) -> RunActionFlags {
     let active = is_run_active(run.record.status);
     RunActionFlags {
-        finish: false,
-        continue_run: false,
         archive: !active,
         mark_unread: can_be_unread(run) && !is_unread(run),
         cancel: false,
@@ -132,8 +126,6 @@ mod tests {
             RunStatus::Cancelled,
         ] {
             let flags = run_action_flags(&run(status, false, Some("abc123")));
-            assert!(!flags.finish);
-            assert!(!flags.continue_run);
             assert!(!flags.cancel);
         }
     }

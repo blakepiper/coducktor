@@ -67,7 +67,6 @@ fn config_response(repo_root: &Path, state_home: &Path) -> ConfigResponse {
         memory_limit_mb: config.memory_limit_mb,
         worktree_retention: config.worktree_retention,
         live_title_updates: config.live_title_updates,
-        review_gate: config.review_gate,
     }
 }
 
@@ -278,16 +277,6 @@ fn update_repo_config(
             }
         }
     }
-    if let Some(value) = input.review_gate {
-        match value {
-            None => {
-                raw.remove("reviewGate");
-            }
-            Some(flag) => {
-                raw.insert("reviewGate".to_owned(), Value::Bool(flag));
-            }
-        }
-    }
     if let Some(limit) = input.memory_limit_mb {
         match limit {
             None | Some(0) => {
@@ -357,150 +346,7 @@ fn update_repo_config(
     Ok(config_response(repo_root, state_home))
 }
 
-// ---- workflow builder helpers -------------------------------------------------------------
-// same name (see `save_workflow`'s own doc comment for why duplication, not sharing, is right
-// here) ------------------------------------------------------------------------------------
-
-#[allow(dead_code)]
-fn workflow_slug(value: &str) -> String {
-    let mut slug = String::new();
-    let mut pending_dash = false;
-    for character in value.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            if pending_dash && !slug.is_empty() {
-                slug.push('-');
-            }
-            pending_dash = false;
-            slug.push(character.to_ascii_lowercase());
-        } else {
-            pending_dash = true;
-        }
-    }
-    if slug.is_empty() {
-        "chain".to_owned()
-    } else {
-        slug
-    }
-}
-
-#[allow(dead_code)]
-fn workflow_step_issue(steps: &[WorkflowStepDef]) -> Option<String> {
-    for step in steps {
-        if step.id.is_empty() {
-            return Some("step id must not be empty".to_owned());
-        }
-        let has_command = step.command.as_ref().is_some_and(|value| !value.is_empty());
-        let has_agent = step.prompt.as_ref().is_some_and(|value| !value.is_empty())
-            || step.skill.as_ref().is_some_and(|value| !value.is_empty());
-        if has_command == has_agent {
-            return Some(format!(
-                "step \"{}\" is either an agent step or a check step",
-                step.id
-            ));
-        }
-        if let Some(on_fail) = &step.on_fail
-            && on_fail.max == 0
-        {
-            return Some(format!("step \"{}\": onFail.max must be positive", step.id));
-        }
-    }
-    steps_issue(steps)
-}
-
-#[allow(dead_code)]
-fn workflow_input(
-    input: &SaveWorkflowInput,
-) -> Result<(String, Option<String>, Vec<WorkflowStepDef>, bool), String> {
-    let name = input.name.trim();
-    if name.is_empty() || name.chars().count() > 80 {
-        return Err("name must be between 1 and 80 characters".to_owned());
-    }
-    if input
-        .description
-        .as_ref()
-        .is_some_and(|value| value.chars().count() > 2_000)
-    {
-        return Err("description must be at most 2000 characters".to_owned());
-    }
-    if input.steps.is_some() == input.skills.is_some() {
-        return Err("provide either \"steps\" or \"skills\", not both".to_owned());
-    }
-    if input.steps.as_ref().is_some_and(|steps| steps.is_empty())
-        || input.steps.as_ref().is_some_and(|steps| steps.len() > 8)
-    {
-        return Err("steps must contain between 1 and 8 entries".to_owned());
-    }
-    if input
-        .skills
-        .as_ref()
-        .is_some_and(|skills| skills.is_empty())
-        || input.skills.as_ref().is_some_and(|skills| skills.len() > 8)
-    {
-        return Err("skills must contain between 1 and 8 entries".to_owned());
-    }
-    let (steps, compact) = if let Some(skills) = &input.skills {
-        let mut names = Vec::with_capacity(skills.len());
-        for skill in skills {
-            let skill = skill.trim();
-            if skill.is_empty() {
-                return Err("skills entries must not be empty".to_owned());
-            }
-            names.push(skill.to_owned());
-        }
-        (
-            coducktor_core::workflows::types::skills_to_steps(&names),
-            true,
-        )
-    } else {
-        (input.steps.clone().unwrap_or_default(), false)
-    };
-    if let Some(issue) = workflow_step_issue(&steps) {
-        return Err(issue);
-    }
-    Ok((
-        name.to_owned(),
-        input
-            .description
-            .as_ref()
-            .filter(|value| !value.is_empty())
-            .cloned(),
-        steps,
-        compact,
-    ))
-}
-
-#[allow(dead_code)]
-fn workflow_yaml(
-    name: &str,
-    description: Option<&str>,
-    steps: &[WorkflowStepDef],
-    compact: bool,
-) -> Result<String, String> {
-    let mut document = Map::new();
-    document.insert("name".to_owned(), Value::String(name.to_owned()));
-    if let Some(description) = description {
-        document.insert(
-            "description".to_owned(),
-            Value::String(description.to_owned()),
-        );
-    }
-    if compact {
-        let skills = steps
-            .iter()
-            .filter_map(|step| step.skill.clone())
-            .map(Value::String)
-            .collect::<Vec<_>>();
-        document.insert("skills".to_owned(), Value::Array(skills));
-    } else {
-        let steps = serde_json::to_value(steps).map_err(|error| error.to_string())?;
-        document.insert("steps".to_owned(), steps);
-    }
-    serde_yaml_ng::to_string(&Value::Object(document)).map_err(|error| error.to_string())
-}
-
 // ---- agent-profile + provider-status helpers ----------------------------------------------
-// functions of the same name (same non-sharing rationale as the workflow builder helpers
-// above) --------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct ResolvedAgentProfile {

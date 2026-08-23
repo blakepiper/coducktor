@@ -592,36 +592,19 @@ impl RunManager {
     }
 
     pub(super) fn settle_success(&mut self, run_id: &str) -> io::Result<()> {
-        let Some(run) = self.get_run(run_id).cloned() else {
+        if self.get_run(run_id).is_none() {
             return Ok(());
-        };
-        let has_diff = self
-            .diff_inspector
-            .as_mut()
-            .is_some_and(|inspector| inspector.has_diff(&run));
-        let status = success_status(
-            has_diff,
-            self.runtime_options.review_gate,
-            run.autonomous == Some(true),
-        );
+        }
         self.update_run(
             run_id,
             RunPatch::new()
-                .set("status", status)
+                .set("status", RunStatus::Done)
                 .set("finishedAt", now_iso8601())
-                .clear("currentStepId")
-                .clear("autoResumeAttempts"),
+                .clear("currentStepId"),
         )?;
         self.append_event(
             run_id,
-            EventInput::new("lifecycle").field(
-                "message",
-                if status == RunStatus::Review {
-                    "changes ready for review — send feedback, open a draft PR, or finish"
-                } else {
-                    "run finished"
-                },
-            ),
+            EventInput::new("lifecycle").field("message", "run finished"),
         )?;
         self.cleanup_runtime(run_id);
         Ok(())

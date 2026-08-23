@@ -552,20 +552,6 @@ pub struct GroupResponse {
     pub runs: Vec<GroupVariant>,
 }
 
-/// `PickVariantResponse` contract shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PickVariantResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub winner: Option<RunRecord>,
-}
-
-/// The request body for selecting a winning run from a variant group.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PickVariantRequest {
-    pub run_id: String,
-}
-
 /// `ImageInput` contract shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

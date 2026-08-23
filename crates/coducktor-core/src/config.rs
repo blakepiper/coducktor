@@ -4,8 +4,8 @@
 //! blocks startup).
 //!
 //! Unlike `workspace::config` (every field `.catch`'d, so one bad key never evicts its
-//! siblings), seven fields here have a `.default()` with NO `.catch()` — `maxParallel`,
-//! `defaultRunner`, `plannerModel`, `namerModel`, `liveTitleUpdates`, `reviewGate`,
+//! siblings), six fields here have a `.default()` with NO `.catch()` — `maxParallel`,
+//! `defaultRunner`, `plannerModel`, `namerModel`, `liveTitleUpdates`,
 //! `baseBranch`. Zod's `.default(x)` only fires when the key is `undefined`; a PRESENT but
 //! invalid value on any of these fails the whole-object parse, and `loadConfig` then
 //! discards the entire raw file rather than salvaging the other keys — "malformed
@@ -35,7 +35,6 @@ pub struct RepoConfig {
     pub planner_model: String,
     pub namer_model: String,
     pub live_title_updates: Option<bool>,
-    pub review_gate: Option<bool>,
     pub base_branch: Option<String>,
     pub system_prompt: Option<String>,
     pub default_models: RunnerModels,
@@ -64,7 +63,6 @@ impl Default for RepoConfig {
             planner_model: "sonnet".to_owned(),
             namer_model: "haiku".to_owned(),
             live_title_updates: None,
-            review_gate: None,
             base_branch: None,
             system_prompt: None,
             default_models: RunnerModels::default(),
@@ -161,7 +159,6 @@ fn try_parse(raw: &Value) -> Option<RepoConfig> {
     let planner_model = strict_min_len_str(object.get("plannerModel"), 1, "sonnet")?;
     let namer_model = strict_min_len_str(object.get("namerModel"), 1, "haiku")?;
     let live_title_updates = strict_bool_opt(object.get("liveTitleUpdates"))?;
-    let review_gate = strict_bool_opt(object.get("reviewGate"))?;
     let base_branch = strict_trimmed_str_opt(object.get("baseBranch"), 1, usize::MAX)?;
 
     // The remaining five fields DO carry `.catch()` — a bad value degrades in place.
@@ -197,7 +194,6 @@ fn try_parse(raw: &Value) -> Option<RepoConfig> {
         planner_model,
         namer_model,
         live_title_updates,
-        review_gate,
         base_branch,
         system_prompt,
         default_models,

@@ -1,84 +1,16 @@
-//! Per-task handoff journal.
+//! Compatibility reader for the per-task handoff journal.
 //!
 //! `<project-state>/runs/<runId>.handoff.md`, next to the run's NDJSON events and outside the
-//! task worktree — it survives worktree removal. Coducktor seeds the skeleton and appends
-//! heartbeats; the agent (told via `DUCK_HANDOFF_FILE` and the system-prompt fragment below)
-//! keeps the "Progress log" and "Resume notes" sections up to date. Everything here is
-//! best-effort: the handoff is a journal, never a reason to fail a run.
+//! task worktree — it survives worktree removal. Workflow-era runs wrote this journal; nothing
+//! writes it any more. What remains is the read side the legacy task views still display, plus
+//! the delete used when a historical record is removed. Everything here is best-effort: the
+//! handoff is a journal, never a reason to fail a read.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::time::now_iso8601;
-
 pub fn handoff_path(data_dir: &Path, run_id: &str) -> PathBuf {
     data_dir.join("runs").join(format!("{run_id}.handoff.md"))
-}
-
-/// The fields `seed_handoff_file` needs from a run record — deliberately not
-/// `coducktor_contract::runs::RunRecord` itself.
-pub struct HandoffSeed<'a> {
-    pub id: &'a str,
-    pub title: &'a str,
-    pub workflow: &'a str,
-    pub task: &'a str,
-    pub branch: Option<&'a str>,
-    pub worktree_path: Option<&'a str>,
-}
-
-/// Create the handoff skeleton. Idempotent — an existing file (resume, continuation) is
-/// never overwritten. Returns the file path.
-pub fn seed_handoff_file(data_dir: &Path, run: &HandoffSeed<'_>) -> PathBuf {
-    let file = handoff_path(data_dir, run.id);
-    if file.exists() {
-        return file;
-    }
-    let mut header = format!(
-        "# Handoff — {}\n\n**Task id:** {}\n**Workflow:** {}\n",
-        run.title, run.id, run.workflow
-    );
-    if let Some(branch) = run.branch {
-        header.push_str(&format!("**Branch:** {branch}\n"));
-    }
-    if let Some(worktree_path) = run.worktree_path {
-        header.push_str(&format!("**Worktree:** {worktree_path}\n"));
-    }
-    header.push_str(&format!(
-        "\n## Goal\n\n{}\n\n## Progress log\n\n## Resume notes\n",
-        run.task.trim()
-    ));
-    // best effort — a read-only data dir must not break the run
-    if let Some(parent) = file.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = fs::write(&file, header);
-    file
-}
-
-/// Coducktor's own heartbeat (the janitor pattern): insert `- <ISO ts> — <note>` right under the
-/// `## Progress log` header (newest at the top), so the file stays current even when the
-/// agent forgets to write. Missing header → append at the end of the file; missing file →
-/// no-op.
-pub fn append_handoff_heartbeat(data_dir: &Path, run_id: &str, note: &str) {
-    let file = handoff_path(data_dir, run_id);
-    let Ok(text) = fs::read_to_string(&file) else {
-        return; // not seeded — nothing to heartbeat
-    };
-    let line = format!("- {} — {note}\n", now_iso8601());
-    let marker = "## Progress log\n";
-    let next = if let Some(idx) = text.find(marker) {
-        let split_at = idx + marker.len();
-        let (head, tail) = text.split_at(split_at);
-        format!("{head}\n{line}{}", tail.trim_start_matches('\n'))
-    } else {
-        let sep = if text.is_empty() || text.ends_with('\n') {
-            ""
-        } else {
-            "\n"
-        };
-        format!("{text}{sep}{line}")
-    };
-    let _ = fs::write(&file, next); // best effort
 }
 
 /// Full handoff markdown, or `""` when the file doesn't exist (yet).
@@ -136,58 +68,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seed_is_idempotent_and_never_overwrites_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let seed = HandoffSeed {
-            id: "r1",
-            title: "Fix the bug",
-            workflow: "quick-task",
-            task: "  fix the bug  ",
-            branch: Some("duck/r1"),
-            worktree_path: Some("/tmp/wt"),
-        };
-        let path = seed_handoff_file(dir.path(), &seed);
-        let first = fs::read_to_string(&path).unwrap();
-        assert!(first.contains("# Handoff — Fix the bug"));
-        assert!(first.contains("**Branch:** duck/r1"));
-        assert!(first.contains("## Goal\n\nfix the bug\n\n"));
-
-        fs::write(&path, "already resuming").unwrap();
-        let path2 = seed_handoff_file(dir.path(), &seed);
-        assert_eq!(path, path2);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "already resuming");
-    }
-
-    #[test]
-    fn heartbeat_inserts_under_the_progress_log_header_newest_first() {
-        let dir = tempfile::tempdir().unwrap();
-        let seed = HandoffSeed {
-            id: "r1",
-            title: "t",
-            workflow: "quick-task",
-            task: "t",
-            branch: None,
-            worktree_path: None,
-        };
-        seed_handoff_file(dir.path(), &seed);
-        append_handoff_heartbeat(dir.path(), "r1", "started");
-        append_handoff_heartbeat(dir.path(), "r1", "made progress");
-        let text = read_handoff(dir.path(), "r1");
-        let progress_idx = text.find("## Progress log").unwrap();
-        let made_idx = text.find("made progress").unwrap();
-        let started_idx = text.find("started").unwrap();
-        assert!(progress_idx < made_idx);
-        assert!(made_idx < started_idx, "newest heartbeat sorts first");
-    }
-
-    #[test]
-    fn heartbeat_on_an_unseeded_run_is_a_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        append_handoff_heartbeat(dir.path(), "missing", "note");
-        assert_eq!(read_handoff(dir.path(), "missing"), "");
-    }
-
-    #[test]
     fn progress_excerpt_stops_at_the_next_header_and_caps_line_count() {
         let text = "# Handoff\n\n## Progress log\n\n- line one\n- line two\n- line three\n\n## Resume notes\nshould not appear\n";
         assert_eq!(handoff_progress_excerpt(text, 2), "- line one\n- line two");
@@ -199,17 +79,11 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_the_file_and_is_a_noop_when_absent() {
+    fn delete_removes_an_existing_file_and_is_a_noop_when_absent() {
         let dir = tempfile::tempdir().unwrap();
-        let seed = HandoffSeed {
-            id: "r1",
-            title: "t",
-            workflow: "quick-task",
-            task: "t",
-            branch: None,
-            worktree_path: None,
-        };
-        let path = seed_handoff_file(dir.path(), &seed);
+        let path = handoff_path(dir.path(), "r1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "# Handoff\n").unwrap();
         assert!(path.exists());
         delete_handoff(dir.path(), "r1");
         assert!(!path.exists());
