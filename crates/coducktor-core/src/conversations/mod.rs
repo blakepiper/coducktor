@@ -4,6 +4,7 @@
 //! locations. Legacy workflow records are readable data, never executable conversation state.
 
 pub mod events;
+pub mod git;
 pub mod lifecycle;
 pub mod manager;
 pub mod persistence;

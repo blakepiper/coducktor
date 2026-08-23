@@ -24,6 +24,14 @@ use coducktor_contract::{
     UpdateProjectInput, UpdateProjectResponse, WorkflowsResponse, WorkspaceConfigResponse,
     WorkspaceUiState, WorkspaceUsageResponse, WorktreeEntry, WorktreesResponse,
 };
+use coducktor_contract::{
+    AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
+    ArchiveConversationResponse, CancelConversationTurnResponse, ConversationRecord,
+    ConversationsIndexResponse, CreateConversationInput, CreateConversationResponse,
+    DeleteConversationResponse, SubmitConversationMessageInput, SubmitConversationMessageResponse,
+    UnarchiveConversationResponse, UpdateConversationGitModeInput,
+    UpdateConversationGitModeResponse,
+};
 use futures_core::stream::BoxStream;
 use serde_json::Value;
 
@@ -275,6 +283,91 @@ pub trait Engine: Send + Sync {
         input: &PickVariantRequest,
     ) -> Result<PickVariantResponse, EngineError>;
 
+    // ---- conversations ----------------------------------------------------------------------
+    // The conversation-first cockpit. One ordinary submission is exactly one provider turn:
+    // nothing on this seam sends an automatic continuation, a completion-marker repair, or a
+    // workflow transition.
+
+    /// Every conversation in one project, most recently updated first.
+    async fn list_conversations(
+        &self,
+        scope: &Scope,
+    ) -> Result<Vec<ConversationRecord>, EngineError>;
+    /// One conversation's durable record.
+    async fn get_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<ConversationRecord, EngineError>;
+    /// Project-qualified rows for the chat browser across every registered project.
+    async fn conversations_index(&self) -> Result<ConversationsIndexResponse, EngineError>;
+    /// Create a conversation and durably queue its exact first user turn without opening a
+    /// provider. Pair with [`Engine::activate_conversations`] once a live listener is installed.
+    async fn create_conversation(
+        &self,
+        scope: &Scope,
+        input: CreateConversationInput,
+    ) -> Result<CreateConversationResponse, EngineError>;
+    /// Start whichever queued turns this project's capacity currently allows.
+    async fn activate_conversations(&self, scope: &Scope) -> Result<(), EngineError>;
+    /// Queue exactly one ordinary follow-up turn. Refused while a turn is already active.
+    async fn submit_conversation_message(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: SubmitConversationMessageInput,
+    ) -> Result<SubmitConversationMessageResponse, EngineError>;
+    /// Answer one native structured question inside the turn that asked it.
+    async fn answer_conversation_question(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: AnswerConversationQuestionInput,
+    ) -> Result<AnswerConversationQuestionResponse, EngineError>;
+    /// Cancel the active turn, leaving the conversation follow-up capable.
+    async fn cancel_conversation_turn(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<CancelConversationTurnResponse, EngineError>;
+    async fn archive_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<ArchiveConversationResponse, EngineError>;
+    async fn unarchive_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<UnarchiveConversationResponse, EngineError>;
+    /// Delete a conversation, its transcript, and any managed worktree it owned.
+    async fn delete_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<DeleteConversationResponse, EngineError>;
+    /// Mark a conversation read or unread.
+    async fn read_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        seen: bool,
+    ) -> Result<ConversationRecord, EngineError>;
+    /// One page of a conversation's durable timeline.
+    async fn conversation_history(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<RunHistoryPage, EngineError>;
+    /// Change the idle Git policy. Automatic mode requires a managed worktree.
+    async fn update_conversation_git_mode(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: UpdateConversationGitModeInput,
+    ) -> Result<UpdateConversationGitModeResponse, EngineError>;
+
     // ---- IDE: project file browser + editor ------------------------------------------------
     /// Resolve a scope's repository root on disk — a registered project's root or the
     /// engine's workspace root — for the `$EDITOR` handoff.
@@ -424,6 +517,124 @@ impl Engine for InProcessEngine {
 
     async fn activate_runs(&self, scope: &Scope) -> Result<(), EngineError> {
         self.scoped(scope)?.activate_runs()
+    }
+
+    // ---- conversations ----------------------------------------------------------------------
+
+    async fn list_conversations(
+        &self,
+        scope: &Scope,
+    ) -> Result<Vec<ConversationRecord>, EngineError> {
+        InProcessEngine::list_conversations(self, scope).await
+    }
+
+    async fn get_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<ConversationRecord, EngineError> {
+        InProcessEngine::get_conversation(self, scope, conversation_id).await
+    }
+
+    async fn conversations_index(&self) -> Result<ConversationsIndexResponse, EngineError> {
+        InProcessEngine::conversations_index(self).await
+    }
+
+    async fn create_conversation(
+        &self,
+        scope: &Scope,
+        input: CreateConversationInput,
+    ) -> Result<CreateConversationResponse, EngineError> {
+        InProcessEngine::create_conversation(self, scope, input).await
+    }
+
+    async fn activate_conversations(&self, scope: &Scope) -> Result<(), EngineError> {
+        InProcessEngine::activate_conversations(self, scope)
+    }
+
+    async fn submit_conversation_message(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: SubmitConversationMessageInput,
+    ) -> Result<SubmitConversationMessageResponse, EngineError> {
+        InProcessEngine::submit_conversation_message(self, scope, conversation_id, input).await
+    }
+
+    async fn answer_conversation_question(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: AnswerConversationQuestionInput,
+    ) -> Result<AnswerConversationQuestionResponse, EngineError> {
+        InProcessEngine::answer_conversation_question(self, scope, conversation_id, input).await
+    }
+
+    async fn cancel_conversation_turn(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<CancelConversationTurnResponse, EngineError> {
+        InProcessEngine::cancel_conversation_turn(self, scope, conversation_id).await
+    }
+
+    async fn archive_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<ArchiveConversationResponse, EngineError> {
+        InProcessEngine::archive_conversation(self, scope, conversation_id, true)
+            .await
+            .map(|record| ArchiveConversationResponse {
+                archived: record.archived,
+            })
+    }
+
+    async fn unarchive_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<UnarchiveConversationResponse, EngineError> {
+        InProcessEngine::archive_conversation(self, scope, conversation_id, false)
+            .await
+            .map(|record| UnarchiveConversationResponse {
+                unarchived: !record.archived,
+            })
+    }
+
+    async fn delete_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+    ) -> Result<DeleteConversationResponse, EngineError> {
+        InProcessEngine::delete_conversation(self, scope, conversation_id).await
+    }
+
+    async fn read_conversation(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        seen: bool,
+    ) -> Result<ConversationRecord, EngineError> {
+        InProcessEngine::read_conversation(self, scope, conversation_id, seen).await
+    }
+
+    async fn conversation_history(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<RunHistoryPage, EngineError> {
+        InProcessEngine::conversation_history(self, scope, conversation_id, cursor).await
+    }
+
+    async fn update_conversation_git_mode(
+        &self,
+        scope: &Scope,
+        conversation_id: &str,
+        input: UpdateConversationGitModeInput,
+    ) -> Result<UpdateConversationGitModeResponse, EngineError> {
+        InProcessEngine::update_conversation_git_mode(self, scope, conversation_id, input).await
     }
 
     async fn get_run(&self, scope: &Scope, run_id: &str) -> Result<ApiRun, EngineError> {

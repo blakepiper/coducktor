@@ -94,6 +94,19 @@ struct ParkedSession {
     pending_request: Option<PendingRequest>,
 }
 
+/// The history entry delivered to an in-process conversation event observer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationEventNotification {
+    pub conversation_id: String,
+    pub event: RunEvent,
+}
+
+pub type ConversationObserverId = u64;
+type ConversationEventObservers =
+    BTreeMap<ConversationObserverId, Box<dyn Fn(&ConversationEventNotification) + Send + Sync>>;
+type ConversationRecordObservers =
+    BTreeMap<ConversationObserverId, Box<dyn Fn(&ConversationRecord) + Send + Sync>>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConversationManagerOptions {
     pub max_parallel: usize,
@@ -118,6 +131,9 @@ pub struct ConversationManager {
     options: ConversationManagerOptions,
     write_quarantined: bool,
     warnings: Vec<String>,
+    event_observers: ConversationEventObservers,
+    record_observers: ConversationRecordObservers,
+    next_observer_id: ConversationObserverId,
 }
 
 impl ConversationManager {
@@ -164,6 +180,9 @@ impl ConversationManager {
             options,
             write_quarantined,
             warnings: Vec::new(),
+            event_observers: BTreeMap::new(),
+            record_observers: BTreeMap::new(),
+            next_observer_id: 0,
         };
         manager.recover_startup(legacy_changed);
         manager
@@ -282,6 +301,7 @@ impl ConversationManager {
             self.conversations.remove(&conversation_id);
             return Err(error);
         }
+        self.notify_record(&record);
         Ok(record)
     }
 
@@ -344,6 +364,7 @@ impl ConversationManager {
                 .insert(conversation_id.to_owned(), previous);
             return Err(error);
         }
+        self.notify_record(&next);
         Ok(turn)
     }
 
@@ -373,13 +394,14 @@ impl ConversationManager {
             next.latest_turn = next.active_turn.clone();
             next.updated_at = now;
             self.conversations
-                .insert(request.conversation_id.clone(), next);
+                .insert(request.conversation_id.clone(), next.clone());
             if let Err(error) = self.persist() {
                 self.conversations
                     .insert(request.conversation_id.clone(), previous);
                 self.queue.push_front(request);
                 return Err(error);
             }
+            self.notify_record(&next);
             self.in_flight.insert(
                 request.conversation_id.clone(),
                 request.cancellation.clone(),
@@ -482,13 +504,15 @@ impl ConversationManager {
         }
         next.latest_turn = next.active_turn.clone();
         next.updated_at = now_iso8601();
-        self.conversations.insert(conversation_id.to_owned(), next);
+        self.conversations
+            .insert(conversation_id.to_owned(), next.clone());
         if let Err(error) = self.persist() {
             self.conversations
                 .insert(conversation_id.to_owned(), previous);
             self.parked.insert(conversation_id.to_owned(), parked);
             return Err(error);
         }
+        self.notify_record(&next);
         self.append_history_event(
             conversation_id,
             &turn_id,
@@ -560,7 +584,8 @@ impl ConversationManager {
             turn.pending_request_id = None;
         }
         next.updated_at = now_iso8601();
-        self.conversations.insert(conversation_id.to_owned(), next);
+        self.conversations
+            .insert(conversation_id.to_owned(), next.clone());
         if let Err(error) = self.persist() {
             self.conversations
                 .insert(conversation_id.to_owned(), previous);
@@ -569,6 +594,7 @@ impl ConversationManager {
             }
             return Err(error);
         }
+        self.notify_record(&next);
         self.append_history_event(
             conversation_id,
             &turn_id,
@@ -582,6 +608,223 @@ impl ConversationManager {
 
     pub fn read_history(&self, conversation_id: &str) -> Vec<RunEvent> {
         events::read_history(&events::history_path(&self.data_dir, conversation_id))
+    }
+
+    /// Register an observer for appended history entries. The callback runs after the NDJSON
+    /// append succeeds and receives an owned view, so it cannot alias manager state.
+    pub fn subscribe_events<F>(&mut self, observer: F) -> ConversationObserverId
+    where
+        F: Fn(&ConversationEventNotification) + Send + Sync + 'static,
+    {
+        let id = self.next_observer_id();
+        self.event_observers.insert(id, Box::new(observer));
+        id
+    }
+
+    pub fn unsubscribe_events(&mut self, observer_id: ConversationObserverId) -> bool {
+        self.event_observers.remove(&observer_id).is_some()
+    }
+
+    /// Register an observer for durable conversation record updates.
+    pub fn subscribe_conversations<F>(&mut self, observer: F) -> ConversationObserverId
+    where
+        F: Fn(&ConversationRecord) + Send + Sync + 'static,
+    {
+        let id = self.next_observer_id();
+        self.record_observers.insert(id, Box::new(observer));
+        id
+    }
+
+    pub fn unsubscribe_conversations(&mut self, observer_id: ConversationObserverId) -> bool {
+        self.record_observers.remove(&observer_id).is_some()
+    }
+
+    /// Archive or unarchive an idle conversation. An active turn is never torn down implicitly:
+    /// the caller cancels first, so archiving can never orphan a live provider process.
+    pub fn archive(
+        &mut self,
+        conversation_id: &str,
+        archived: bool,
+    ) -> io::Result<ConversationRecord> {
+        self.mutate_idle(conversation_id, "be archived", |record| {
+            record.archived = archived;
+            record.archived_at = archived.then(now_iso8601);
+            Ok(())
+        })
+    }
+
+    /// Mark a conversation read or unread. Allowed while a turn is active because it records what
+    /// the user has seen and never touches provider state.
+    pub fn mark_seen(
+        &mut self,
+        conversation_id: &str,
+        seen: bool,
+    ) -> io::Result<ConversationRecord> {
+        let previous = self.require(conversation_id)?;
+        let mut next = previous.clone();
+        next.seen_at = seen.then(now_iso8601);
+        self.commit_record(previous, next)
+    }
+
+    /// Change the idle Git policy. Automatic mode is only truthful for a managed worktree, so the
+    /// same rule that guards creation guards the update.
+    pub fn set_git_mode(
+        &mut self,
+        conversation_id: &str,
+        git_mode: ConversationGitMode,
+    ) -> io::Result<ConversationRecord> {
+        self.mutate_idle(conversation_id, "have its Git mode changed", |record| {
+            if git_mode == ConversationGitMode::Auto && !record.worktree {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "automatic Git mode requires a managed worktree",
+                ));
+            }
+            record.git_mode = git_mode;
+            Ok(())
+        })
+    }
+
+    /// Attach the result of one post-turn Git action to a conversation's history. Git runs after
+    /// the provider turn has already settled, so this deliberately does not require an in-flight
+    /// turn and never changes conversation state.
+    pub fn record_git_activity(
+        &mut self,
+        conversation_id: &str,
+        turn_id: &str,
+        input: ConversationEventInput,
+    ) -> io::Result<RunEvent> {
+        self.append_history_event(conversation_id, turn_id, input)
+    }
+
+    /// Delete an idle conversation and its history. Returns false when the id is already absent so
+    /// a repeated delete is not an error.
+    pub fn delete(&mut self, conversation_id: &str) -> io::Result<bool> {
+        self.ensure_writable()?;
+        let Some(previous) = self.conversations.get(conversation_id).cloned() else {
+            return Ok(false);
+        };
+        if previous.state.is_active() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "an active conversation cannot be deleted",
+            ));
+        }
+        self.conversations.remove(conversation_id);
+        if let Err(error) = self.persist() {
+            self.conversations
+                .insert(conversation_id.to_owned(), previous);
+            return Err(error);
+        }
+        self.queue
+            .retain(|request| request.conversation_id != conversation_id);
+        self.parked.remove(conversation_id);
+        self.appenders.remove(conversation_id);
+        self.seqs.remove(conversation_id);
+        // History is best-effort: the index no longer references the file, so a failed unlink
+        // leaves an unreachable transcript rather than a half-deleted conversation.
+        let _ = std::fs::remove_file(events::history_path(&self.data_dir, conversation_id));
+        Ok(true)
+    }
+
+    /// Record the managed worktree a queued conversation was placed in. Placement is resolved
+    /// before the first turn is admitted, so this also repoints the queued request's cwd — the
+    /// provider must never be opened against the repository root a worktree replaced.
+    pub fn place_worktree(
+        &mut self,
+        conversation_id: &str,
+        worktree_path: &std::path::Path,
+        branch: &str,
+        base_branch: &str,
+    ) -> io::Result<ConversationRecord> {
+        self.ensure_writable()?;
+        let previous = self.require(conversation_id)?;
+        let mut next = previous.clone();
+        next.worktree = true;
+        next.worktree_path = Some(worktree_path.to_string_lossy().into_owned());
+        next.branch = Some(branch.to_owned());
+        next.base_branch = Some(base_branch.to_owned());
+        next.cwd = worktree_path.to_string_lossy().into_owned();
+        let placed = self.commit_record(previous, next)?;
+        for request in self.queue.iter_mut() {
+            if request.conversation_id == conversation_id {
+                request.cwd = worktree_path.to_path_buf();
+            }
+        }
+        Ok(placed)
+    }
+
+    /// Signal every in-flight turn's cancellation token without touching durable state. Used at
+    /// shutdown: the records stay `running` on disk so startup recovery reports them as
+    /// interrupted rather than silently repeating a message the user already paid for.
+    pub fn request_shutdown(&self) {
+        for cancellation in self.in_flight.values() {
+            cancellation.request();
+        }
+    }
+
+    fn require(&self, conversation_id: &str) -> io::Result<ConversationRecord> {
+        self.conversations
+            .get(conversation_id)
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "conversation not found"))
+    }
+
+    /// Apply one durable field change that is only meaningful between turns. `action` completes
+    /// the sentence "an active conversation cannot ...".
+    fn mutate_idle(
+        &mut self,
+        conversation_id: &str,
+        action: &str,
+        apply: impl FnOnce(&mut ConversationRecord) -> io::Result<()>,
+    ) -> io::Result<ConversationRecord> {
+        self.ensure_writable()?;
+        let previous = self.require(conversation_id)?;
+        if previous.state.is_active() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("an active conversation cannot {action}"),
+            ));
+        }
+        let mut next = previous.clone();
+        apply(&mut next)?;
+        self.commit_record(previous, next)
+    }
+
+    /// Persist one replaced record, restoring the previous value when the index write fails.
+    fn commit_record(
+        &mut self,
+        previous: ConversationRecord,
+        mut next: ConversationRecord,
+    ) -> io::Result<ConversationRecord> {
+        self.ensure_writable()?;
+        next.updated_at = now_iso8601();
+        let conversation_id = next.id.clone();
+        self.conversations
+            .insert(conversation_id.clone(), next.clone());
+        if let Err(error) = self.persist() {
+            self.conversations.insert(conversation_id, previous);
+            return Err(error);
+        }
+        self.notify_record(&next);
+        Ok(next)
+    }
+
+    fn next_observer_id(&mut self) -> ConversationObserverId {
+        self.next_observer_id = self.next_observer_id.wrapping_add(1);
+        self.next_observer_id
+    }
+
+    fn notify_record(&self, record: &ConversationRecord) {
+        for observer in self.record_observers.values() {
+            observer(record);
+        }
+    }
+
+    fn notify_event(&self, notification: &ConversationEventNotification) {
+        for observer in self.event_observers.values() {
+            observer(notification);
+        }
     }
 
     fn finish_provider_call(
@@ -703,6 +946,7 @@ impl ConversationManager {
             self.conversations.insert(conversation_id.clone(), previous);
             return Err(error);
         }
+        self.notify_record(&next);
         if let Some(pending_request) = park
             && let Some(session) = session.take()
         {
@@ -774,6 +1018,10 @@ impl ConversationManager {
             .ok_or_else(|| io::Error::other("conversation event appender unavailable"))?
             .append(&event)?;
         self.seqs.insert(conversation_id.to_owned(), seq);
+        self.notify_event(&ConversationEventNotification {
+            conversation_id: conversation_id.to_owned(),
+            event: event.clone(),
+        });
         Ok(event)
     }
 
@@ -983,6 +1231,7 @@ mod tests {
 
     use coducktor_contract::ConversationQuestionAnswer;
 
+    use super::super::git;
     use super::super::lifecycle::{
         ConversationSessionFactory, PendingQuestion, PendingRequest, TurnOutcome,
     };
@@ -1440,6 +1689,150 @@ mod tests {
             Some("session-1")
         );
         assert_eq!(admitted.request.user_text, "after restart");
+    }
+
+    #[test]
+    fn idle_mutations_persist_and_notify_while_active_ones_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observed = seen.clone();
+        manager.subscribe_conversations(move |record| {
+            if let Ok(mut seen) = observed.lock() {
+                seen.push((record.id.clone(), record.state, record.archived));
+            }
+        });
+        let created = manager.create(new_conversation("first")).unwrap();
+
+        // Queued is an active state, so nothing that is only meaningful between turns applies.
+        assert_eq!(
+            manager.archive(&created.id, true).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            manager.delete(&created.id).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+
+        drive_next(&mut manager, &factory);
+        let archived = manager.archive(&created.id, true).unwrap();
+        assert!(archived.archived);
+        assert!(archived.archived_at.is_some());
+        assert!(
+            manager
+                .mark_seen(&created.id, true)
+                .unwrap()
+                .seen_at
+                .is_some()
+        );
+        assert!(!manager.archive(&created.id, false).unwrap().archived);
+        assert_eq!(
+            manager
+                .set_git_mode(&created.id, ConversationGitMode::Auto)
+                .unwrap()
+                .git_mode,
+            ConversationGitMode::Auto
+        );
+
+        // Every change is durable, not just in-memory.
+        let reopened = ConversationManager::open(dir.path());
+        let stored = reopened.get(&created.id).unwrap();
+        assert_eq!(stored.git_mode, ConversationGitMode::Auto);
+        assert!(!stored.archived);
+        assert!(stored.seen_at.is_some());
+        let notified = seen.lock().unwrap().clone();
+        assert!(
+            notified
+                .iter()
+                .any(|(id, _, archived)| id == &created.id && *archived)
+        );
+    }
+
+    #[test]
+    fn automatic_git_mode_still_requires_a_managed_worktree_after_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let mut input = new_conversation("first");
+        input.worktree = false;
+        input.worktree_path = None;
+        let created = manager.create(input).unwrap();
+        drive_next(&mut manager, &factory);
+
+        assert_eq!(
+            manager
+                .set_git_mode(&created.id, ConversationGitMode::Auto)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            manager.get(&created.id).unwrap().git_mode,
+            ConversationGitMode::Manual
+        );
+    }
+
+    #[test]
+    fn deleting_an_idle_conversation_removes_its_record_and_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager.create(new_conversation("first")).unwrap();
+        drive_next(&mut manager, &factory);
+        let history = events::history_path(dir.path(), &created.id);
+        assert!(history.exists());
+
+        assert!(manager.delete(&created.id).unwrap());
+
+        assert!(manager.get(&created.id).is_none());
+        assert!(!history.exists());
+        // A repeated delete is not an error, and the removal survives a restart.
+        assert!(!manager.delete(&created.id).unwrap());
+        assert!(
+            ConversationManager::open(dir.path())
+                .get(&created.id)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn post_turn_git_activity_attaches_to_history_without_an_in_flight_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = FakeFactory::new(vec![ended(true)], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager
+            .create(new_conversation("Fix the login redirect"))
+            .unwrap();
+        let record = drive_next(&mut manager, &factory);
+        let turn_id = record.latest_turn.as_ref().unwrap().id.clone();
+
+        let event = manager
+            .record_git_activity(
+                &created.id,
+                &turn_id,
+                ConversationEventInput::new("git.committed").field(
+                    "subject",
+                    git::auto_commit_subject("Fix the login redirect"),
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(event.event_type, "git.committed");
+        assert_eq!(
+            event.extra.get("subject").and_then(Value::as_str),
+            Some("coducktor: Fix the login redirect")
+        );
+        assert_eq!(
+            event.extra.get("turnId").and_then(Value::as_str),
+            Some(turn_id.as_str())
+        );
+        // The conversation stays idle and Git costs no provider turn.
+        assert_eq!(
+            manager.get(&created.id).unwrap().state,
+            ConversationState::Idle
+        );
+        assert_eq!(factory.counts.turns.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -78,6 +78,11 @@ pub fn load_run_index_outcome(index_path: &Path, keep_live: bool) -> RunIndexLoa
     let mut records = Vec::with_capacity(array.len());
     let mut salvaged = false;
     for item in array {
+        // Conversation records share this index file. They are a different record kind, not
+        // damaged run state, so skipping one must not quarantine legacy writes.
+        if is_foreign_index_entry(item) {
+            continue;
+        }
         match try_parse_run_record(item.clone()) {
             Some(record) => records.push(reconcile_loaded_run(record, keep_live)),
             None => salvaged = true,
@@ -103,6 +108,25 @@ pub fn list_runs_by_recency(runs: &[RunRecord]) -> Vec<&RunRecord> {
     sorted
 }
 
+/// Does this index entry belong to a record kind the legacy run reader/writer does not own? An
+/// absent discriminator is always a legacy task, so only an explicit foreign kind qualifies.
+fn is_foreign_index_entry(value: &Value) -> bool {
+    matches!(value.get("recordKind"), Some(Value::String(_)))
+}
+
+/// The entries currently in the index that a legacy write does not own, kept verbatim so unknown
+/// keys survive. `runs.json` is shared with conversation records: truncating the file to the run
+/// records this writer happens to hold would delete them.
+fn foreign_index_entries(index_path: &Path) -> Vec<Value> {
+    let Ok(raw) = fs::read_to_string(index_path) else {
+        return Vec::new();
+    };
+    let Ok(Value::Array(values)) = serde_json::from_str::<Value>(&raw) else {
+        return Vec::new();
+    };
+    values.into_iter().filter(is_foreign_index_entry).collect()
+}
+
 /// Atomic owner-only write of the whole index through a collision-safe staging file. File data is
 /// synced before rename and the containing directory is synced best-effort after rename.
 pub fn write_run_index(index_path: &Path, runs: &[RunRecord]) -> io::Result<()> {
@@ -122,8 +146,18 @@ fn write_run_index_with_hooks(
     after_rename: impl FnOnce(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let sorted = list_runs_by_recency(runs);
-    let value = serde_json::to_value(sorted).map_err(io::Error::other)?;
-    write_index_value_with_hooks(index_path, &value, before_rename, after_rename)
+    let mut entries = serde_json::to_value(sorted)
+        .map_err(io::Error::other)?
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    entries.extend(foreign_index_entries(index_path));
+    write_index_value_with_hooks(
+        index_path,
+        &Value::Array(entries),
+        before_rename,
+        after_rename,
+    )
 }
 
 /// Crate-internal mixed-record writer using the same crash-safe boundary as legacy run writes.
@@ -661,6 +695,42 @@ mod tests {
             run.auto_resume_at,
             Some("2026-01-01T00:00:00.000Z".to_owned())
         );
+    }
+
+    #[test]
+    fn a_conversation_record_is_neither_corrupt_run_state_nor_dropped_by_a_legacy_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = index_path(dir.path());
+        let conversation = json!({
+            "recordKind": "conversation",
+            "id": "chat-1",
+            "createdAt": "2026-01-03T00:00:00.000Z",
+            "futureConversationField": {"kept": true}
+        });
+        let run = RunRecord {
+            id: "run-1".into(),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            ..Default::default()
+        };
+        write_index_value(
+            &path,
+            &json!([conversation.clone(), serde_json::to_value(&run).unwrap()]),
+        )
+        .unwrap();
+
+        // `runs.json` is shared with the conversation runtime. A foreign record kind is data this
+        // reader does not own, not damage, so it must not quarantine legacy writes.
+        let load = load_run_index_outcome(&path, true);
+        assert!(!load.write_quarantined());
+        assert_eq!(load.records().len(), 1);
+        assert_eq!(load.records()[0].id, "run-1");
+
+        // And a legacy write must carry it through verbatim rather than truncating the file to
+        // the run records this writer happens to hold.
+        write_run_index(&path, load.records()).unwrap();
+        let raw: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw.len(), 2);
+        assert!(raw.contains(&conversation));
     }
 
     #[test]

@@ -49,7 +49,21 @@ use coducktor_contract::{
     WorkspaceUsagePolicyHealth, WorkspaceUsageRefresh, WorkspaceUsageResponse, WorktreeDirEntry,
     WorktreeEntry, WorktreeEntryType, WorktreeInfo, WorktreeRunStatus, WorktreesResponse,
 };
+use coducktor_contract::{
+    AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
+    CancelConversationTurnResponse, ConversationGitMode, ConversationIndexEntry,
+    ConversationMessage, ConversationRecord, ConversationSkillAttachment,
+    ConversationSkillSelection, ConversationState, ConversationsIndexResponse,
+    CreateConversationInput, CreateConversationResponse, DeleteConversationResponse,
+    SubmitConversationMessageInput, SubmitConversationMessageResponse, TurnState,
+    UpdateConversationGitModeInput, UpdateConversationGitModeResponse,
+};
 use coducktor_core::config::{RepoConfig, load_config};
+use coducktor_core::conversations::{
+    AdmittedConversationTurn, ConversationEventInput, ConversationManager,
+    ConversationManagerOptions, ConversationSessionFactory, NewConversation,
+    PendingConversationAnswer,
+};
 use coducktor_core::git::worktree::{AutosaveReason, AutosaveResult, autosave_commit};
 use coducktor_core::handoff::{append_handoff_heartbeat, handoff_progress_excerpt, read_handoff};
 use coducktor_core::paths::{
@@ -128,6 +142,13 @@ pub struct InProcessEngine {
     usage_cache: Arc<Mutex<Option<CachedWorkspaceUsage>>>,
     workspace_admission: SharedWorkspaceAdmission,
     repository_leases: Arc<Mutex<BTreeMap<PathBuf, SharedRepositoryLease>>>,
+    /// Conversation-first runtime, kept beside the workflow runtime rather than inside it: the
+    /// two share storage locations and live topics but no lifecycle state.
+    conversations: Arc<Mutex<BTreeMap<String, ProjectConversations>>>,
+    conversation_factory: Arc<dyn ConversationSessionFactory>,
+    /// One worker per conversation currently running a turn outside any manager lock, keyed by
+    /// project and conversation because conversation ids are only unique within a project.
+    conversation_workers: Arc<Mutex<BTreeMap<ConversationKey, std::thread::JoinHandle<()>>>>,
 }
 
 #[derive(Clone)]
@@ -1257,9 +1278,23 @@ impl InProcessEngine {
             usage_cache: Arc::new(Mutex::new(None)),
             workspace_admission,
             repository_leases,
+            conversations: Arc::new(Mutex::new(BTreeMap::new())),
+            conversation_factory: Arc::new(DefaultSessionFactory::new()),
+            conversation_workers: Arc::new(Mutex::new(BTreeMap::new())),
         };
         engine.attach_manager(boot_project_id, manager, engine.repo_root.clone());
         engine
+    }
+
+    /// Replace the harness factory the conversation runtime opens sessions through. Production
+    /// uses the real [`DefaultSessionFactory`]; this exists so a test can drive the whole engine
+    /// path — admission, worker, live events, Git policy — against a counted fake.
+    pub fn with_conversation_factory(
+        mut self,
+        factory: impl ConversationSessionFactory + 'static,
+    ) -> Self {
+        self.conversation_factory = Arc::new(factory);
+        self
     }
 
     fn project_data_dir(&self, repo_root: &Path) -> PathBuf {
@@ -1474,6 +1509,9 @@ impl InProcessEngine {
             usage_cache: self.usage_cache.clone(),
             workspace_admission: self.workspace_admission.clone(),
             repository_leases: self.repository_leases.clone(),
+            conversations: self.conversations.clone(),
+            conversation_factory: self.conversation_factory.clone(),
+            conversation_workers: self.conversation_workers.clone(),
         })
     }
 
@@ -1942,6 +1980,14 @@ impl InProcessEngine {
                 cancellation.request();
             }
         }
+        // Conversation turns hold their tokens inside their own manager, so signal every open
+        // project's in-flight turns too — otherwise a confirmed quit abandons a live harness
+        // process instead of asking it to stop.
+        if let Ok(managers) = self.conversations.lock() {
+            for entry in managers.values() {
+                entry.manager.lock().request_shutdown();
+            }
+        }
         let deadline = Instant::now() + grace;
         loop {
             let pending: usize = [&self.turn_workers, &self.activation_workers]
@@ -1957,7 +2003,8 @@ impl InProcessEngine {
                         })
                         .unwrap_or(0)
                 })
-                .sum();
+                .sum::<usize>()
+                + self.pending_conversation_workers();
             if pending == 0 {
                 break;
             }
@@ -1969,6 +2016,19 @@ impl InProcessEngine {
         }
         self.turn_dispatch().reap_finished();
         let _ = self.reap_finished_activation_workers();
+        reap_finished_conversation_workers(&self.conversation_workers);
+    }
+
+    fn pending_conversation_workers(&self) -> usize {
+        self.conversation_workers
+            .lock()
+            .map(|workers| {
+                workers
+                    .values()
+                    .filter(|worker| !worker.is_finished())
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     /// Tokens belong to a live/parked session only. Worker reaping is the common terminal
@@ -6312,6 +6372,7 @@ async fn discover_codex_models_with(
 // Implementation helpers are physically grouped by capability. `include!` keeps these pure
 // moves in this module, so the engine's established private seams do not become a public API.
 include!("in_process/git.rs");
+include!("in_process/conversations.rs");
 include!("in_process/config.rs");
 include!("in_process/ide.rs");
 include!("in_process/workspace.rs");
