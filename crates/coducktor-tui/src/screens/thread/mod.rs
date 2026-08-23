@@ -2384,6 +2384,37 @@ mod tests {
     }
 
     #[test]
+    fn a_live_record_update_returns_the_composer_at_turn_end() {
+        use coducktor_contract::ConversationState;
+
+        let mut app = app_with_conversation(ConversationState::Running);
+        assert!(!can_send_followup(&app), "a running turn holds the composer");
+
+        // This is the event the engine publishes when the provider's turn ends.
+        let mut settled = conversation(ConversationState::Idle);
+        settled.seen_at = None;
+        app.apply_workspace_event(crate::app::WorkspaceEvent::Conversation {
+            project: "main".to_owned(),
+            record: Box::new(settled),
+        });
+
+        assert_eq!(
+            app.thread_ui.data.conversation_state(),
+            Some(ConversationState::Idle)
+        );
+        assert!(
+            can_send_followup(&app),
+            "turn end alone makes the composer available — no reload, no user decision"
+        );
+        assert!(
+            app.project_tasks
+                .get("main")
+                .is_some_and(|state| state.conversations.iter().any(|row| row.id == "chat-1")),
+            "the browser row updates from the same event"
+        );
+    }
+
+    #[test]
     fn a_legacy_record_is_read_only() {
         let app = app_with_run(RunStatus::Done);
         assert!(

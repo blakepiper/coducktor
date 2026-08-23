@@ -637,6 +637,12 @@ pub enum WorkspaceEvent {
         project: String,
         run: ApiRun,
     },
+    /// A conversation record changed. This is what returns the composer to the user when a turn
+    /// ends, so it must be applied live rather than waiting for the next list refresh.
+    Conversation {
+        project: String,
+        record: Box<coducktor_contract::ConversationRecord>,
+    },
     RunDeleted {
         project: String,
         id: String,
@@ -1967,6 +1973,41 @@ impl App {
 
     pub fn apply_workspace_event(&mut self, event: WorkspaceEvent) {
         match event {
+            WorkspaceEvent::Conversation { project, record } => {
+                let entry =
+                    coducktor_client::conversation_index_entry(&project, &record);
+                let state = self.project_tasks.entry(project.clone()).or_default();
+                if let Some(existing) = state
+                    .conversations
+                    .iter_mut()
+                    .find(|existing| existing.id == entry.id)
+                {
+                    *existing = entry.clone();
+                } else {
+                    state.conversations.insert(0, entry.clone());
+                }
+                if let Some(index) = self.global_conversations.as_mut() {
+                    if let Some(existing) = index
+                        .conversations
+                        .iter_mut()
+                        .find(|row| row.project_id == entry.project_id && row.id == entry.id)
+                    {
+                        *existing = entry.clone();
+                    } else {
+                        index.conversations.insert(0, entry);
+                    }
+                }
+                // The open thread needs the new state immediately: it is what re-enables the
+                // composer at the end of a turn.
+                if self.thread_ui.data.project == project
+                    && self.thread_ui.data.run_id == record.id
+                {
+                    self.thread_ui.set_conversation(*record);
+                }
+                if self.current_project() == project {
+                    self.sync_active_project_tasks();
+                }
+            }
             WorkspaceEvent::Run { project, run } => {
                 let state = self.project_tasks.entry(project.clone()).or_default();
                 if let Some(existing) = state

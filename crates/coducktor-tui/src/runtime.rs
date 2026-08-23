@@ -133,7 +133,21 @@ fn parse_workspace_event(event: EngineEvent, fallback_project: &str) -> Option<W
             });
         }
     };
-    if data.get("type")?.as_str()? != "run" {
+    let kind = data.get("type")?.as_str()?;
+    if kind == "conversation" {
+        let record: coducktor_contract::ConversationRecord =
+            serde_json::from_value(data.get("conversation")?.clone()).ok()?;
+        let project = data
+            .get("projectId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|project| !project.is_empty())
+            .unwrap_or(fallback_project);
+        return Some(WorkspaceEvent::Conversation {
+            project: project.to_owned(),
+            record: Box::new(record),
+        });
+    }
+    if kind != "run" {
         return None;
     }
     let record = serde_json::from_value(data.get("run")?.clone()).ok()?;
