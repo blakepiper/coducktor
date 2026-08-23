@@ -374,13 +374,10 @@ pub(crate) fn provider_skill_context(
 fn to_agent_run_spec(request: &ConversationTurnRequest) -> Result<AgentRunSpec, String> {
     Ok(AgentRunSpec {
         cancellation: request.cancellation.clone().into(),
-        autonomous: true,
         system_prompt: provider_skill_context(&request.skill_context, &request.cwd)?,
         user_prompt: request.user_text.clone(),
         images: content_blocks(&request.images),
         cwd: request.cwd.clone(),
-        allowed_tools: Vec::new(),
-        bash_allowlist: Vec::new(),
         additional_directories: request
             .additional_directories
             .iter()
@@ -388,7 +385,6 @@ fn to_agent_run_spec(request: &ConversationTurnRequest) -> Result<AgentRunSpec, 
             .collect(),
         env: BTreeMap::new(),
         model: request.model.clone(),
-        reasoning_effort: None,
         reasoning: request.reasoning.clone(),
         session_id: request.provider_session_id.clone(),
         resume: request.resume,
@@ -524,15 +520,12 @@ mod tests {
     }
 
     #[test]
-    fn exact_reasoning_and_autonomous_policy_reach_the_spawn_spec() {
+    fn the_exact_reasoning_value_reaches_the_spawn_spec_untranslated() {
         let mut request = request();
         request.reasoning = Some("provider-native-value".to_owned());
         let spec = to_agent_run_spec(&request).expect("spec should build");
-        assert!(spec.autonomous);
         assert_eq!(spec.user_prompt, "exact user message");
         assert_eq!(spec.reasoning.as_deref(), Some("provider-native-value"));
-        assert!(spec.reasoning_effort.is_none());
-        assert!(spec.allowed_tools.is_empty());
     }
 
     #[test]

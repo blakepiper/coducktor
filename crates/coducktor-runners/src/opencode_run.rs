@@ -17,7 +17,27 @@ use serde_json::Value;
 use crate::agent_runner::{AgentRunSpec, prepend_system_prompt, selected_reasoning};
 use crate::child_process::{ChildProcess, NextLine, SpawnConfig};
 use crate::conversation_factory::provider_skill_context;
-use crate::opencode_runner::OpencodeSpawnConfig;
+
+/// Where to find the opencode binary. Production wiring resolves `program`/`prefix_args` from
+/// `DUCK_OPENCODE_BIN` in the session factory; tests point `program` at `node` with
+/// `prefix_args: vec![mock_script_path]`.
+#[derive(Debug, Clone)]
+pub struct OpencodeSpawnConfig {
+    pub program: String,
+    pub prefix_args: Vec<String>,
+    /// Grace period after a cancelled turn's SIGTERM before escalating to SIGKILL.
+    pub kill_grace: Duration,
+}
+
+impl Default for OpencodeSpawnConfig {
+    fn default() -> Self {
+        Self {
+            program: "opencode".to_owned(),
+            prefix_args: Vec::new(),
+            kill_grace: Duration::from_millis(4_000),
+        }
+    }
+}
 
 pub struct OpencodeRunSession {
     config: OpencodeSpawnConfig,
@@ -416,7 +436,6 @@ mod tests {
 
     fn spec() -> AgentRunSpec {
         AgentRunSpec {
-            autonomous: true,
             model: Some("provider/model".to_owned()),
             reasoning: Some("exact-variant".to_owned()),
             ..AgentRunSpec::default()

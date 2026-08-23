@@ -1,20 +1,16 @@
 //! The backend-neutral session seam every harness runner implements.
 //!
 //! A runner adapter lives outside this crate and only has to translate its own native protocol
-//! into these types: one [`SessionRequest`] in, live [`EventInput`]s during the turn, one
-//! [`SessionOutcome`] out. Nothing backend-specific crosses this boundary, which is what lets
-//! the conversation runtime treat Claude, Codex, OpenCode, and pi identically.
+//! into these types: live [`EventInput`]s during the turn and one [`SessionOutcome`] out.
+//! Nothing backend-specific crosses this boundary, which is what lets the conversation runtime
+//! treat Claude, Codex, OpenCode, and pi identically.
 
-use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-
-use coducktor_contract::{ConcreteReasoningEffort, RunnerSelection};
 
 use crate::runs::task_markers::canonicalize_markers;
 
@@ -101,37 +97,6 @@ impl PartialEq for CancellationToken {
 
 impl Eq for CancellationToken {}
 
-/// All information a backend-neutral session needs to open one turn.
-///
-/// This intentionally stays thin (run/step identity, prompt, backend routing) rather than
-/// widening into the full native spec a concrete backend ultimately needs. Backend-only fields
-/// such as additional directories and timeout policy remain a concrete [`SessionFactory`]'s job
-/// to default sensibly. Extend this struct when a factory needs data only the runtime can see.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionRequest {
-    pub run_id: String,
-    pub step_id: String,
-    pub prompt: String,
-    pub images: Vec<PromptImage>,
-    pub runner: RunnerSelection,
-    pub model: Option<String>,
-    pub session_id: Option<String>,
-    pub continuation: bool,
-    /// Concrete durable profile affinity. Integration resolves its minimal environment without
-    /// exposing credentials to core.
-    pub agent_profile: Option<String>,
-    pub env: BTreeMap<String, String>,
-    /// The admitted worktree when isolation is enabled, otherwise the repository root.
-    pub cwd: PathBuf,
-    pub allowed_tools: Vec<String>,
-    pub bash_allowlist: Vec<String>,
-    pub system_prompt: Option<String>,
-    /// Mapped from the `auto`-inclusive contract enum to the concrete one a backend spawn
-    /// actually takes (`Auto` becomes `None`, letting the backend use its own default).
-    pub reasoning_effort: Option<ConcreteReasoningEffort>,
-    pub cancellation: CancellationToken,
-}
-
 /// Usage and marker information a fake or a future backend mapper can report without leaking its
 /// native event types into core.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -192,16 +157,6 @@ pub trait AgentSession: Send {
 
     fn session_id(&self) -> Option<String> {
         None
-    }
-}
-
-/// Factory seam for session creation. It is injected by the CLI/engine integration layer or by a
-/// deterministic test fake; no backend-specific runner type crosses this boundary.
-pub trait SessionFactory: Send + Sync {
-    fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String>;
-
-    fn request_cancel(&self, _run_id: &str) -> bool {
-        false
     }
 }
 

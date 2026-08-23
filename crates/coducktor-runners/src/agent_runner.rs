@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use coducktor_contract::ConcreteReasoningEffort;
 use coducktor_core::agent_session::{CancellationToken, PromptImage};
 use coducktor_core::conversations::TurnCancellation;
 use serde::{Deserialize, Serialize};
@@ -15,39 +14,28 @@ use serde::{Deserialize, Serialize};
 pub struct AgentRunSpec {
     /// Set by the engine's out-of-band cancellation path while a manager-owned turn is blocked.
     pub cancellation: AgentCancellation,
-    /// Conversation turns use each harness's native autonomous permission preset. Legacy
-    /// workflow sessions retain their compatibility allowlist behavior while they remain
-    /// readable and executable through the old runtime.
-    pub autonomous: bool,
     /// Appended to the CLI's default system prompt (`--append-system-prompt` for Claude), sent
     /// through OpenCode's native `system` field, or prepended to the opening message for
     /// backends with no dedicated channel.
     pub system_prompt: Option<String>,
     pub user_prompt: String,
-    /// Image blocks delivered with the first user message — screenshots pasted into the new-task
-    /// form, at task start.
+    /// Image blocks delivered with this turn's user message — screenshots pasted into the
+    /// composer.
     pub images: Vec<ContentBlock>,
     /// The directory the agent runs in — also the only writable root.
     pub cwd: PathBuf,
-    /// Tool allowlist; the CLI is default-deny for anything not listed.
-    pub allowed_tools: Vec<String>,
-    /// When `Bash` is allowed, restrict it to commands starting with one of these.
-    pub bash_allowlist: Vec<String>,
     /// Extra directories the agent may read/write besides `cwd`.
     pub additional_directories: Vec<String>,
     /// Extra env vars for the agent process (merged over the curated child env from
     /// `agent_env::build_child_env`).
     pub env: BTreeMap<String, String>,
     pub model: Option<String>,
-    /// Concrete reasoning level for this session — the run manager resolves `auto` before spawn.
-    pub reasoning_effort: Option<ConcreteReasoningEffort>,
-    /// Exact harness-native reasoning value for a conversation. This deliberately bypasses the
-    /// legacy globally normalized reasoning enum.
+    /// Exact harness-native reasoning value. Omission delegates to the harness default; nothing
+    /// translates, lowers, or invents a level.
     pub reasoning: Option<String>,
-    /// Stable session id (UUID) so the user can take over interactively later.
+    /// The provider session this turn belongs to, so a recreated process rejoins it.
     pub session_id: Option<String>,
-    /// Spawn with `--resume <sessionId>` instead of starting a fresh session — picks up the
-    /// on-disk conversation (used by "Continue" after a run ends).
+    /// Rejoin `session_id` natively instead of opening a fresh provider session.
     pub resume: bool,
 }
 
@@ -103,23 +91,9 @@ impl From<TurnCancellation> for AgentCancellation {
     }
 }
 
-/// The wire spelling each backend's CLI/app-server expects for a reasoning-effort override
-/// (claude's `--effort`, codex's `turn/start` overrides). Shared because both backends use the
-/// same lowercase-variant-name convention.
-pub fn reasoning_effort_str(effort: ConcreteReasoningEffort) -> &'static str {
-    match effort {
-        ConcreteReasoningEffort::Low => "low",
-        ConcreteReasoningEffort::Medium => "medium",
-        ConcreteReasoningEffort::High => "high",
-        ConcreteReasoningEffort::XHigh => "xhigh",
-    }
-}
-
-/// Prefer the exact conversation value; fall back to the compatibility workflow value.
+/// The exact harness-native reasoning value for this turn, or `None` to use the harness default.
 pub fn selected_reasoning(spec: &AgentRunSpec) -> Option<&str> {
-    spec.reasoning
-        .as_deref()
-        .or_else(|| spec.reasoning_effort.map(reasoning_effort_str))
+    spec.reasoning.as_deref()
 }
 
 /// One content block of a user message — mirrors the Anthropic wire format so it can be

@@ -2,12 +2,11 @@
 //! the VS Code extension and desktop app use.
 //!
 //! Auth is the host's logged-in ChatGPT/Codex session (or `CODEX_API_KEY`). The agent runs
-//! autonomously via `sandbox: danger-full-access` + `approvalPolicy: never`; setting
-//! `DUCK_APPROVAL_GATE=1` changes the policy to `on-request` and parks supported approval RPCs for
-//! the cockpit to answer. `DUCK_CODEX_NETWORK=0` retains the previous network-blocked
-//! `workspace-write` sandbox as an explicit restriction.
-//! Codex has no per-tool allowlist, so `spec.allowed_tools`/`bash_allowlist` are ignored. Pasted
-//! images are forwarded as app-server `image` user-input items on opening and follow-up turns.
+//! autonomously via `sandbox: danger-full-access` + `approvalPolicy: never` — the app-server
+//! equivalent of `--yolo`. An approval request arriving anyway is a protocol failure: the request
+//! is declined and the turn fails closed rather than hanging on a prompt nobody can answer.
+//! Pasted images are forwarded as app-server `image` user-input items on opening and follow-up
+//! turns.
 //!
 //! # Architecture notes
 //!
@@ -84,16 +83,6 @@ fn wrap_spawn_error(error: &io::Error, program: &str) -> String {
     }
 }
 
-/// `CLAUDE_CODE_USE_BEDROCK`-style toggle: full access is the shared `auto` preset across every
-/// backend; `DUCK_CODEX_NETWORK=0` remains the backwards-compatible explicit sandbox opt-out.
-fn resolve_sandbox(env: &BTreeMap<String, String>) -> &'static str {
-    if env.get("DUCK_CODEX_NETWORK").map(String::as_str) == Some("0") {
-        "workspace-write"
-    } else {
-        "danger-full-access"
-    }
-}
-
 /// The reasoning-summary override sent on `turn/start`. Defaults to `auto`; `DUCK_CODEX_REASONING`
 /// overrides it (`auto`/`concise`/`detailed`, or `none` to opt out); an unrecognized value falls
 /// back to `auto`.
@@ -104,14 +93,6 @@ fn resolve_reasoning_summary(env: &BTreeMap<String, String>) -> String {
     {
         Some(value) if REASONING_SUMMARIES.contains(&value.as_str()) => value,
         _ => "auto".to_owned(),
-    }
-}
-
-fn resolve_approval_policy(env: &BTreeMap<String, String>) -> &'static str {
-    if env.get("DUCK_APPROVAL_GATE").map(String::as_str) == Some("1") {
-        "on-request"
-    } else {
-        "never"
     }
 }
 
@@ -127,13 +108,6 @@ enum ApprovalKind {
     Permissions,
 }
 
-struct PendingApproval {
-    rpc_id: Value,
-    request_id: String,
-    kind: ApprovalKind,
-    requested_permissions: Option<Value>,
-}
-
 /// A live `codex app-server` session driving a single thread. Implements [`AgentSession`].
 pub struct CodexSession {
     process: ChildProcess,
@@ -142,12 +116,9 @@ pub struct CodexSession {
     thread_id: Option<String>,
     active_turn_id: Option<String>,
     pending_user_input: Option<PendingUserInput>,
-    pending_approval: Option<PendingApproval>,
     /// Whether stdin is still open for this session.
     open: bool,
-    sandbox: &'static str,
     reasoning_summary: String,
-    approval_gate: bool,
 }
 
 /// Spawn a codex app-server process. Unlike claude's `open_claude_session`, this does not talk to
@@ -174,14 +145,8 @@ pub fn open_codex_session(
     .map_err(|error| wrap_spawn_error(&error, &config.program))?;
     process.set_cancellation(spec.cancellation.clone());
 
-    let sandbox = if spec.autonomous {
-        "danger-full-access"
-    } else {
-        resolve_sandbox(host_env)
-    };
     let reasoning_summary = resolve_reasoning_summary(host_env);
 
-    let approval_gate = !spec.autonomous && resolve_approval_policy(host_env) == "on-request";
     Ok(CodexSession {
         process,
         spec,
@@ -189,11 +154,8 @@ pub fn open_codex_session(
         thread_id: None,
         active_turn_id: None,
         pending_user_input: None,
-        pending_approval: None,
         open: true,
-        sandbox,
         reasoning_summary,
-        approval_gate,
     })
 }
 
@@ -370,11 +332,12 @@ fn ask_requested_event(request_id: &Value, questions: &[AskQuestion]) -> EventIn
         .field("questions", questions)
 }
 
-fn approval_request(
-    method: &str,
-    rpc_id: Value,
-    params: &Value,
-) -> Option<(PendingApproval, EventInput)> {
+/// Recognize an approval RPC and build the exact decline payload its method expects.
+///
+/// Conversations always run `approvalPolicy: never`, so an approval request is a protocol
+/// failure, not a question for the user: the RPC still has to be answered so the app-server does
+/// not block, and then the turn fails closed.
+fn approval_decline(method: &str, rpc_id: Value) -> Option<(Value, String, Value)> {
     let kind = match method {
         "item/commandExecution/requestApproval" => ApprovalKind::Command,
         "item/fileChange/requestApproval" => ApprovalKind::FileChange,
@@ -385,88 +348,11 @@ fn approval_request(
         .as_str()
         .map(ToOwned::to_owned)
         .or_else(|| rpc_id.as_u64().map(|id| id.to_string()))?;
-    let item_id = params.get("itemId").and_then(Value::as_str);
-    let requested_permissions = match kind {
-        ApprovalKind::Permissions => {
-            let permissions = params.get("permissions")?.clone();
-            if !permissions.is_object() || permissions.to_string().len() > 16 * 1024 {
-                return None;
-            }
-            Some(permissions)
-        }
-        ApprovalKind::Command | ApprovalKind::FileChange => None,
+    let response = match kind {
+        ApprovalKind::Command | ApprovalKind::FileChange => json!({"decision": "decline"}),
+        ApprovalKind::Permissions => json!({"permissions": {}}),
     };
-    let subject = match kind {
-        ApprovalKind::Command => params
-            .get("command")
-            .and_then(Value::as_str)
-            .filter(|command| !command.trim().is_empty())
-            .unwrap_or("Run the requested command"),
-        ApprovalKind::FileChange => params
-            .get("reason")
-            .and_then(Value::as_str)
-            .filter(|reason| !reason.trim().is_empty())
-            .unwrap_or("Apply the requested file change"),
-        ApprovalKind::Permissions => "Grant the requested additional permissions",
-    };
-    let subject: String = subject.chars().take(300).collect();
-    let title = match kind {
-        ApprovalKind::Command => format!("Allow command: {subject}?"),
-        ApprovalKind::FileChange => format!("Allow file change: {subject}?"),
-        ApprovalKind::Permissions => format!("Allow additional permissions: {subject}?"),
-    };
-    let event = EventInput::new("permission.requested")
-        .field("requestId", &request_id)
-        .field("itemId", item_id)
-        .field("title", title)
-        .field(
-            "options",
-            json!([
-                {"id":"allow_once","label":"Allow once","kind":"allow_once"},
-                {"id":"allow_session","label":"Allow session","kind":"allow_always"},
-                {"id":"reject_once","label":"Reject","kind":"reject_once"}
-            ]),
-        );
-    Some((
-        PendingApproval {
-            rpc_id,
-            request_id,
-            kind,
-            requested_permissions,
-        },
-        event,
-    ))
-}
-
-fn approval_response(pending: &PendingApproval, text: &str) -> (&'static str, Value) {
-    let normalized = text.trim().to_ascii_lowercase();
-    let (option_id, decision) =
-        if normalized.contains("allow session") || normalized.contains("allow always") {
-            ("allow_session", "acceptForSession")
-        } else if normalized.contains("allow once") {
-            ("allow_once", "accept")
-        } else {
-            ("reject_once", "decline")
-        };
-    let response = match pending.kind {
-        ApprovalKind::Command | ApprovalKind::FileChange => json!({"decision": decision}),
-        ApprovalKind::Permissions => {
-            let permissions = if option_id == "reject_once" {
-                json!({})
-            } else {
-                pending
-                    .requested_permissions
-                    .clone()
-                    .unwrap_or_else(|| json!({}))
-            };
-            let mut response = json!({"permissions": permissions});
-            if option_id == "allow_session" {
-                response["scope"] = Value::String("session".to_owned());
-            }
-            response
-        }
-    };
-    (option_id, response)
+    Some((rpc_id, request_id, response))
 }
 
 impl CodexSession {
@@ -580,29 +466,14 @@ impl CodexSession {
             }
 
             if let Some(id) = id.clone()
-                && let Some((pending, event)) = approval_request(
-                    &method,
-                    id,
-                    &msg.get("params").cloned().unwrap_or(Value::Null),
-                )
+                && let Some((rpc_id, request_id, response)) = approval_decline(&method, id)
             {
-                if self.approval_gate {
-                    on_event(event).map_err(|error| error.to_string())?;
-                    self.pending_approval = Some(pending);
-                    return Ok(StopReason::UserInputRequested);
-                }
-                let (_, response) = approval_response(&pending, "reject");
-                self.write_response(pending.rpc_id, response)?;
-                if self.spec.autonomous {
-                    let message = format!(
-                        "Codex requested permission {} despite approvalPolicy=never",
-                        pending.request_id
-                    );
-                    on_event(EventInput::new("error").field("message", &message))
-                        .map_err(|error| error.to_string())?;
-                    return Err(message);
-                }
-                continue;
+                self.write_response(rpc_id, response)?;
+                let message =
+                    format!("Codex requested permission {request_id} despite approvalPolicy=never");
+                on_event(EventInput::new("error").field("message", &message))
+                    .map_err(|error| error.to_string())?;
+                return Err(message);
             }
             if let Some(id) = id.clone()
                 && (method.ends_with("/requestApproval")
@@ -612,24 +483,12 @@ impl CodexSession {
                     ))
             {
                 self.write_response_error(id, -32601, "unsupported approval request")?;
-                if self.spec.autonomous {
-                    let message = format!(
-                        "Codex sent unsupported permission request {method} despite approvalPolicy=never"
-                    );
-                    on_event(EventInput::new("error").field("message", &message))
-                        .map_err(|error| error.to_string())?;
-                    return Err(message);
-                }
-                on_event(
-                    EventInput::new("error")
-                        .field(
-                            "message",
-                            format!("unsupported Codex approval request: {method}"),
-                        )
-                        .field("fatal", false),
-                )
-                .map_err(|error| error.to_string())?;
-                continue;
+                let message = format!(
+                    "Codex sent unsupported permission request {method} despite approvalPolicy=never"
+                );
+                on_event(EventInput::new("error").field("message", &message))
+                    .map_err(|error| error.to_string())?;
+                return Err(message);
             }
 
             if method == "mcpServer/elicitation/request"
@@ -823,7 +682,6 @@ impl CodexSession {
             }
             "turn/completed" | "turn/failed" => {
                 self.pending_user_input = None;
-                self.pending_approval = None;
                 self.active_turn_id = None;
                 // An interrupted/failed item never sees item/completed — surface its partial
                 // prose before the turn boundary (marker detection reads it there).
@@ -874,15 +732,8 @@ impl CodexSession {
             overrides.insert("effort".to_owned(), json!(effort));
         }
         overrides.insert("cwd".to_owned(), json!(self.spec.cwd.to_string_lossy()));
-        overrides.insert("sandbox".to_owned(), json!(self.sandbox));
-        overrides.insert(
-            "approvalPolicy".to_owned(),
-            json!(if self.approval_gate {
-                "on-request"
-            } else {
-                "never"
-            }),
-        );
+        overrides.insert("sandbox".to_owned(), json!("danger-full-access"));
+        overrides.insert("approvalPolicy".to_owned(), json!("never"));
 
         let result =
             if let (true, Some(session_id)) = (self.spec.resume, self.spec.session_id.as_ref()) {
@@ -1081,15 +932,6 @@ impl AgentSession for CodexSession {
         if let Some(pending) = self.pending_user_input.take() {
             let answers = user_input_answers(&pending.questions, prompt);
             self.write_response(pending.rpc_id, json!({ "answers": answers }))?;
-        } else if let Some(pending) = self.pending_approval.take() {
-            let (option_id, response) = approval_response(&pending, prompt);
-            self.write_response(pending.rpc_id, response)?;
-            on_event(
-                EventInput::new("permission.resolved")
-                    .field("requestId", pending.request_id)
-                    .field("optionId", option_id),
-            )
-            .map_err(|error| error.to_string())?;
         } else {
             let image_urls = images.iter().map(PromptImage::data_url).collect::<Vec<_>>();
             self.start_or_steer_turn(prompt, &image_urls, deadline, &mut turn, on_event)?;
@@ -1174,14 +1016,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sandbox_defaults_to_full_access() {
-        assert_eq!(resolve_sandbox(&BTreeMap::new()), "danger-full-access");
-        let mut env = BTreeMap::new();
-        env.insert("DUCK_CODEX_NETWORK".to_owned(), "0".to_owned());
-        assert_eq!(resolve_sandbox(&env), "workspace-write");
-    }
-
-    #[test]
     fn resolve_reasoning_summary_falls_back_to_auto() {
         assert_eq!(resolve_reasoning_summary(&BTreeMap::new()), "auto");
         let mut env = BTreeMap::new();
@@ -1192,31 +1026,14 @@ mod tests {
     }
 
     #[test]
-    fn approval_gate_is_an_explicit_opt_in() {
-        assert_eq!(resolve_approval_policy(&BTreeMap::new()), "never");
-        let mut env = BTreeMap::new();
-        env.insert("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned());
-        assert_eq!(resolve_approval_policy(&env), "on-request");
-        env.insert("DUCK_APPROVAL_GATE".to_owned(), "true".to_owned());
-        assert_eq!(resolve_approval_policy(&env), "never");
-    }
-
-    #[test]
-    fn conversation_session_ignores_legacy_permission_and_sandbox_overrides() {
+    fn conversation_session_keeps_the_exact_native_reasoning_value() {
         let dir = tempfile::tempdir().unwrap();
         let spec = AgentRunSpec {
-            autonomous: true,
             reasoning: Some("exact-native-effort".to_owned()),
             cwd: dir.path().to_path_buf(),
             ..Default::default()
         };
-        let env = BTreeMap::from([
-            ("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned()),
-            ("DUCK_CODEX_NETWORK".to_owned(), "0".to_owned()),
-        ]);
-        let session = open_codex_session(&node_config(), spec, &env).unwrap();
-        assert_eq!(session.sandbox, "danger-full-access");
-        assert!(!session.approval_gate);
+        let session = open_codex_session(&node_config(), spec, &BTreeMap::new()).unwrap();
         assert_eq!(
             selected_reasoning(&session.spec),
             Some("exact-native-effort")
@@ -1227,7 +1044,6 @@ mod tests {
     fn unexpected_conversation_permission_request_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
         let spec = AgentRunSpec {
-            autonomous: true,
             user_prompt: "mock:approval".to_owned(),
             cwd: dir.path().to_path_buf(),
             ..Default::default()
@@ -1246,87 +1062,30 @@ mod tests {
     }
 
     #[test]
-    fn command_approval_is_normalized_and_unknown_answers_decline() {
-        let (pending, event) = approval_request(
-            "item/commandExecution/requestApproval",
-            json!(42),
-            &json!({"itemId":"item-1","command":"cargo test"}),
-        )
-        .expect("supported approval request");
-        assert_eq!(pending.request_id, "42");
-        assert_eq!(event.event_type, "permission.requested");
-        assert_eq!(
-            event.extra.get("title").and_then(Value::as_str),
-            Some("Allow command: cargo test?")
-        );
-        assert_eq!(
-            approval_response(&pending, "Permission: Allow once").1,
-            json!({"decision":"accept"})
-        );
-        assert_eq!(
-            approval_response(&pending, "yes please").1,
-            json!({"decision":"decline"})
-        );
+    fn every_approval_method_gets_the_exact_decline_payload_it_expects() {
+        let (_, request_id, response) =
+            approval_decline("item/commandExecution/requestApproval", json!(42))
+                .expect("supported approval request");
+        assert_eq!(request_id, "42");
+        assert_eq!(response, json!({"decision":"decline"}));
+
+        let (_, request_id, response) =
+            approval_decline("item/fileChange/requestApproval", json!("approval-1"))
+                .expect("supported approval request");
+        assert_eq!(request_id, "approval-1");
+        assert_eq!(response, json!({"decision":"decline"}));
+
+        let (_, request_id, response) =
+            approval_decline("item/permissions/requestApproval", json!("permissions-1"))
+                .expect("supported approval request");
+        assert_eq!(request_id, "permissions-1");
+        assert_eq!(response, json!({"permissions":{}}));
     }
 
     #[test]
-    fn file_approval_supports_session_scope() {
-        let (pending, event) = approval_request(
-            "item/fileChange/requestApproval",
-            json!("approval-1"),
-            &json!({"itemId":"item-2","reason":"write outside the workspace"}),
-        )
-        .expect("supported approval request");
-        assert_eq!(
-            event.extra.get("requestId").and_then(Value::as_str),
-            Some("approval-1")
-        );
-        assert_eq!(
-            approval_response(&pending, "Permission: Allow session").1,
-            json!({"decision":"acceptForSession"})
-        );
-    }
-
-    #[test]
-    fn permission_profile_approval_only_grants_the_requested_subset() {
-        let (pending, event) = approval_request(
-            "item/permissions/requestApproval",
-            json!("permissions-1"),
-            &json!({"permissions":{"fileSystem":{"write":["/repo"]}}}),
-        )
-        .unwrap();
-        assert_eq!(
-            event.extra.get("title").and_then(Value::as_str),
-            Some("Allow additional permissions: Grant the requested additional permissions?")
-        );
-        assert_eq!(
-            approval_response(&pending, "Permission: Allow session").1,
-            json!({"scope":"session","permissions":{"fileSystem":{"write":["/repo"]}}})
-        );
-        assert_eq!(
-            approval_response(&pending, "reject").1,
-            json!({"permissions":{}})
-        );
-    }
-
-    #[test]
-    fn permission_profile_approval_rejects_non_object_and_oversized_requests() {
-        assert!(
-            approval_request(
-                "item/permissions/requestApproval",
-                json!("permissions-1"),
-                &json!({"permissions":["/repo"]}),
-            )
-            .is_none()
-        );
-        assert!(
-            approval_request(
-                "item/permissions/requestApproval",
-                json!("permissions-1"),
-                &json!({"permissions":{"fileSystem":{"write":"x".repeat(16 * 1024)}}}),
-            )
-            .is_none()
-        );
+    fn an_unrecognized_method_is_not_an_approval_request() {
+        assert!(approval_decline("item/completed", json!(1)).is_none());
+        assert!(approval_decline("item/permissions/requestApproval", json!(null)).is_none());
     }
 
     #[test]
@@ -1361,34 +1120,21 @@ mod tests {
         session.finish(&mut |_| Ok(())).unwrap();
     }
 
+    /// A command approval under `approvalPolicy: never` is a protocol failure, not a question:
+    /// the RPC is declined so the app-server is not left blocking, and the turn fails.
     #[test]
-    fn approval_request_parks_and_the_follow_up_answers_the_original_rpc() {
+    fn a_command_approval_request_is_declined_and_fails_the_turn() {
         let dir = tempfile::tempdir().unwrap();
         let config = node_config();
         let run_spec = spec_for(dir.path(), "mock:approval");
-        let mut env = BTreeMap::new();
-        env.insert("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned());
-        let mut session = open_codex_session(&config, run_spec, &env).unwrap();
+        let mut session = open_codex_session(&config, run_spec, &BTreeMap::new()).unwrap();
         let (outcome, events) = run_turn(&mut session);
-        assert!(matches!(outcome, Ok(SessionOutcome::Waiting(_))));
+        assert!(outcome.is_err_and(|message| message.contains("approvalPolicy=never")));
         assert!(
-            events
+            !events
                 .iter()
                 .any(|event| event.event_type == "permission.requested")
         );
-
-        let mut follow_up_events = Vec::new();
-        let outcome = session
-            .send_message("Permission: Allow once", &[], &mut |event| {
-                follow_up_events.push(event);
-                Ok(())
-            })
-            .expect("approval response should resume the turn");
-        assert!(matches!(outcome, SessionOutcome::Waiting(_)));
-        assert!(follow_up_events.iter().any(|event| {
-            event.event_type == "permission.resolved"
-                && event.extra.get("optionId").and_then(Value::as_str) == Some("allow_once")
-        }));
         session.finish(&mut |_| Ok(())).unwrap();
     }
 
@@ -1470,29 +1216,17 @@ mod tests {
     }
 
     #[test]
-    fn permission_profile_approval_parks_and_grants_only_the_requested_subset() {
+    fn a_permission_profile_request_is_declined_and_grants_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let config = node_config();
         let run_spec = spec_for(dir.path(), "mock:permissions-approval");
-        let mut env = BTreeMap::new();
-        env.insert("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned());
-        let mut session = open_codex_session(&config, run_spec, &env).unwrap();
+        let mut session = open_codex_session(&config, run_spec, &BTreeMap::new()).unwrap();
         let (outcome, events) = run_turn(&mut session);
-        assert!(matches!(outcome, Ok(SessionOutcome::Waiting(_))));
+        assert!(outcome.is_err_and(|message| message.contains("approvalPolicy=never")));
         assert!(
-            events
+            !events
                 .iter()
                 .any(|event| event.event_type == "permission.requested")
-        );
-        let resumed = session
-            .send_message("Permission: Allow session", &[], &mut |_| Ok(()))
-            .unwrap();
-        assert!(
-            matches!(
-                resumed,
-                SessionOutcome::Waiting(_) | SessionOutcome::Completed(_)
-            ),
-            "{resumed:?}"
         );
         session.finish(&mut |_| Ok(())).unwrap();
     }
@@ -1533,19 +1267,27 @@ mod tests {
         session.finish(&mut |_| Ok(())).unwrap();
     }
 
+    /// An approval method this adapter cannot even parse still gets a JSON-RPC error response
+    /// before the turn fails, so the app-server never waits on a reply that is not coming.
     #[test]
-    fn unknown_approval_requests_receive_a_protocol_error_without_blocking_the_turn() {
+    fn an_unknown_approval_method_answers_the_rpc_and_still_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
         let config = node_config();
         let run_spec = spec_for(dir.path(), "mock:unknown-approval");
         let mut session = open_codex_session(&config, run_spec, &BTreeMap::new()).unwrap();
         let (outcome, events) = run_turn(&mut session);
 
-        assert!(outcome.is_ok());
+        assert!(outcome.is_err_and(|message| message.contains("approvalPolicy=never")));
         assert!(events.iter().any(|event| {
             event.event_type == "error"
-                && event.extra.get("message").and_then(Value::as_str)
-                    == Some("unsupported Codex approval request: item/browser/requestApproval")
+                && event
+                    .extra
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| {
+                        message.contains("item/browser/requestApproval")
+                            && message.contains("approvalPolicy=never")
+                    })
         }));
         session.finish(&mut |_| Ok(())).unwrap();
     }

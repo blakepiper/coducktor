@@ -17,7 +17,6 @@ pub mod conversation_factory;
 pub mod model_identity;
 pub mod opencode;
 pub mod opencode_run;
-pub mod opencode_runner;
 pub mod pi;
 pub mod pi_runner;
 pub mod session_factory;

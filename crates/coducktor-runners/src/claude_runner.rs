@@ -1,8 +1,6 @@
 //! `AgentSession` over the Claude Code CLI in headless stream-json mode. Auth is the host's
-//! logged-in Pro/Max
-//! subscription (no API key needed). Sandboxing is `--allowedTools` (default-deny for anything
-//! not listed) + running inside the repo `cwd`; `Bash` is narrowed to `Bash(<prefix>:*)`
-//! patterns only when `bash_allowlist` is set.
+//! logged-in Pro/Max subscription (no API key needed). Conversations run in Claude's own
+//! autonomous permission mode inside the repo `cwd`; Coducktor sends no tool allowlist.
 //!
 //! Each call to `turn()` or `send_message()` consumes one Claude result frame. Shared process
 //! plumbing handles stdout, stderr, and EOF escalation; this module maps Claude's
@@ -30,10 +28,9 @@ pub const EOF_TERM_GRACE_MS: u64 = 8_000;
 pub const EOF_KILL_GRACE_MS: u64 = 4_000;
 
 /// Build the headless argv. `--input-format stream-json` reads user messages from stdin;
-/// `--output-format stream-json --verbose` gives per-event NDJSON; `--permission-mode dontAsk`
-/// keeps headless runs non-interactive: tools in `--allowedTools` proceed and everything else is
-/// denied instead of prompting. `DUCK_APPROVAL_GATE=1` opts back into Claude's approval UI.
-pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) -> Vec<String> {
+/// `--output-format stream-json --verbose` gives per-event NDJSON; `--permission-mode auto` is
+/// Claude's own autonomous preset, so the harness decides tool use rather than Coducktor.
+pub fn build_claude_args(spec: &AgentRunSpec) -> Vec<String> {
     let mut args = vec![
         "--input-format".to_owned(),
         "stream-json".to_owned(),
@@ -42,21 +39,14 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
         "--verbose".to_owned(),
         "--forward-subagent-text".to_owned(),
         "--permission-mode".to_owned(),
-        if spec.autonomous {
-            "auto".to_owned()
-        } else if env.get("DUCK_APPROVAL_GATE").map(String::as_str) == Some("1") {
-            "acceptEdits".to_owned()
-        } else {
-            "dontAsk".to_owned()
-        },
+        "auto".to_owned(),
     ];
     if let Some(system_prompt) = &spec.system_prompt {
         args.push("--append-system-prompt".to_owned());
         args.push(system_prompt.clone());
     }
-    // Pin the session so the user can `claude --resume <sessionId>` in the repo to take over
-    // interactively after a run. With `resume` we reopen the existing on-disk conversation
-    // instead.
+    // Pin the session so a recreated process rejoins the same provider conversation. With
+    // `resume` we reopen the existing on-disk conversation instead of claiming a new id.
     if let Some(session_id) = &spec.session_id {
         args.push(
             if spec.resume {
@@ -67,15 +57,6 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
             .to_owned(),
         );
         args.push(session_id.clone());
-    }
-    let allowed = if spec.autonomous {
-        Vec::new()
-    } else {
-        build_allowed_tools(&spec.allowed_tools, &spec.bash_allowlist)
-    };
-    if !allowed.is_empty() {
-        args.push("--allowedTools".to_owned());
-        args.push(allowed.join(","));
     }
     if let Some(model) = &spec.model {
         args.push("--model".to_owned());
@@ -92,30 +73,9 @@ pub fn build_claude_args(spec: &AgentRunSpec, env: &BTreeMap<String, String>) ->
     args
 }
 
-/// Map `allowed_tools` onto claude's `--allowedTools` syntax. `Bash` with a `bash_allowlist`
-/// becomes one `Bash(<prefix>:*)` entry per allowed prefix; `Bash` with no allowlist stays plain
-/// `Bash`.
-pub fn build_allowed_tools(allowed_tools: &[String], bash_allowlist: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for tool in allowed_tools {
-        if tool == "Bash" && !bash_allowlist.is_empty() {
-            for prefix in bash_allowlist {
-                let prefix = prefix.trim();
-                if !prefix.is_empty() {
-                    out.push(format!("Bash({prefix}:*)"));
-                }
-            }
-        } else {
-            out.push(tool.clone());
-        }
-    }
-    out
-}
-
 /// Where to find the claude binary. Production wiring resolves `program`/`prefix_args` from
-/// `DUCK_CLAUDE_BIN`/`DUCK_DRY_RUN` (resolved by the session factory,
-/// — it is the same "injected by the integration layer" seam `SessionFactory` already is); tests
-/// point `program` at `node` with `prefix_args: vec![mock_script_path]`.
+/// `DUCK_CLAUDE_BIN`/`DUCK_DRY_RUN` in the session factory; tests point `program` at `node` with
+/// `prefix_args: vec![mock_script_path]`.
 #[derive(Debug, Clone)]
 pub struct ClaudeSpawnConfig {
     pub program: String,
@@ -164,7 +124,7 @@ pub fn open_claude_session(
     host_env: &BTreeMap<String, String>,
 ) -> Result<ClaudeSession, String> {
     let mut args = config.prefix_args.clone();
-    args.extend(build_claude_args(spec, host_env));
+    args.extend(build_claude_args(spec));
     let mut process = ChildProcess::spawn(
         &SpawnConfig {
             program: config.program.clone(),
@@ -558,7 +518,6 @@ impl AgentSession for ClaudeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coducktor_contract::ConcreteReasoningEffort;
     use std::path::PathBuf;
     use std::time::Instant;
 
@@ -607,7 +566,7 @@ mod tests {
             system_prompt: Some("Extra rules.\n\n---\n\nContract.".to_owned()),
             ..Default::default()
         };
-        let args = build_claude_args(&spec, &BTreeMap::new());
+        let args = build_claude_args(&spec);
         let idx = args
             .iter()
             .position(|arg| arg == "--append-system-prompt")
@@ -621,7 +580,7 @@ mod tests {
             user_prompt: "do it".to_owned(),
             ..Default::default()
         };
-        let args = build_claude_args(&spec, &BTreeMap::new());
+        let args = build_claude_args(&spec);
         assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
     }
 
@@ -631,51 +590,18 @@ mod tests {
             user_prompt: "delegate it".to_owned(),
             ..Default::default()
         };
-        let args = build_claude_args(&spec, &BTreeMap::new());
+        let args = build_claude_args(&spec);
         assert!(args.iter().any(|arg| arg == "--forward-subagent-text"));
     }
 
     #[test]
-    fn build_claude_args_denies_unapproved_tools_by_default() {
+    fn conversation_args_use_auto_and_never_narrow_native_tools() {
         let spec = AgentRunSpec {
             user_prompt: "do it".to_owned(),
-            ..Default::default()
-        };
-        let args = build_claude_args(&spec, &BTreeMap::new());
-        let idx = args
-            .iter()
-            .position(|arg| arg == "--permission-mode")
-            .unwrap();
-        assert_eq!(args[idx + 1], "dontAsk");
-    }
-
-    #[test]
-    fn build_claude_args_enables_approval_gate_when_requested() {
-        let spec = AgentRunSpec {
-            user_prompt: "do it".to_owned(),
-            ..Default::default()
-        };
-        let mut env = BTreeMap::new();
-        env.insert("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned());
-        let args = build_claude_args(&spec, &env);
-        let idx = args
-            .iter()
-            .position(|arg| arg == "--permission-mode")
-            .unwrap();
-        assert_eq!(args[idx + 1], "acceptEdits");
-    }
-
-    #[test]
-    fn conversation_args_use_auto_and_do_not_narrow_native_tools() {
-        let spec = AgentRunSpec {
-            autonomous: true,
-            allowed_tools: vec!["Read".to_owned()],
-            bash_allowlist: vec!["cargo test".to_owned()],
             reasoning: Some("exact-native-effort".to_owned()),
             ..Default::default()
         };
-        let env = BTreeMap::from([("DUCK_APPROVAL_GATE".to_owned(), "1".to_owned())]);
-        let args = build_claude_args(&spec, &env);
+        let args = build_claude_args(&spec);
         let permission = args
             .iter()
             .position(|arg| arg == "--permission-mode")
@@ -690,33 +616,13 @@ mod tests {
     }
 
     #[test]
-    fn build_claude_args_passes_the_selected_reasoning_effort() {
+    fn build_claude_args_omits_effort_when_the_harness_default_applies() {
         let spec = AgentRunSpec {
             user_prompt: "do it".to_owned(),
-            reasoning_effort: Some(ConcreteReasoningEffort::High),
             ..Default::default()
         };
-        let args = build_claude_args(&spec, &BTreeMap::new());
-        let idx = args.iter().position(|arg| arg == "--effort").unwrap();
-        assert_eq!(args[idx + 1], "high");
-    }
-
-    #[test]
-    fn build_allowed_tools_expands_bash_allowlist_into_scoped_entries() {
-        let allowed = build_allowed_tools(
-            &["Read".to_owned(), "Bash".to_owned()],
-            &["npm test".to_owned(), "git status".to_owned()],
-        );
-        assert_eq!(
-            allowed,
-            vec!["Read", "Bash(npm test:*)", "Bash(git status:*)"]
-        );
-    }
-
-    #[test]
-    fn build_allowed_tools_keeps_bash_unrestricted_without_an_allowlist() {
-        let allowed = build_allowed_tools(&["Bash".to_owned()], &[]);
-        assert_eq!(allowed, vec!["Bash"]);
+        let args = build_claude_args(&spec);
+        assert!(!args.iter().any(|arg| arg == "--effort"));
     }
 
     // ---- real-subprocess tests against the bundled dry-run mock ----------------------------------

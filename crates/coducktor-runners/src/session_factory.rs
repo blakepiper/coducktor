@@ -1,92 +1,33 @@
-//! A concrete `coducktor_core::agent_session::SessionFactory` dispatching to the four real
-//! backends (claude/codex/opencode/pi) by `RunnerSelection`.
+//! Per-harness binary resolution for the conversation runtime.
+//!
+//! [`DefaultSessionFactory`] holds one environment snapshot and turns it into the concrete spawn
+//! configuration each backend runner needs. Opening a session is
+//! [`crate::conversation_factory`]'s job; nothing here dispatches a turn.
 //!
 //! Binary resolution follows each runner's supported configuration:
-//! - claude/pi: `DUCK_CLAUDE_BIN`/`DUCK_PI_BIN` override, else — when `DUCK_DRY_RUN=1` — the bundled
+//! - claude/pi: `DUCK_CLAUDE_BIN`/`DUCK_PI_BIN` override, else — when `DUCK_DRY_RUN=1` — the
 //!   bundled mock script, else the bare binary name on PATH.
 //! - codex/opencode: `DUCK_CODEX_BIN`/`DUCK_OPENCODE_BIN` override, else the bare binary name on
 //!   PATH — these runners have no `DUCK_DRY_RUN` fallback.
 //!
 //! The dry-run mock scripts live under the repository's root-level `fixtures/` directory. They
-//! are resolved relative to `SessionRequest.cwd`, which is the repository root for a run.
+//! are resolved relative to the conversation's repository root.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
-use coducktor_contract::{Runner, RunnerSelection};
-use coducktor_core::agent_session::{
-    AgentSession, CancellationToken, EventInput, PromptImage, SessionFactory, SessionOutcome,
-    SessionRequest,
-};
-
-use crate::agent_runner::{AgentRunSpec, ContentBlock, ImageSource};
-use crate::claude_runner::{self, ClaudeSpawnConfig};
-use crate::codex_runner::{self, CodexSpawnConfig};
-use crate::opencode_runner::{self, OpencodeSpawnConfig};
-use crate::pi_runner::{self, PiSpawnConfig};
+use crate::claude_runner::ClaudeSpawnConfig;
+use crate::codex_runner::CodexSpawnConfig;
+use crate::opencode_run::OpencodeSpawnConfig;
+use crate::pi_runner::PiSpawnConfig;
 
 const MOCK_CLAUDE_RELATIVE: &str = "fixtures/scripts/mock-claude.mjs";
 const MOCK_PI_RELATIVE: &str = "fixtures/scripts/mock-pi-rpc.mjs";
 
-/// Production `SessionFactory`: spawns the real agent CLI (or, for claude/pi under
-/// `DUCK_DRY_RUN=1`, the bundled mock) for whichever backend a [`SessionRequest`] names.
+/// Resolves the real agent CLI (or, for claude/pi under `DUCK_DRY_RUN=1`, the bundled mock) for
+/// whichever backend a conversation names.
 pub struct DefaultSessionFactory {
     host_env: BTreeMap<String, String>,
-    cancellations: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
-}
-
-struct RegisteredSession {
-    run_id: String,
-    cancellation: CancellationToken,
-    cancellations: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
-    inner: Box<dyn AgentSession + Send>,
-}
-
-impl Drop for RegisteredSession {
-    fn drop(&mut self) {
-        self.cancellation.deactivate();
-        if let Ok(mut cancellations) = self.cancellations.lock()
-            && cancellations
-                .get(&self.run_id)
-                .is_some_and(|current| current == &self.cancellation)
-        {
-            cancellations.remove(&self.run_id);
-        }
-    }
-}
-
-impl AgentSession for RegisteredSession {
-    fn turn(
-        &mut self,
-        on_event: &mut dyn FnMut(EventInput) -> std::io::Result<()>,
-    ) -> Result<SessionOutcome, String> {
-        self.inner.turn(on_event)
-    }
-
-    fn send_message(
-        &mut self,
-        prompt: &str,
-        images: &[PromptImage],
-        on_event: &mut dyn FnMut(EventInput) -> std::io::Result<()>,
-    ) -> Result<SessionOutcome, String> {
-        self.inner.send_message(prompt, images, on_event)
-    }
-
-    fn finish(
-        &mut self,
-        on_event: &mut dyn FnMut(EventInput) -> std::io::Result<()>,
-    ) -> Result<SessionOutcome, String> {
-        self.inner.finish(on_event)
-    }
-
-    fn cancel(&mut self) {
-        self.inner.cancel();
-    }
-
-    fn session_id(&self) -> Option<String> {
-        self.inner.session_id()
-    }
 }
 
 impl DefaultSessionFactory {
@@ -105,10 +46,7 @@ impl DefaultSessionFactory {
     /// environment — the seam a caller (a test, or a future non-CLI embedder) uses to get
     /// deterministic backend resolution without mutating global process state.
     pub fn with_env(host_env: BTreeMap<String, String>) -> Self {
-        Self {
-            host_env,
-            cancellations: Arc::new(Mutex::new(BTreeMap::new())),
-        }
+        Self { host_env }
     }
 
     fn dry_run(&self) -> bool {
@@ -170,126 +108,9 @@ impl Default for DefaultSessionFactory {
     }
 }
 
-/// `RunnerSelection::Auto` falls back to claude — the same default `RunManager::execute_job`
-/// itself already applies (`.unwrap_or(RunnerSelection::Claude)`) when nothing more specific was
-/// requested; a factory should never actually observe `Auto` in practice; this exists so `open`
-/// is total rather than failing on it.
-fn resolve_runner(selection: RunnerSelection) -> Runner {
-    match selection {
-        RunnerSelection::Claude | RunnerSelection::Auto => Runner::Claude,
-        RunnerSelection::Codex => Runner::Codex,
-        RunnerSelection::OpenCode => Runner::OpenCode,
-        RunnerSelection::Pi => Runner::Pi,
-    }
-}
-
-fn to_agent_run_spec(request: &SessionRequest) -> AgentRunSpec {
-    AgentRunSpec {
-        cancellation: request.cancellation.clone().into(),
-        autonomous: false,
-        system_prompt: request.system_prompt.clone(),
-        user_prompt: request.prompt.clone(),
-        images: request
-            .images
-            .iter()
-            .map(|image| ContentBlock::Image {
-                source: ImageSource {
-                    kind: "base64".to_owned(),
-                    media_type: image.media_type.clone(),
-                    data: image.data.clone(),
-                },
-            })
-            .collect(),
-        cwd: request.cwd.clone(),
-        allowed_tools: request.allowed_tools.clone(),
-        bash_allowlist: request.bash_allowlist.clone(),
-        additional_directories: Vec::new(),
-        env: request.env.clone(),
-        model: request.model.clone(),
-        reasoning_effort: request.reasoning_effort,
-        reasoning: None,
-        session_id: request.session_id.clone(),
-        resume: request.continuation,
-    }
-}
-
-impl SessionFactory for DefaultSessionFactory {
-    fn open(&self, request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-        if let Ok(mut cancellations) = self.cancellations.lock() {
-            cancellations.insert(request.run_id.clone(), request.cancellation.clone());
-        }
-        let repo_root = request.cwd.clone();
-        let spec = to_agent_run_spec(&request);
-        let opened: Result<Box<dyn AgentSession + Send>, String> =
-            match resolve_runner(request.runner) {
-                Runner::Claude => {
-                    let config = self.claude_config(&repo_root);
-                    claude_runner::open_claude_session(&config, &spec, &self.host_env)
-                        .map(|session| Box::new(session) as Box<dyn AgentSession + Send>)
-                }
-                Runner::Codex => {
-                    let config = self.codex_config();
-                    codex_runner::open_codex_session(&config, spec, &self.host_env)
-                        .map(|session| Box::new(session) as Box<dyn AgentSession + Send>)
-                }
-                Runner::OpenCode => {
-                    let config = self.opencode_config();
-                    opencode_runner::open_opencode_session(&config, spec, &self.host_env)
-                        .map(|session| Box::new(session) as Box<dyn AgentSession + Send>)
-                }
-                Runner::Pi => {
-                    let config = self.pi_config(&repo_root);
-                    pi_runner::open_pi_session(&config, &spec, &self.host_env)
-                        .map(|session| Box::new(session) as Box<dyn AgentSession + Send>)
-                }
-            };
-        let inner = match opened {
-            Ok(session) => session,
-            Err(error) => {
-                if let Ok(mut cancellations) = self.cancellations.lock()
-                    && cancellations
-                        .get(&request.run_id)
-                        .is_some_and(|current| current == &request.cancellation)
-                {
-                    cancellations.remove(&request.run_id);
-                }
-                return Err(error);
-            }
-        };
-        Ok(Box::new(RegisteredSession {
-            run_id: request.run_id,
-            cancellation: request.cancellation,
-            cancellations: self.cancellations.clone(),
-            inner,
-        }))
-    }
-
-    fn request_cancel(&self, run_id: &str) -> bool {
-        let Ok(cancellations) = self.cancellations.lock() else {
-            return false;
-        };
-        let Some(token) = cancellations.get(run_id) else {
-            return false;
-        };
-        token.request()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    struct NoopSession;
-
-    impl AgentSession for NoopSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> std::io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            Ok(SessionOutcome::Completed(Default::default()))
-        }
-    }
 
     fn factory_with_env(pairs: &[(&str, &str)]) -> DefaultSessionFactory {
         DefaultSessionFactory::with_env(
@@ -298,15 +119,6 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
         )
-    }
-
-    #[test]
-    fn resolve_runner_defaults_auto_to_claude() {
-        assert_eq!(resolve_runner(RunnerSelection::Auto), Runner::Claude);
-        assert_eq!(resolve_runner(RunnerSelection::Claude), Runner::Claude);
-        assert_eq!(resolve_runner(RunnerSelection::Codex), Runner::Codex);
-        assert_eq!(resolve_runner(RunnerSelection::OpenCode), Runner::OpenCode);
-        assert_eq!(resolve_runner(RunnerSelection::Pi), Runner::Pi);
     }
 
     #[test]
@@ -374,123 +186,5 @@ mod tests {
     fn opencode_config_honors_its_own_env_override() {
         let factory = factory_with_env(&[("DUCK_OPENCODE_BIN", "/opt/opencode")]);
         assert_eq!(factory.opencode_config().program, "/opt/opencode");
-    }
-
-    #[test]
-    fn to_agent_run_spec_carries_the_session_request_fields_through() {
-        let request = SessionRequest {
-            cancellation: CancellationToken::default(),
-            images: vec![coducktor_core::agent_session::PromptImage {
-                media_type: "image/png".to_owned(),
-                data: "AQID".to_owned(),
-            }],
-            run_id: "run-1".to_owned(),
-            step_id: "step-1".to_owned(),
-            prompt: "do the thing".to_owned(),
-            runner: RunnerSelection::Claude,
-            model: Some("sonnet".to_owned()),
-            session_id: Some("sess-1".to_owned()),
-            continuation: true,
-            agent_profile: Some("work".to_owned()),
-            env: BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/profiles/work".to_owned())]),
-            cwd: PathBuf::from("/repo"),
-            allowed_tools: vec!["Read".to_owned()],
-            bash_allowlist: vec!["npm test".to_owned()],
-            system_prompt: Some("Be careful.".to_owned()),
-            reasoning_effort: Some(coducktor_contract::ConcreteReasoningEffort::High),
-        };
-        let spec = to_agent_run_spec(&request);
-        assert_eq!(spec.user_prompt, "do the thing");
-        assert_eq!(spec.cwd, PathBuf::from("/repo"));
-        assert_eq!(spec.allowed_tools, vec!["Read".to_owned()]);
-        assert_eq!(spec.bash_allowlist, vec!["npm test".to_owned()]);
-        assert_eq!(spec.system_prompt.as_deref(), Some("Be careful."));
-        assert_eq!(spec.model.as_deref(), Some("sonnet"));
-        assert_eq!(spec.session_id.as_deref(), Some("sess-1"));
-        assert!(spec.resume);
-        assert_eq!(
-            spec.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
-            Some("/profiles/work")
-        );
-        assert_eq!(spec.images.len(), 1);
-        assert_eq!(
-            spec.reasoning_effort,
-            Some(coducktor_contract::ConcreteReasoningEffort::High)
-        );
-    }
-
-    /// End-to-end proof that the factory's dry-run path resolution actually finds the real
-    /// `mock-claude.mjs` in this checkout and opens a working session through it — not just that
-    /// the string-building helpers above compute the right path.
-    #[test]
-    fn open_spawns_a_working_claude_session_under_dry_run() {
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
-        let mut host_env = BTreeMap::from([("DUCK_DRY_RUN".to_owned(), "1".to_owned())]);
-        if let Ok(path) = std::env::var("PATH") {
-            host_env.insert("PATH".to_owned(), path);
-        }
-        let factory = DefaultSessionFactory::with_env(host_env);
-        let request = SessionRequest {
-            cancellation: CancellationToken::default(),
-            images: Vec::new(),
-            run_id: "run-1".to_owned(),
-            step_id: "step-1".to_owned(),
-            prompt: "investigate the login redirect bug mock:done".to_owned(),
-            runner: RunnerSelection::Claude,
-            model: None,
-            session_id: None,
-            continuation: false,
-            agent_profile: None,
-            env: BTreeMap::new(),
-            cwd: repo_root,
-            allowed_tools: vec!["Read".to_owned(), "Bash".to_owned()],
-            bash_allowlist: Vec::new(),
-            system_prompt: None,
-            reasoning_effort: None,
-        };
-        let mut session = factory.open(request).unwrap();
-        assert_eq!(factory.cancellations.lock().unwrap().len(), 1);
-        let mut event_types = Vec::new();
-        let outcome = session
-            .turn(&mut |event| {
-                event_types.push(event.event_type.clone());
-                Ok(())
-            })
-            .unwrap();
-        assert!(event_types.contains(&"text".to_owned()));
-        assert!(matches!(
-            outcome,
-            coducktor_core::agent_session::SessionOutcome::Completed(_)
-        ));
-        session.finish(&mut |_| Ok(())).unwrap();
-        drop(session);
-        assert!(factory.cancellations.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn registered_session_drop_returns_cancellation_registry_to_baseline_after_repeated_cycles() {
-        let cancellations = Arc::new(Mutex::new(BTreeMap::new()));
-        for index in 0..1_000 {
-            let run_id = format!("run-{index}");
-            let cancellation = CancellationToken::default();
-            cancellations
-                .lock()
-                .unwrap()
-                .insert(run_id.clone(), cancellation.clone());
-            let session = RegisteredSession {
-                run_id,
-                cancellation: cancellation.clone(),
-                cancellations: cancellations.clone(),
-                inner: Box::new(NoopSession),
-            };
-
-            drop(session);
-
-            assert!(cancellations.lock().unwrap().is_empty());
-            assert!(!cancellation.request());
-        }
     }
 }

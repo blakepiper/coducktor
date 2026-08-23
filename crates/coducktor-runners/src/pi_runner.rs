@@ -2,9 +2,9 @@
 //!
 //! Contract: <https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md>.
 //! pi has its own command/event vocabulary (not claude stream-json, not codex's JSON-RPC
-//! app-server); auth is the host's configured provider (`pi` reads its own credentials store),
-//! and there is no per-tool prefix-allowlist syntax the way claude's `Bash(<prefix>:*)` has — a
-//! `bash_allowlist` fails the whole `Bash` tool closed rather than narrowing it (`pi_tools`).
+//! app-server); auth is the host's configured provider (`pi` reads its own credentials store).
+//! Conversations run pi's normal built-in tool set with `--approve`, so Coducktor never narrows
+//! the harness's own tools or trips its project-local trust prompt.
 //!
 //! # Architecture notes
 //!
@@ -138,10 +138,11 @@ pub fn open_pi_session(
 
 /// Build the arguments for a Pi RPC session.
 pub fn build_pi_args(spec: &AgentRunSpec) -> Vec<String> {
-    let mut args = vec!["--mode".to_owned(), "rpc".to_owned()];
-    if spec.autonomous {
-        args.push("--approve".to_owned());
-    }
+    let mut args = vec![
+        "--mode".to_owned(),
+        "rpc".to_owned(),
+        "--approve".to_owned(),
+    ];
     if let Some(session_id) = &spec.session_id {
         args.push(
             if spec.resume {
@@ -165,45 +166,7 @@ pub fn build_pi_args(spec: &AgentRunSpec) -> Vec<String> {
         args.push("--thinking".to_owned());
         args.push(effort.to_owned());
     }
-    let tools = if spec.autonomous {
-        Vec::new()
-    } else {
-        pi_tools(&spec.allowed_tools, &spec.bash_allowlist)
-    };
-    if !tools.is_empty() {
-        args.push("--tools".to_owned());
-        args.push(tools.join(","));
-    }
     args
-}
-
-fn pi_tool_name(tool: &str) -> String {
-    match tool {
-        "Read" => "read".to_owned(),
-        "Bash" => "bash".to_owned(),
-        "Edit" => "edit".to_owned(),
-        "Write" => "write".to_owned(),
-        "Grep" => "grep".to_owned(),
-        "Glob" => "find".to_owned(),
-        other => other.to_lowercase(),
-    }
-}
-
-/// Build Pi's tool list. Pi can allow or deny the whole Bash tool but has no command-prefix
-/// equivalent — fail closed when a workflow requests that narrower mode.
-fn pi_tools(tools: &[String], bash_allowlist: &[String]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for tool in tools {
-        if tool == "Bash" && !bash_allowlist.is_empty() {
-            continue;
-        }
-        let mapped = pi_tool_name(tool);
-        if seen.insert(mapped.clone()) {
-            out.push(mapped);
-        }
-    }
-    out
 }
 
 /// Convert prompt content to Pi's text and image payloads.
@@ -610,7 +573,6 @@ impl AgentSession for PiSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coducktor_contract::ConcreteReasoningEffort;
     use std::path::PathBuf;
     use std::time::Instant;
 
@@ -642,22 +604,8 @@ mod tests {
     // ---- pure argv-building tests ---------------------------------------------------------
 
     #[test]
-    fn build_pi_args_passes_the_selected_thinking_level() {
-        let spec = AgentRunSpec {
-            user_prompt: "task".to_owned(),
-            reasoning_effort: Some(ConcreteReasoningEffort::XHigh),
-            ..Default::default()
-        };
-        let args = build_pi_args(&spec);
-        assert!(args.iter().any(|arg| arg == "--thinking"));
-        assert!(args.iter().any(|arg| arg == "xhigh"));
-    }
-
-    #[test]
     fn conversation_args_approve_trust_and_keep_all_native_tools() {
         let spec = AgentRunSpec {
-            autonomous: true,
-            allowed_tools: vec!["Read".to_owned()],
             reasoning: Some("exact-thinking-value".to_owned()),
             ..Default::default()
         };
@@ -672,21 +620,13 @@ mod tests {
     }
 
     #[test]
-    fn build_pi_args_uses_rpc_mode_exact_session_model_and_tool_names() {
+    fn build_pi_args_uses_rpc_mode_with_the_exact_session_and_model() {
         let spec = AgentRunSpec {
             user_prompt: "task".to_owned(),
             session_id: Some("session-1".to_owned()),
             resume: true,
             model: Some("openai/gpt-5.1".to_owned()),
             system_prompt: Some("Keep changes focused.".to_owned()),
-            allowed_tools: vec![
-                "Read".to_owned(),
-                "Bash".to_owned(),
-                "Edit".to_owned(),
-                "Write".to_owned(),
-                "Grep".to_owned(),
-                "Glob".to_owned(),
-            ],
             ..Default::default()
         };
         assert_eq!(
@@ -694,14 +634,13 @@ mod tests {
             vec![
                 "--mode",
                 "rpc",
+                "--approve",
                 "--session",
                 "session-1",
                 "--append-system-prompt",
                 "Keep changes focused.",
                 "--model",
                 "openai/gpt-5.1",
-                "--tools",
-                "read,bash,edit,write,grep,find",
             ]
         );
     }
@@ -715,21 +654,7 @@ mod tests {
         };
         assert_eq!(
             build_pi_args(&spec),
-            vec!["--mode", "rpc", "--session-id", "session-1"]
-        );
-    }
-
-    #[test]
-    fn build_pi_args_fails_bash_closed_when_a_command_prefix_allowlist_cannot_be_represented() {
-        let spec = AgentRunSpec {
-            user_prompt: "task".to_owned(),
-            allowed_tools: vec!["Read".to_owned(), "Bash".to_owned()],
-            bash_allowlist: vec!["npm test".to_owned()],
-            ..Default::default()
-        };
-        assert_eq!(
-            build_pi_args(&spec),
-            vec!["--mode", "rpc", "--tools", "read"]
+            vec!["--mode", "rpc", "--approve", "--session-id", "session-1"]
         );
     }
 
