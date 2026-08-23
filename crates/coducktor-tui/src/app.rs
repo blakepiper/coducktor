@@ -53,8 +53,8 @@ impl NavItem {
 
     fn label(self) -> &'static str {
         match self {
-            Self::NewTask => "New task",
-            Self::Tasks => "Tasks",
+            Self::NewTask => "New chat",
+            Self::Tasks => "Chats",
             Self::Scratchpad => "Scratchpad",
             Self::Ide => "IDE",
             Self::Terminal => "Terminal",
@@ -536,6 +536,8 @@ impl TaskKey {
 /// distinguishable even when the final active project is A again.
 #[derive(Debug, Clone)]
 pub struct ProjectTasksState {
+    /// Live conversation rows. Legacy `runs` stay beside them and are rendered read-only.
+    pub conversations: Vec<coducktor_contract::ConversationIndexEntry>,
     pub runs: Vec<ApiRun>,
     pub loading: bool,
     pub error: Option<String>,
@@ -549,6 +551,7 @@ pub struct ProjectTasksState {
 impl Default for ProjectTasksState {
     fn default() -> Self {
         Self {
+            conversations: Vec::new(),
             runs: Vec::new(),
             loading: false,
             error: None,
@@ -687,7 +690,13 @@ pub enum PendingAction {
     RefreshTasks {
         project: String,
     },
+    /// Refresh a project's conversation rows for the chat browser.
+    RefreshChats {
+        project: String,
+    },
     RefreshIndex,
+    /// Refresh the workspace-wide conversation rows behind All Chats.
+    RefreshChatsIndex,
     /// Refresh the registered-project list after a registry mutation completes.
     RefreshProjectRegistry,
     /// Start a new task with an already-assembled create-run body.
@@ -1008,7 +1017,9 @@ impl PendingAction {
         matches!(
             self,
             Self::RefreshTasks { .. }
+                | Self::RefreshChats { .. }
                 | Self::RefreshIndex
+                | Self::RefreshChatsIndex
                 | Self::RefreshProjectRegistry
                 | Self::RefreshNewTask { .. }
                 | Self::RefreshModels { .. }
@@ -1085,11 +1096,16 @@ pub struct App {
     sidebar_dragging: bool,
     pub last_width: u16,
     providers: Vec<ProviderBadge>,
+    /// The active project's conversation rows — the chat browser's primary content.
+    pub conversations: Vec<coducktor_contract::ConversationIndexEntry>,
     pub tasks: Vec<ApiRun>,
     /// Project-keyed task cache. `tasks` remains a compatibility view of the active project's
     /// entry for existing screens and embedders while migration proceeds.
     pub project_tasks: BTreeMap<String, ProjectTasksState>,
     pub global_index: Option<RunsIndexResponse>,
+    /// Workspace-wide conversation rows for All Chats, project-qualified so colliding ids from
+    /// two projects stay distinct.
+    pub global_conversations: Option<coducktor_contract::ConversationsIndexResponse>,
     pub global_filter: TaskFilter,
     pub global_loading: bool,
     pub global_error: Option<String>,
@@ -1208,9 +1224,11 @@ impl App {
             sidebar_dragging: false,
             last_width: 0,
             providers: Vec::new(),
+            conversations: Vec::new(),
             tasks: Vec::new(),
             project_tasks: BTreeMap::new(),
             global_index: None,
+            global_conversations: None,
             global_filter: TaskFilter::Active,
             global_loading: false,
             global_error: None,
@@ -1430,6 +1448,52 @@ impl App {
 
     /// Replace one project's cached list without allowing a background response for another
     /// project to overwrite the active compatibility view.
+    pub fn set_conversations_for_project(
+        &mut self,
+        project: String,
+        conversations: Vec<coducktor_contract::ConversationIndexEntry>,
+    ) {
+        let state = self.project_tasks.entry(project.clone()).or_default();
+        state.conversations = conversations;
+        state.loading = false;
+        state.error = None;
+        if self.current_project() == project {
+            self.sync_active_project_tasks();
+        }
+        self.tasks_ui.table.select(self.tasks_ui.table.selected);
+    }
+
+    pub fn apply_conversation_response(
+        &mut self,
+        project: &str,
+        generation: u64,
+        result: Result<Vec<coducktor_contract::ConversationIndexEntry>, String>,
+    ) -> bool {
+        if self
+            .project_tasks
+            .entry(project.to_owned())
+            .or_default()
+            .request_generation
+            != generation
+        {
+            return false;
+        }
+        match result {
+            Ok(conversations) => {
+                self.set_conversations_for_project(project.to_owned(), conversations);
+            }
+            Err(error) => {
+                let state = self.project_tasks.entry(project.to_owned()).or_default();
+                state.loading = false;
+                state.error = Some(error);
+                if self.current_project() == project {
+                    self.sync_active_project_tasks();
+                }
+            }
+        }
+        true
+    }
+
     pub fn set_tasks_for_project(&mut self, project: String, runs: Vec<ApiRun>) {
         let state = self.project_tasks.entry(project.clone()).or_default();
         state.runs = runs;
@@ -1528,9 +1592,10 @@ impl App {
 
     fn sync_active_project_tasks(&mut self) {
         let project = self.current_project().to_owned();
-        let (runs, usage, filter, selection, scroll_y) = {
+        let (conversations, runs, usage, filter, selection, scroll_y) = {
             let state = self.project_tasks.entry(project.clone()).or_default();
             (
+                state.conversations.clone(),
                 state.runs.clone(),
                 state.live_usage.clone(),
                 state.filter,
@@ -1538,6 +1603,7 @@ impl App {
                 state.scroll_y,
             )
         };
+        self.conversations = conversations;
         self.tasks = runs;
         self.live_usage = usage;
         self.task_filter = filter;
@@ -1568,6 +1634,15 @@ impl App {
 
     pub fn task_state(&self, project: &str) -> Option<&ProjectTasksState> {
         self.project_tasks.get(project)
+    }
+
+    pub fn set_global_conversations(
+        &mut self,
+        index: coducktor_contract::ConversationsIndexResponse,
+    ) {
+        self.global_conversations = Some(index);
+        self.global_loading = false;
+        self.global_error = None;
     }
 
     pub fn set_global_index(&mut self, index: RunsIndexResponse) {
@@ -1983,7 +2058,11 @@ impl App {
                 self.queue_pending(PendingAction::RefreshTasks {
                     project: self.current_project().to_owned(),
                 });
+                self.queue_pending(PendingAction::RefreshChats {
+                    project: self.current_project().to_owned(),
+                });
                 self.queue_pending(PendingAction::RefreshIndex);
+                self.queue_pending(PendingAction::RefreshChatsIndex);
             }
         }
     }
@@ -2225,7 +2304,7 @@ impl App {
             if project.id == self.current_project() && !project.collapsed {
                 rows.push((
                     sidebar_nav_line(
-                        "Tasks",
+                        "Chats",
                         None,
                         self.route_is(NavItem::Tasks),
                         selected == Some(SidebarRow::Nav(NavItem::Tasks)),
@@ -2251,7 +2330,7 @@ impl App {
         rows.push((sidebar_line("  WORKSPACE", self.soft_style()), None));
         rows.push((
             sidebar_nav_line(
-                "All tasks",
+                "All chats",
                 None,
                 matches!(self.route(), Route::GlobalTasks),
                 selected == Some(SidebarRow::GlobalTasks),
@@ -3351,6 +3430,7 @@ impl App {
             ActionId::GlobalTasks => {
                 self.request_navigate(Route::GlobalTasks);
                 self.queue_pending(PendingAction::RefreshIndex);
+                self.queue_pending(PendingAction::RefreshChatsIndex);
             }
             ActionId::NewTask => self.navigate(NavItem::NewTask),
             ActionId::Ide => self.navigate(NavItem::Ide),
@@ -3383,6 +3463,7 @@ impl App {
             HitAction::GlobalTasks => {
                 self.request_navigate(Route::GlobalTasks);
                 self.queue_pending(PendingAction::RefreshIndex);
+                self.queue_pending(PendingAction::RefreshChatsIndex);
             }
             HitAction::GlobalSettings => crate::screens::settings::open_global(self),
             HitAction::NewTask => self.navigate(NavItem::NewTask),
@@ -3542,7 +3623,10 @@ impl App {
                 self.request_navigate(Route::Tasks {
                     project: project.clone(),
                 });
-                self.queue_pending(PendingAction::RefreshTasks { project });
+                self.queue_pending(PendingAction::RefreshTasks {
+                    project: project.clone(),
+                });
+                self.queue_pending(PendingAction::RefreshChats { project });
             }
             NavItem::NewTask => {
                 self.request_navigate(Route::NewTask {
@@ -3609,6 +3693,9 @@ impl App {
             self.sidebar_selected = index;
         }
         self.queue_pending(PendingAction::RefreshTasks {
+            project: project.clone(),
+        });
+        self.queue_pending(PendingAction::RefreshChats {
             project: project.clone(),
         });
         self.queue_pending(PendingAction::RefreshNewTask { project });
@@ -3875,6 +3962,7 @@ impl App {
                         self.sidebar_focus = false;
                         self.request_navigate(Route::GlobalTasks);
                         self.queue_pending(PendingAction::RefreshIndex);
+                self.queue_pending(PendingAction::RefreshChatsIndex);
                     }
                     SidebarRow::GlobalSettings => {
                         self.sidebar_focus = false;

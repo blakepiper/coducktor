@@ -7,8 +7,8 @@ Buffer {
     content: [
         " [=] coducktor / main /p/main  [running 0] [needs 0]                            ",
         " Current 0  Needs you 0  Finished 0                                             ",
-        "┌TASKS — main──────────────────────────────────────────────────────────────────┐",
-        "│No tasks in this project. Use :new or click New task.             [+ New task]│",
+        "┌CHATS — main──────────────────────────────────────────────────────────────────┐",
+        "│No chats in this project. Use :new or click New chat.             [+ New chat]│",
         "│                                                                              │",
         "│                                                                              │",
         "│                                                                              │",

@@ -732,7 +732,12 @@ impl InProcessEngine {
     }
 }
 
-fn conversation_index_entry(project_id: &str, record: &ConversationRecord) -> ConversationIndexEntry {
+/// Project a durable record onto the browser row shape. Shared with the TUI so a project-scoped
+/// list and the workspace index cannot drift into two different previews of the same chat.
+pub fn conversation_index_entry(
+    project_id: &str,
+    record: &ConversationRecord,
+) -> ConversationIndexEntry {
     ConversationIndexEntry {
         project_id: project_id.to_owned(),
         id: record.id.clone(),

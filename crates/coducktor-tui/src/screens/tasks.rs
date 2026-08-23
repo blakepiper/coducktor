@@ -102,6 +102,95 @@ pub fn build_rows(
         .collect()
 }
 
+/// Conversation cards — the browser's primary content. Legacy run cards are appended after
+/// these by [`build_all_cards`] and are rendered read-only.
+fn build_conversation_cards(
+    conversations: &[coducktor_contract::ConversationIndexEntry],
+    view: TaskView,
+    query: &str,
+    now: i64,
+) -> Vec<TaskCard> {
+    use crate::screens::chats_util;
+
+    let matched = chats_util::filter(conversations, query);
+    let mut order = chats_util::sort(conversations);
+    order.retain(|index| {
+        let entry = &conversations[*index];
+        entry.archived == (view == TaskView::Archived)
+            && matched.iter().any(|item| std::ptr::eq(*item, entry))
+    });
+    order
+        .into_iter()
+        .map(|index| {
+            let entry = &conversations[index];
+            let mut metadata = vec![harness_metadata(entry)];
+            if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
+                metadata.push(format!("branch {branch}"));
+            }
+            if let Some(url) = entry
+                .pull_request_url
+                .as_deref()
+                .or(entry.referenced_pull_request_url.as_deref())
+                && let Some(number) = url.rsplit('/').next()
+            {
+                metadata.push(format!("PR #{number}"));
+            }
+            let attention = chats_util::attention(entry);
+            TaskCard {
+                key: entry.id.clone(),
+                group: match chats_util::group(entry) {
+                    chats_util::ChatGroup::NeedsYou => CardGroup::NeedsYou,
+                    chats_util::ChatGroup::Working => CardGroup::Working,
+                    chats_util::ChatGroup::Recent => CardGroup::Recent,
+                    chats_util::ChatGroup::Archived => CardGroup::Archived,
+                },
+                glyph: conversation_glyph(entry.state),
+                status: attention.label,
+                title: entry.title.clone(),
+                prompt: entry.prompt_preview.clone(),
+                activity: short_age(chats_util::meaningful_at(entry), now),
+                project: None,
+                metadata,
+                unread: chats_util::is_unread(entry),
+            }
+        })
+        .collect()
+}
+
+fn harness_metadata(entry: &coducktor_contract::ConversationIndexEntry) -> String {
+    let mut value = format!("{:?}", entry.harness).to_ascii_lowercase();
+    if let Some(model) = entry.model.as_deref() {
+        value.push('/');
+        value.push_str(model);
+    }
+    value
+}
+
+fn conversation_glyph(state: coducktor_contract::ConversationState) -> &'static str {
+    use coducktor_contract::ConversationState as State;
+    match state {
+        State::NeedsInput => "?",
+        State::Running => "*",
+        State::Queued => "-",
+        State::Failed => "x",
+        State::Cancelled => "/",
+        State::Idle => "=",
+    }
+}
+
+/// The browser's full card list: live conversations first, then legacy runs.
+fn build_all_cards(
+    conversations: &[coducktor_contract::ConversationIndexEntry],
+    runs: &[ApiRun],
+    view: TaskView,
+    query: &str,
+    now: i64,
+) -> Vec<TaskCard> {
+    let mut cards = build_conversation_cards(conversations, view, query, now);
+    cards.extend(build_cards(runs, view, query, now));
+    cards
+}
+
 fn build_cards(runs: &[ApiRun], view: TaskView, query: &str, now: i64) -> Vec<TaskCard> {
     let filtered = filter_runs(runs, query);
     let mut order: Vec<usize> = runs
@@ -177,7 +266,7 @@ fn card_group(run: &ApiRun, view: TaskView) -> CardGroup {
     ) {
         CardGroup::Working
     } else {
-        CardGroup::Done
+        CardGroup::Recent
     }
 }
 
@@ -373,7 +462,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     render_title_row(frame, layout[0], app, view);
 
     let selected = app.tasks_ui.table.selected;
-    let cards = build_cards(&app.tasks, view, &app.tasks_ui.query, now);
+    let cards = build_all_cards(
+        &app.conversations,
+        &app.tasks,
+        view,
+        &app.tasks_ui.query,
+        now,
+    );
     app.tasks_ui.table.rows = cards
         .iter()
         .map(|card| TableRow {
@@ -391,15 +486,15 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.tasks_ui.table.selected,
         &mut app.tasks_ui.table.scroll_y,
         &mut app.hitmap,
-        &format!("TASKS — {project}"),
+        &format!("CHATS — {project}"),
         if app.tasks_ui.query.trim().is_empty() {
-            "No tasks in this project. Use :new or click New task."
+            "No chats in this project. Use :new or click New chat."
         } else {
-            "No tasks match your search."
+            "No chats match your search."
         },
         &theme,
         Some(CardHeaderAction {
-            label: "+ New task",
+            label: "+ New chat",
             focused: app.tasks_ui.new_task_focused,
             action: HitAction::NewTask,
         }),
@@ -737,7 +832,7 @@ mod tests {
     fn terminal_tasks_stay_in_done_even_when_unread() {
         for status in [RunStatus::Done, RunStatus::Failed, RunStatus::Cancelled] {
             let run = api_run(1, status, None);
-            assert_eq!(card_group(&run, TaskView::Active), CardGroup::Done);
+            assert_eq!(card_group(&run, TaskView::Active), CardGroup::Recent);
             assert!(is_unread(&run));
         }
     }

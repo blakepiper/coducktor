@@ -1,3 +1,4 @@
+pub mod chats_util;
 pub mod compare;
 pub mod github;
 pub mod global_tasks;

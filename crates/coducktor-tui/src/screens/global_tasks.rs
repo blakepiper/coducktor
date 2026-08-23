@@ -135,6 +135,85 @@ pub fn build_rows(
         .collect()
 }
 
+/// Workspace-wide conversation cards. Ids only need to be unique within a project, so each
+/// card's key is project-qualified and its project name is always shown.
+fn build_conversation_cards(
+    index: &coducktor_contract::ConversationsIndexResponse,
+    registry: &[ProjectListEntry],
+    view: TaskView,
+    query: &str,
+    tag: Option<&str>,
+    now: i64,
+) -> Vec<TaskCard> {
+    use crate::screens::chats_util;
+
+    let mut entries: Vec<&coducktor_contract::ConversationIndexEntry> = index
+        .conversations
+        .iter()
+        .filter(|entry| entry.archived == (view == TaskView::Archived))
+        .filter(|entry| {
+            tag.is_none_or(|tag| project_id_has_tag(registry, &entry.project_id, tag))
+        })
+        .collect();
+    let owned: Vec<coducktor_contract::ConversationIndexEntry> =
+        entries.iter().map(|entry| (*entry).clone()).collect();
+    let matched = chats_util::filter(&owned, query);
+    let matched_ids: std::collections::HashSet<(&str, &str)> = matched
+        .iter()
+        .map(|entry| (entry.project_id.as_str(), entry.id.as_str()))
+        .collect();
+    entries.retain(|entry| matched_ids.contains(&(entry.project_id.as_str(), entry.id.as_str())));
+    entries.sort_by(|a, b| {
+        chats_util::group(a)
+            .cmp(&chats_util::group(b))
+            .then_with(|| {
+                chats_util::meaningful_at(b).cmp(chats_util::meaningful_at(a))
+            })
+            .then_with(|| a.project_id.cmp(&b.project_id))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    entries
+        .into_iter()
+        .map(|entry| {
+            let mut metadata = vec![{
+                let mut value = format!("{:?}", entry.harness).to_ascii_lowercase();
+                if let Some(model) = entry.model.as_deref() {
+                    value.push('/');
+                    value.push_str(model);
+                }
+                value
+            }];
+            if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
+                metadata.push(format!("branch {branch}"));
+            }
+            TaskCard {
+                key: format!("{}::{}", entry.project_id, entry.id),
+                group: match chats_util::group(entry) {
+                    chats_util::ChatGroup::NeedsYou => CardGroup::NeedsYou,
+                    chats_util::ChatGroup::Working => CardGroup::Working,
+                    chats_util::ChatGroup::Recent => CardGroup::Recent,
+                    chats_util::ChatGroup::Archived => CardGroup::Archived,
+                },
+                glyph: match entry.state {
+                    coducktor_contract::ConversationState::NeedsInput => "?",
+                    coducktor_contract::ConversationState::Running => "*",
+                    coducktor_contract::ConversationState::Queued => "-",
+                    coducktor_contract::ConversationState::Failed => "x",
+                    coducktor_contract::ConversationState::Cancelled => "/",
+                    coducktor_contract::ConversationState::Idle => "=",
+                },
+                status: chats_util::attention(entry).label,
+                title: entry.title.clone(),
+                prompt: entry.prompt_preview.clone(),
+                activity: short_age(chats_util::meaningful_at(entry), now),
+                project: Some(project_name(registry, &entry.project_id)),
+                metadata,
+                unread: chats_util::is_unread(entry),
+            }
+        })
+        .collect()
+}
+
 fn build_cards(
     index: &RunsIndexResponse,
     registry: &[ProjectListEntry],
@@ -254,7 +333,7 @@ fn entry_group(entry: &RunIndexEntry, view: TaskView) -> CardGroup {
     ) {
         CardGroup::Working
     } else {
-        CardGroup::Done
+        CardGroup::Recent
     }
 }
 
@@ -314,7 +393,11 @@ fn project_tags(registry: &[ProjectListEntry], project_id: &str) -> Vec<String> 
 }
 
 fn project_has_tag(registry: &[ProjectListEntry], entry: &RunIndexEntry, tag: &str) -> bool {
-    let tags = project_tags(registry, &entry.project_id);
+    project_id_has_tag(registry, &entry.project_id, tag)
+}
+
+fn project_id_has_tag(registry: &[ProjectListEntry], project_id: &str, tag: &str) -> bool {
+    let tags = project_tags(registry, project_id);
     if tag == "UNTAGGED" {
         return tags.is_empty();
     }
@@ -620,20 +703,34 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             frame,
             layout[2],
             &mut app.hitmap,
-            "ALL TASKS",
+            "ALL CHATS",
             app.global_error
                 .as_deref()
                 .unwrap_or(if app.global_loading {
                     "Loading…"
                 } else {
-                    "No tasks across projects yet."
+                    "No chats across projects yet."
                 }),
         );
         return;
     };
     let registry = &app.project_registry;
     let selected = app.global_ui.table.selected;
-    let cards = build_cards(
+    let mut cards = app
+        .global_conversations
+        .as_ref()
+        .map(|conversations| {
+            build_conversation_cards(
+                conversations,
+                registry,
+                view,
+                &app.global_ui.query,
+                app.global_ui.tag.as_deref(),
+                now,
+            )
+        })
+        .unwrap_or_default();
+    cards.extend(build_cards(
         index,
         registry,
         view,
@@ -641,7 +738,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.global_ui.tag.as_deref(),
         app.global_ui.group_by_tag,
         now,
-    );
+    ));
     app.global_ui.table.rows = cards
         .iter()
         .map(|card| TableRow {
@@ -659,11 +756,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.global_ui.table.selected,
         &mut app.global_ui.table.scroll_y,
         &mut app.hitmap,
-        "ALL TASKS",
+        "ALL CHATS",
         if app.global_ui.query.trim().is_empty() {
-            "No tasks across projects yet."
+            "No chats across projects yet."
         } else {
-            "No tasks match your search."
+            "No chats match your search."
         },
         &theme,
         None,
@@ -676,7 +773,7 @@ fn render_title_row(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: Task
     let Some(index) = &app.global_index else {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " ALL TASKS",
+                " ALL CHATS",
                 Style::default().add_modifier(Modifier::BOLD),
             ))),
             area,
@@ -716,7 +813,7 @@ fn render_title_row(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: Task
         .len();
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::styled(
-        format!(" ALL TASKS  {projects} projects  "),
+        format!(" ALL CHATS  {projects} projects  "),
         Style::default()
             .fg(theme.palette.fg)
             .add_modifier(Modifier::BOLD),
@@ -1108,7 +1205,7 @@ mod tests {
             coducktor_contract::RunStatus::Cancelled,
         ] {
             let entry = entry("shop", "1", status);
-            assert_eq!(entry_group(&entry, TaskView::Active), CardGroup::Done);
+            assert_eq!(entry_group(&entry, TaskView::Active), CardGroup::Recent);
             assert!(is_unread_entry(&entry));
         }
     }

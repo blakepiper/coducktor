@@ -13,7 +13,9 @@ use crate::theme::Theme;
 pub enum CardGroup {
     NeedsYou,
     Working,
-    Done,
+    /// Idle conversations and seen failures. A turn ending returns a chat here; there is no
+    /// terminal "done" state for a conversation (section 4.3).
+    Recent,
     Archived,
 }
 
@@ -22,7 +24,7 @@ impl CardGroup {
         match self {
             Self::NeedsYou => "NEEDS YOU",
             Self::Working => "WORKING",
-            Self::Done => "DONE",
+            Self::Recent => "RECENT",
             Self::Archived => "ARCHIVED",
         }
     }

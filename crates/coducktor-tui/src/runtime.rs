@@ -236,6 +236,20 @@ enum BackgroundResult {
     ActivateConversations {
         result: Result<(), coducktor_client::EngineError>,
     },
+    RefreshChatsIndex {
+        result: Result<
+            coducktor_contract::ConversationsIndexResponse,
+            coducktor_client::EngineError,
+        >,
+    },
+    RefreshChats {
+        project: String,
+        generation: u64,
+        result: Result<
+            Vec<coducktor_contract::ConversationIndexEntry>,
+            coducktor_client::EngineError,
+        >,
+    },
     ActivateRuns {
         result: Result<(), coducktor_client::EngineError>,
     },
@@ -670,6 +684,9 @@ fn apply_prime_snapshot(app: &mut App, snapshot: PrimeSnapshot) {
             app.queue_pending(PendingAction::RefreshTasks {
                 project: boot_project.clone(),
             });
+            app.queue_pending(PendingAction::RefreshChats {
+                project: boot_project.clone(),
+            });
             app.queue_pending(PendingAction::RefreshNewTask {
                 project: boot_project,
             });
@@ -745,6 +762,9 @@ fn apply_launch_args(app: &mut App, cli: &Cli) {
                 if project != app.default_project {
                     app.default_project = project.clone();
                     app.queue_pending(PendingAction::RefreshTasks {
+                        project: project.clone(),
+                    });
+                    app.queue_pending(PendingAction::RefreshChats {
                         project: project.clone(),
                     });
                     app.queue_pending(PendingAction::RefreshNewTask {
@@ -889,6 +909,43 @@ fn execute_pending(
                         generation,
                         result,
                     },
+                );
+            }
+            PendingAction::RefreshChats { project } => {
+                let scope = Scope::Project(project.clone());
+                let generation = app.begin_task_request(&project);
+                let engine_for_task = engine.clone();
+                let project_for_rows = project.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task.list_conversations(&scope).await.map(|records| {
+                            records
+                                .iter()
+                                .map(|record| {
+                                    coducktor_client::conversation_index_entry(
+                                        &project_for_rows,
+                                        record,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    },
+                    move |result| BackgroundResult::RefreshChats {
+                        project,
+                        generation,
+                        result,
+                    },
+                );
+            }
+            PendingAction::RefreshChatsIndex => {
+                let engine_for_task = engine.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move { engine_for_task.conversations_index().await },
+                    |result| BackgroundResult::RefreshChatsIndex { result },
                 );
             }
             PendingAction::RefreshIndex => {
@@ -2236,7 +2293,9 @@ fn execute_pending(
 fn background_lane(action: &PendingAction) -> BackgroundLane {
     match action {
         PendingAction::RefreshTasks { .. }
+        | PendingAction::RefreshChats { .. }
         | PendingAction::RefreshIndex
+        | PendingAction::RefreshChatsIndex
         | PendingAction::RefreshProjectRegistry
         | PendingAction::RefreshNewTask { .. }
         | PendingAction::LoadScratchpad { .. }
@@ -2319,6 +2378,7 @@ fn apply_started_run(
             });
             if matches!(app.route(), app::Route::GlobalTasks) {
                 app.queue_pending(PendingAction::RefreshIndex);
+                app.queue_pending(PendingAction::RefreshChatsIndex);
             }
         }
         Err(error) => {
@@ -2346,11 +2406,12 @@ fn apply_created_conversation(
                 project: project.clone(),
             });
             screens::new_task::clear_draft(app);
-            app.queue_pending(PendingAction::RefreshTasks {
+            app.queue_pending(PendingAction::RefreshChats {
                 project: project.clone(),
             });
             if matches!(app.route(), app::Route::GlobalTasks) {
                 app.queue_pending(PendingAction::RefreshIndex);
+                app.queue_pending(PendingAction::RefreshChatsIndex);
             }
             app.request_navigate(app::Route::Tasks { project });
             app.notice = Some(format!("started {}", response.conversation.title));
@@ -2586,6 +2647,33 @@ fn drain_background_results(
                 );
                 if let Some(error) = error {
                     app.notice = Some(format!("refresh tasks failed: {error}"));
+                }
+            }
+            BackgroundResult::RefreshChats {
+                project,
+                generation,
+                result,
+            } => {
+                app.finish_coalescable_dispatch(&PendingAction::RefreshChats {
+                    project: project.clone(),
+                });
+                let error = result.as_ref().err().map(ToString::to_string);
+                app.apply_conversation_response(
+                    &project,
+                    generation,
+                    result.map_err(|error| error.to_string()),
+                );
+                if let Some(error) = error {
+                    app.notice = Some(format!("refresh chats failed: {error}"));
+                }
+            }
+            BackgroundResult::RefreshChatsIndex { result } => {
+                app.finish_coalescable_dispatch(&PendingAction::RefreshChatsIndex);
+                match result {
+                    Ok(index) => app.set_global_conversations(index),
+                    Err(error) => {
+                        app.notice = Some(format!("refresh all chats failed: {error}"));
+                    }
                 }
             }
             BackgroundResult::RefreshIndex { generation, result } => {
@@ -3181,6 +3269,7 @@ fn thread_history_event(
 fn queue_global_index_refresh(app: &mut App) {
     if matches!(app.route(), app::Route::GlobalTasks) {
         app.queue_pending(PendingAction::RefreshIndex);
+                app.queue_pending(PendingAction::RefreshChatsIndex);
     }
 }
 
@@ -3702,7 +3791,10 @@ mod tests {
         queue_global_index_refresh(&mut app);
         queue_global_index_refresh(&mut app);
 
-        assert_eq!(app.pending, vec![PendingAction::RefreshIndex]);
+        assert_eq!(
+            app.pending,
+            vec![PendingAction::RefreshIndex, PendingAction::RefreshChatsIndex]
+        );
     }
 
     #[test]
@@ -4052,6 +4144,11 @@ mod tests {
             app.pending,
             vec![
                 PendingAction::RefreshTasks {
+                    project: "other".to_owned()
+                },
+                // The chat browser is the primary surface, so its rows load beside the legacy
+                // task list on every project entry.
+                PendingAction::RefreshChats {
                     project: "other".to_owned()
                 },
                 PendingAction::RefreshNewTask {

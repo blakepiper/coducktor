@@ -7,8 +7,8 @@ Buffer {
     content: [
         " [=] coducktor / main /p/main  [running 0] [needs 0]                                                                                                                                                    ",
         "  PROJECTS                   Current 3  Needs you 1  Finished 1  Archived 0                                                                                                                             ",
-        "  - main                    ┌TASKS — main──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
-        "  > Tasks                   │ NEEDS YOU                                                                                                                                                    [+ New task]│",
+        "  - main                    ┌CHATS — main──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
+        "  > Chats                   │ NEEDS YOU                                                                                                                                                    [+ New chat]│",
         "    Scratchpad              │┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐│",
         "    IDE                     ││▶ ? waiting  Task 2 — a reasonably long title to truncate  153d                                                                                                         ││",
         "    Terminal                ││  Implement task 2 with exact Unicode input — café 🦆 — while preserving all existing behavior and covering narrow terminals.                                           ││", // hidden by multi-width symbols: [(82, " ")]
@@ -19,10 +19,10 @@ Buffer {
         "    Settings                │┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐│",
         "                            ││  ● running  Task 1 — a reasonably long title to truncate  153d                                                                                                         ││",
         "  WORKSPACE                 ││  Implement task 1 with exact Unicode input — café 🦆 — while preserving all existing behavior and covering narrow terminals.                                           ││", // hidden by multi-width symbols: [(82, " ")]
-        "    All tasks               ││                                                                                                                                                                        ││",
+        "    All chats               ││                                                                                                                                                                        ││",
         "    Settings                ││  quick-task  ·  branch feat/shell  ·  +12 −3                                                                                                                           ││",
         "                            │└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘│",
-        "                            │ DONE                                                                                                                                                                     │",
+        "                            │ RECENT                                                                                                                                                                   │",
         "                            │┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐│",
         "                            ││  ✓ done  Task 3 — a reasonably long title to truncate  153d                                                                                                            ││",
         "                            ││  Implement task 3 with exact Unicode input — café 🦆 — while preserving all existing behavior and covering narrow terminals.                                           ││", // hidden by multi-width symbols: [(82, " ")]
@@ -190,7 +190,7 @@ Buffer {
         x: 0, y: 17, fg: Reset, bg: Rgb(36, 40, 59), underline: Reset, modifier: NONE,
         x: 28, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 29, y: 17, fg: Rgb(130, 139, 184), bg: Reset, underline: Reset, modifier: BOLD,
-        x: 34, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 36, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 18, fg: Reset, bg: Rgb(36, 40, 59), underline: Reset, modifier: NONE,
         x: 28, y: 18, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 29, y: 18, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,

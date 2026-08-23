@@ -37,8 +37,8 @@ pub struct Palette {
 }
 
 const VIEWS: [(NavItem, &str); 10] = [
-    (NavItem::NewTask, "New task"),
-    (NavItem::Tasks, "Tasks"),
+    (NavItem::NewTask, "New chat"),
+    (NavItem::Tasks, "Chats"),
     (NavItem::Scratchpad, "Scratchpad"),
     (NavItem::Ide, "IDE"),
     (NavItem::Terminal, "Terminal"),
@@ -62,7 +62,7 @@ fn candidates(app: &App) -> Vec<Entry> {
     if let Some(index) = &app.global_index {
         for run in &index.runs {
             entries.push(Entry {
-                group: "Tasks",
+                group: "Chats",
                 label: format!("{}  ({})", run.title, run.project_id),
                 action: PaletteAction::OpenTask {
                     project: run.project_id.clone(),

@@ -6,8 +6,8 @@ Buffer {
     area: Rect { x: 0, y: 0, width: 80, height: 24 },
     content: [
         " [=] coducktor / main /tasks  [running 0] [needs 0]                             ",
-        " ALL TASKS  2 projects   Current 3  Needs you 1  Finished 1  Archived 0    filte",
-        "┌ALL TASKS─────────────────────────────────────────────────────────────────────┐",
+        " ALL CHATS  2 projects   Current 3  Needs you 1  Finished 1  Archived 0    filte",
+        "┌ALL CHATS─────────────────────────────────────────────────────────────────────┐",
         "│ NEEDS YOU                                                                    │",
         "│┌────────────────────────────────────────────────────────────────────────────┐│",
         "││▶ ? waiting  Global task 2  blog  153d                                      ││",
@@ -22,7 +22,7 @@ Buffer {
         "││  behavior across long wrapped prompts.                                     ││",
         "││  quick-task                                                                ││",
         "│└────────────────────────────────────────────────────────────────────────────┘│",
-        "│ DONE                                                                         │",
+        "│ RECENT                                                                       │",
         "│┌────────────────────────────────────────────────────────────────────────────┐│",
         "││  ✓ done  Global task 3  shop  153d                                         ││",
         "││  Implement global task 3 exactly — café 🦆 — and preserve project-scoped   ││", // hidden by multi-width symbols: [(44, " ")]
@@ -105,7 +105,7 @@ Buffer {
         x: 1, y: 16, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,
         x: 79, y: 16, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 17, fg: Rgb(130, 139, 184), bg: Reset, underline: Reset, modifier: BOLD,
-        x: 6, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 17, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 18, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,
         x: 79, y: 18, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 19, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,
