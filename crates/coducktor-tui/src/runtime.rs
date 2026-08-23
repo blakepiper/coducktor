@@ -250,6 +250,11 @@ enum BackgroundResult {
     ActivateConversations {
         result: Result<(), coducktor_client::EngineError>,
     },
+    ConversationDeleted {
+        project: String,
+        id: String,
+        result: Result<(), coducktor_client::EngineError>,
+    },
     /// One conversation mutation settled: submit, answer, or cancel.
     ConversationTurn {
         project: String,
@@ -966,6 +971,70 @@ fn execute_pending(
                         project,
                         id,
                         result: result.map(|_| ()),
+                    },
+                );
+            }
+            PendingAction::ArchiveConversation {
+                project,
+                id,
+                archived,
+            } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        if archived {
+                            engine_for_task
+                                .archive_conversation(&scope, &id_for_task)
+                                .await
+                                .map(|_| ())
+                        } else {
+                            engine_for_task
+                                .unarchive_conversation(&scope, &id_for_task)
+                                .await
+                                .map(|_| ())
+                        }
+                    },
+                    move |result| BackgroundResult::ConversationTurn { project, id, result },
+                );
+            }
+            PendingAction::UnreadConversation { project, id } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .read_conversation(&scope, &id_for_task, false)
+                            .await
+                            .map(|_| ())
+                    },
+                    move |result| BackgroundResult::ConversationTurn { project, id, result },
+                );
+            }
+            PendingAction::DeleteConversation { project, id } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                let id_for_task = id.clone();
+                let project_for_result = project.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move {
+                        engine_for_task
+                            .delete_conversation(&scope, &id_for_task)
+                            .await
+                            .map(|_| ())
+                    },
+                    move |result| BackgroundResult::ConversationDeleted {
+                        project: project_for_result,
+                        id,
+                        result,
                     },
                 );
             }
@@ -2787,6 +2856,28 @@ fn drain_background_results(
                 if let Some(error) = error {
                     app.notice = Some(format!("refresh chats failed: {error}"));
                 }
+            }
+            BackgroundResult::ConversationDeleted {
+                project,
+                id,
+                result,
+            } => {
+                match result {
+                    Ok(()) => {
+                        screens::thread::clear_if_matches(app, &project, &id);
+                        if matches!(app.route(), app::Route::Thread { id: open, .. } if open == &id)
+                        {
+                            app.request_navigate(app::Route::Tasks {
+                                project: project.clone(),
+                            });
+                        }
+                    }
+                    Err(error) => app.notice = Some(format!("delete failed: {error}")),
+                }
+                app.queue_pending(PendingAction::RefreshChats {
+                    project: project.clone(),
+                });
+                app.queue_pending(PendingAction::RefreshChatsIndex);
             }
             BackgroundResult::ConversationTurn {
                 project,

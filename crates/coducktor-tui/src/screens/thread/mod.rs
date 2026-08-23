@@ -1472,6 +1472,11 @@ fn handle_composer_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
+/// Drop the open thread when its conversation is deleted underneath it.
+pub fn clear_if_matches(app: &mut App, project: &str, id: &str) {
+    app.thread_ui.clear_if_matches(project, id);
+}
+
 /// Give a failed follow-up its draft back. The submitted text is never silently dropped.
 pub fn restore_failed_delivery(app: &mut App, project: &str, id: &str) {
     app.thread_ui.restore_pending_prompt(project, id);
@@ -1495,12 +1500,14 @@ fn apply_conversation_action(
                 .push(PendingAction::CancelConversationTurn { project, id });
             app.thread_ui.cancel_pending = true;
         }
-        ThreadAction::Archive => app.pending.push(PendingAction::Archive {
+        ThreadAction::Archive => app.pending.push(PendingAction::ArchiveConversation {
             project,
             id,
             archived: !record.archived,
         }),
-        ThreadAction::MarkUnread => app.pending.push(PendingAction::Unread { project, id }),
+        ThreadAction::MarkUnread => {
+            app.pending.push(PendingAction::UnreadConversation { project, id })
+        }
         ThreadAction::Delete => {
             if record.state.is_active() {
                 app.notice =
@@ -1516,7 +1523,7 @@ fn apply_conversation_action(
             }
             app.confirm = Some(crate::app::ConfirmRequest {
                 text: format!("Delete {}?", targets.join(", ")),
-                action: PendingAction::Delete { project, id },
+                action: PendingAction::DeleteConversation { project, id },
             });
         }
         ThreadAction::ToggleGitMode => {
@@ -2412,6 +2419,45 @@ mod tests {
                 .is_some_and(|state| state.conversations.iter().any(|row| row.id == "chat-1")),
             "the browser row updates from the same event"
         );
+    }
+
+    #[test]
+    fn chat_mutations_never_travel_the_run_managers_actions() {
+        use coducktor_contract::ConversationState;
+
+        // Conversations and legacy runs are separate managers, so a run action carrying a
+        // conversation id would simply not be found.
+        let mut app = app_with_conversation(ConversationState::Idle);
+        app.pending.clear();
+        apply_action(&mut app, ThreadAction::Archive);
+        apply_action(&mut app, ThreadAction::MarkUnread);
+        apply_action(&mut app, ThreadAction::Delete);
+        if let Some(confirm) = app.confirm.take() {
+            app.pending.push(confirm.action);
+        }
+
+        assert!(
+            app.pending.iter().all(|action| !matches!(
+                action,
+                PendingAction::Archive { .. }
+                    | PendingAction::Unread { .. }
+                    | PendingAction::Delete { .. }
+            )),
+            "a chat must not be routed through run actions: {:?}",
+            app.pending
+        );
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::ArchiveConversation { .. }
+        )));
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::UnreadConversation { .. }
+        )));
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::DeleteConversation { .. }
+        )));
     }
 
     #[test]

@@ -707,6 +707,23 @@ pub enum PendingAction {
         id: String,
         input: coducktor_contract::AnswerConversationQuestionInput,
     },
+    /// Archive or restore a conversation. Conversations live in their own manager, so these
+    /// cannot reuse the run actions — a conversation id is simply not found there.
+    ArchiveConversation {
+        project: String,
+        id: String,
+        archived: bool,
+    },
+    /// Mark a conversation unread.
+    UnreadConversation {
+        project: String,
+        id: String,
+    },
+    /// Delete a conversation, its transcript, and any managed worktree it owned.
+    DeleteConversation {
+        project: String,
+        id: String,
+    },
     /// Change a conversation's idle Git policy.
     SetConversationGitMode {
         project: String,
@@ -4201,25 +4218,45 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
     };
     let project = menu.project;
     let id = menu.run_id;
+    // Conversations and legacy runs live in separate managers, so the same menu entry has to
+    // dispatch to whichever one actually owns this id.
+    let is_conversation = app
+        .project_tasks
+        .get(&project)
+        .is_some_and(|state| state.conversations.iter().any(|entry| entry.id == id));
     match action {
         MenuAction::Open => crate::screens::thread::open(app, &project, &id),
-        MenuAction::Archive => app.pending.push(PendingAction::Archive {
-            project,
-            id,
-            archived: true,
-        }),
-        MenuAction::Restore => app.pending.push(PendingAction::Archive {
-            project,
-            id,
-            archived: false,
-        }),
+        MenuAction::Archive | MenuAction::Restore => {
+            let archived = matches!(action, MenuAction::Archive);
+            app.pending.push(if is_conversation {
+                PendingAction::ArchiveConversation {
+                    project,
+                    id,
+                    archived,
+                }
+            } else {
+                PendingAction::Archive {
+                    project,
+                    id,
+                    archived,
+                }
+            });
+        }
         MenuAction::MarkRead => app.pending.push(PendingAction::Read { project, id }),
-        MenuAction::MarkUnread => app.pending.push(PendingAction::Unread { project, id }),
+        MenuAction::MarkUnread => app.pending.push(if is_conversation {
+            PendingAction::UnreadConversation { project, id }
+        } else {
+            PendingAction::Unread { project, id }
+        }),
         MenuAction::Delete => {
             let title = menu.title;
             app.confirm = Some(ConfirmRequest {
                 text: format!("Delete \"{title}\" and its branch?"),
-                action: PendingAction::Delete { project, id },
+                action: if is_conversation {
+                    PendingAction::DeleteConversation { project, id }
+                } else {
+                    PendingAction::Delete { project, id }
+                },
             });
         }
         MenuAction::OpenPr => {
