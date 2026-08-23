@@ -26,8 +26,8 @@ requests. Skill context augments the provider request but never changes the dura
   turns. Autonomous non-interactive execution is requested explicitly.
 - **Codex** uses app-server JSON-RPC. A conversation maps to one Codex thread; each user message
   starts one turn on that thread.
-- **OpenCode** uses its JSON event stream and resumes by native session identifier. Autonomous
-  execution is explicit.
+- **OpenCode** runs one `run --format json --auto` process per turn and resumes by native session
+  identifier. Autonomous execution is explicit.
 - **pi** uses its RPC mode; each message is one native prompt on the retained or resumed session.
 
 Provider command lines and wire types remain private to `coducktor-runners`. They are translated
@@ -57,11 +57,27 @@ turns; after process or application restart Coducktor asks the same harness to r
 session without replaying the transcript. If native resume cannot be re-established, the turn
 fails and recovery requires an explicit user action.
 
+That action is the session restart, and it is the only path that replays anything. It is offered
+only after a turn that asked the harness to resume actually failed, it confirms with the user
+first, and it sends nothing: it abandons the old session and records the previous session ID with
+the handoff boundary. The user's next ordinary message opens the new session carrying a bounded
+excerpt — visible user and assistant messages only, rebuilt deterministically from that boundary
+— as provider-only context. The durable user message is unchanged, the excerpt is delivered
+exactly once, and the restart adds no provider turn. Nothing may trigger it from context-window
+usage, quota state, a timer, or provider prose.
+
 An admitted message is persisted before provider I/O. Startup never silently resends a queued or
 running message. A structured request that existed only in a dead process is recorded as
 interrupted rather than fabricated after restart.
 
 ## Concurrency and process safety
+
+An unarchived conversation's managed worktree is never retention-eligible: its next message must
+open the harness in the same checkout. Archiving makes the checkout eligible, and reclaiming it
+removes only the directory — the transcript and managed branch remain, a checkout with
+uncommitted changes is skipped, and unarchiving rebuilds the checkout from the branch before the
+composer reopens. A checkout that cannot be rebuilt leaves the conversation archived and readable
+rather than relocating its next turn.
 
 Conversation admission is bounded globally. Managed worktrees isolate concurrent chats; in-place
 turns sharing a repository root are serialized. No manager lock is held while opening a session,

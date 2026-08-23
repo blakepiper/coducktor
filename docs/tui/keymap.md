@@ -63,6 +63,10 @@ editing keys.
   selection; `Enter` opens or activates the selected control.
 - Conversation transcripts use `j`/`k`, `gg`/`G`, paging, and search. `Enter` toggles a selected
   expandable activity item. Changes, Files, and Commits use `gt`/`gT`.
+- A chat header offers Cancel while a turn runs, and Git mode, Archive/Restore, Mark unread, and
+  Delete while it is settled. **Restart session** appears only after the harness refused to resume
+  its own session; it confirms first and sends nothing — the next message you write carries a
+  bounded excerpt of the chat into the new session.
 - The IDE tree uses `h` or `Left` for the parent and `l`, `Enter`, or `Right` to open an entry.
 - In project and Global Settings, `l` moves into values and `h` returns to the section list.
 - Structured question cards and confirmation dialogs retain their displayed local keys.

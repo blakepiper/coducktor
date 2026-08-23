@@ -41,6 +41,38 @@ normally; the focused runner tests cover the transport afterward.
 - Keyboard traversal reached the harness picker, chat cards, current-chat header actions, and the
   follow-up composer. Mouse behavior remains covered by the hitmap and screen snapshot tests.
 
+## Second run — autonomous argv, worktree retention, and session restart (2026-08-23)
+
+A later pass re-verified the same loop after the pre-conversation runner seam was removed, in a
+real tmux PTY at 120×40 from `target/release/coducktor`, against an isolated temporary `DUCK_HOME`
+and a throwaway Git repository.
+
+| Check | Result |
+| --- | --- |
+| Claude, one turn, no tools | Pass — exact response, exit 0 |
+| Claude, managed worktree, autonomous tool use | Pass — ran `Bash` and wrote the requested file with no `--allowedTools` |
+| Claude, three turns in one chat (two interactive) | Pass — native resume, no duplicated output |
+| OpenCode, one turn via `run --format json --auto` | Pass — exact response, exit 0 |
+| Codex, one turn via app-server | Turn passes; see the known issue below |
+| pi | Still unavailable locally — `pi --list-models` reports no models and asks for `/login` |
+
+The worktree lifecycle was exercised end to end in the cockpit rather than only in tests:
+
+- an unarchived chat's checkout is not listed as reclaimable;
+- archiving it lists it in Settings → Worktrees as reclaimable;
+- `Reclaim now` with an uncommitted file present left the directory untouched;
+- after committing that file, `Reclaim now` removed the directory and kept `duck/<id8>`;
+- unarchiving rebuilt the checkout from that branch with the committed file present; and
+- a further turn ran in the rebuilt checkout and read the restored file.
+
+### Known issue, not a regression
+
+`coducktor run --runner codex` prints the harness's response and settles the chat to `idle`, but
+the command does not exit and leaves a `codex app-server` child reparented to init. The binary
+built from `23a05563` — before any of this work — behaves identically, so this is a pre-existing
+gap in the headless teardown path for Codex only. Claude and OpenCode exit 0 and leave no child.
+The interactive cockpit is unaffected; it has its own shutdown path.
+
 ## Reproduction shape
 
 The real sessions followed this sequence:

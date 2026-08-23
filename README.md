@@ -68,6 +68,12 @@ session IDs are stored with the chat so later messages, including messages after
 restart, resume native context without transcript replay. An unexpected permission request fails
 that turn clearly; Coducktor does not emulate a harness approval interface.
 
+If a harness refuses to resume its own session, the chat offers **Restart session**. It asks for
+confirmation, abandons the old session, and prepares a bounded excerpt of the chat's visible
+messages — nothing is sent until you send your next message, which carries that excerpt into the
+new session. It is the only place Coducktor ever replays a transcript, it never happens on its
+own, and it costs no extra provider turn.
+
 Skills are discovered from local Coducktor and harness skill directories. Attachments are bounded
 and delimited before the exact user-authored message; the transcript always shows the original
 message. `coducktor init` creates an example skill under `.ai/coducktor/skills/`.
@@ -82,6 +88,12 @@ Manual Git mode never commits or pushes at turn end. Auto mode requires a manage
 after a successful turn, uses deterministic local Git commands to commit and push changed work.
 It never asks a model to review changes or write a commit message. A failed or cancelled turn
 leaves changes available for manual inspection.
+
+A live chat's worktree is never reclaimed. Archiving a chat makes its checkout eligible, and the
+worktree panel's reclaim action takes back the directory while keeping the transcript and the
+managed branch — a checkout with uncommitted changes is always skipped. Unarchiving rebuilds the
+checkout from that branch before the composer reopens; if it cannot be rebuilt the chat stays
+archived and readable rather than running its next turn somewhere else.
 
 ## CLI
 
