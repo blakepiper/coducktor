@@ -4,14 +4,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command as ShellCommand;
 
-use coducktor_client::InProcessEngine;
-use coducktor_contract::{BackendCheckName, RunStatus, RunnerSelection};
+use coducktor_client::{InProcessEngine, Scope};
+use coducktor_contract::{
+    BackendCheckName, ConversationGitMode, ConversationSkillSelection, ConversationState,
+    CreateConversationInput, Runner,
+};
 use coducktor_core::paths::{ProcessEnv, project_state_dir, workspace_config_path};
-use coducktor_core::workflows::run::{RunManager, StartRunInput};
-use coducktor_core::workflows::{load::load_workflows, types::quick_task_workflow};
+use coducktor_core::workflows::run::RunManager;
 use coducktor_core::workspace::config::ProjectSource;
 use coducktor_core::workspace::projects;
-use coducktor_runners::session_factory::DefaultSessionFactory;
+use coducktor_protocol::{MessageRole, UiItem};
 
 use crate::cli::ProjectsCommand;
 
@@ -62,101 +64,123 @@ pub fn repair_runs_command(repo_root: &Path) -> i32 {
 
 // ---- run (headless) -----------------------------------------------------------------------
 
-/// `coducktor run "<task>"` — headless execution. Returns the process exit code: 0 for `done`/
-/// `review`, 1 otherwise.
+/// `coducktor run "<message>"` — create one conversation, run exactly one native harness turn,
+/// print its normalized output, and return success only when the turn ended normally.
 pub async fn run_command(
     repo_root: PathBuf,
-    task: String,
-    workflow_name: Option<String>,
+    message: String,
+    harness: Runner,
     model: Option<String>,
+    reasoning: Option<String>,
+    skills: Vec<String>,
+    base_branch: Option<String>,
+    worktree: bool,
+    git_mode: ConversationGitMode,
 ) -> i32 {
-    run_command_with_factory(
-        repo_root,
-        task,
-        workflow_name,
+    let engine = InProcessEngine::new(&repo_root, env!("CARGO_PKG_VERSION"));
+    run_command_with_engine(
+        &engine,
+        message,
+        harness,
         model,
-        DefaultSessionFactory::new(),
+        reasoning,
+        skills,
+        base_branch,
+        worktree,
+        git_mode,
     )
+    .await
 }
 
-/// The testable core of [`run_command`] — takes its `SessionFactory` explicitly so a test gets
-/// deterministic backend resolution (`DUCK_DRY_RUN=1`, a fixed `host_env`) without mutating the
-/// real process environment, which `#[test]`s running in parallel in this same binary cannot do
-/// safely.
-fn run_command_with_factory(
-    repo_root: PathBuf,
-    task: String,
-    workflow_name: Option<String>,
+#[allow(clippy::too_many_arguments)]
+async fn run_command_with_engine(
+    engine: &InProcessEngine,
+    message: String,
+    harness: Runner,
     model: Option<String>,
-    factory: DefaultSessionFactory,
+    reasoning: Option<String>,
+    skills: Vec<String>,
+    base_branch: Option<String>,
+    worktree: bool,
+    git_mode: ConversationGitMode,
 ) -> i32 {
-    if task.trim().is_empty() {
-        eprintln!("usage: coducktor run \"<task>\" [--workflow name] [--model model]");
+    if message.trim().is_empty() {
+        eprintln!("usage: coducktor run [OPTIONS] \"<message>\"");
+        return 1;
+    }
+    if git_mode == ConversationGitMode::Auto && !worktree {
+        eprintln!("automatic Git mode requires --worktree true");
         return 1;
     }
 
-    let (mut workflows, issues) = load_workflows(&repo_root);
-    for issue in &issues {
-        eprintln!("! skipped {}: {}", issue.path, issue.message);
-    }
-    if workflows
-        .iter()
-        .all(|workflow| workflow.name != "quick-task")
-    {
-        workflows.push(quick_task_workflow());
-    }
-    let name = workflow_name.unwrap_or_else(|| "quick-task".to_owned());
-    let Some(workflow) = workflows.iter().find(|workflow| workflow.name == name) else {
-        eprintln!(
-            "unknown workflow: {name} (available: {})",
-            workflows
-                .iter()
-                .map(|workflow| workflow.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        return 1;
-    };
-
-    let mut manager = RunManager::with_session_factory_for_repo(
-        &repo_root,
-        project_state_dir(&repo_root, &ProcessEnv),
-        factory,
-    );
-    manager.subscribe_events(|notification| print_run_event(&notification.event));
-
-    let input = StartRunInput {
-        task,
+    let scope = Scope::Workspace;
+    let input = CreateConversationInput {
+        project_id: String::new(),
+        text: message,
+        images: Vec::new(),
+        skills: skills
+            .into_iter()
+            .map(|id| ConversationSkillSelection { id })
+            .collect(),
+        harness,
         model,
-        runner: Some(RunnerSelection::Claude),
-        ..StartRunInput::default()
+        reasoning,
+        base_branch,
+        worktree,
+        git_mode,
     };
-    let record = match manager.start_run(workflow, input) {
-        Ok(record) => record,
+    let conversation = match engine.create_conversation(&scope, input).await {
+        Ok(response) => response.conversation,
         Err(error) => {
             eprintln!("  ✗ {error}");
             return 1;
         }
     };
-
-    if record.status == RunStatus::Review {
-        println!(
-            "\n  changes ready for review on branch {} — inspect them with `coducktor`",
-            record.branch.as_deref().unwrap_or("?")
-        );
+    if let Err(error) = engine.activate_conversations(&scope) {
+        eprintln!("  ✗ {error}");
+        return 1;
     }
-    println!(
-        "\nrun {:?} — {} tokens",
-        record.status, record.tokens_used as i64
+
+    let settled = loop {
+        match engine.get_conversation(&scope, &conversation.id).await {
+            Ok(record) if !record.state.is_active() => break record,
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(25)).await,
+            Err(error) => {
+                eprintln!("  ✗ {error}");
+                return 1;
+            }
+        }
+    };
+    if let Ok(history) = engine
+        .conversation_history(&scope, &conversation.id, None)
+        .await
+    {
+        for event in history.events {
+            print_conversation_event(&event);
+        }
+    }
+    if let Some(error) = &settled.last_error {
+        eprintln!("  ✗ {error}");
+    }
+    eprintln!(
+        "\nchat {} — {:?} — {} tokens",
+        settled.id, settled.state, settled.tokens_used as i64
     );
-    match record.status {
-        RunStatus::Done | RunStatus::Review => 0,
-        _ => 1,
+    match settled.state {
+        ConversationState::Idle => 0,
+        ConversationState::NeedsInput => {
+            eprintln!("  ✗ the harness requested structured input; continue in coducktor");
+            1
+        }
+        ConversationState::Queued
+        | ConversationState::Running
+        | ConversationState::Failed
+        | ConversationState::Cancelled => 1,
     }
 }
 
-/// Print normalized run events with terminal-friendly formatting.
-fn print_run_event(event: &coducktor_contract::RunEvent) {
+/// Print normalized conversation events with terminal-friendly formatting.
+fn print_conversation_event(event: &coducktor_contract::RunHistoryEvent) {
     let text = |key: &str| -> String {
         event
             .extra
@@ -166,7 +190,19 @@ fn print_run_event(event: &coducktor_contract::RunEvent) {
             .to_owned()
     };
     match event.event_type.as_str() {
-        "text" | "check-output" => println!("{}", text("text")),
+        "text" => println!("{}", text("text")),
+        "item.started" | "item.updated" | "item.completed" => {
+            let Some(item) = event.extra.get("item") else {
+                return;
+            };
+            match serde_json::from_value::<UiItem>(item.clone()) {
+                Ok(UiItem::Message(message)) if message.role == MessageRole::Assistant => {
+                    println!("{}", message.text)
+                }
+                Ok(UiItem::Tool(tool)) => println!("  → {}", tool.title),
+                _ => {}
+            }
+        }
         "tool-call" => {
             let input = event
                 .extra
@@ -176,16 +212,6 @@ fn print_run_event(event: &coducktor_contract::RunEvent) {
             println!("  → {} {input}", text("tool"));
         }
         "tool-result" => println!("  ← {}", first_line(&text("result"))),
-        "step-start" => {
-            let name = text("name");
-            let iteration = event.extra.get("iteration").and_then(|v| v.as_f64());
-            match iteration {
-                Some(iteration) if iteration > 1.0 => {
-                    println!("\n── step: {name} (attempt {})", iteration as i64)
-                }
-                _ => println!("\n── step: {name}"),
-            }
-        }
         "note" | "lifecycle" => println!("  · {}", text("message")),
         "error" => eprintln!("  ✗ {}", text("message")),
         _ => {}
@@ -213,23 +239,15 @@ fn first_line(text: &str) -> String {
 
 // ---- init ----------------------------------------------------------------------------------
 
-/// `coducktor init` — scaffold `.ai/coducktor/{workflows,skills}` with one worked example each.
+/// `coducktor init` — scaffold one local skill example without introducing workflow execution.
 pub fn init_command(repo_root: &Path) {
-    let workflows_dir = repo_root.join(".ai/coducktor/workflows");
     let skills_dir = repo_root.join(".ai/coducktor/skills");
-    let _ = std::fs::create_dir_all(&workflows_dir);
     let _ = std::fs::create_dir_all(&skills_dir);
 
-    let examples = [
-        (
-            workflows_dir.join("fix-and-verify.yaml"),
-            "name: fix-and-verify\ndescription: Implement the task, then run your test command; on failure the agent retries with the failing output.\nsteps:\n  - id: implement\n    name: Implement\n    prompt: \"{{task}}\"\n  - id: verify\n    name: Verify\n    command: \"echo 'replace me with: npm test / yarn test / pytest'\"\n    onFail:\n      retry: implement\n      max: 2\n",
-        ),
-        (
-            skills_dir.join("project-conventions.md"),
-            "---\nname: project-conventions\ndescription: House rules the agent should follow in this repo.\n---\n\n# Project conventions\n\n- Describe your stack, style and testing conventions here.\n- Reference this skill from a workflow step via `skill: project-conventions`.\n",
-        ),
-    ];
+    let examples = [(
+        skills_dir.join("project-conventions.md"),
+        "---\nname: project-conventions\ndescription: House rules the agent should follow in this repo.\n---\n\n# Project conventions\n\n- Describe your stack, style, and testing conventions here.\n- Attach this skill from New Chat or with `duck run --skill project-conventions`.\n",
+    )];
 
     for (path, content) in examples {
         if path.exists() {
@@ -267,12 +285,6 @@ pub async fn usage_command(repo_root: PathBuf, json: bool, refresh: bool) -> i32
             }
         }
         return 0;
-    }
-    if let Some(health) = response.policy_health {
-        println!(
-            "Auto routing: {}/{} ready ({} unknown)",
-            health.ready_candidates, health.total_candidates, health.unknown_candidates
-        );
     }
     for provider in response.providers {
         let upstream = provider
@@ -523,6 +535,7 @@ fn projects_remove(path: &Path, id: &str) -> i32 {
 mod tests {
     use super::*;
     use coducktor_core::workspace::config::load_workspace_config;
+    use coducktor_runners::session_factory::DefaultSessionFactory;
     use std::collections::BTreeMap;
 
     #[test]
@@ -558,28 +571,25 @@ mod tests {
     }
 
     #[test]
-    fn init_command_scaffolds_shareable_workflow_and_skill_examples() {
+    fn init_command_scaffolds_only_a_shareable_skill_example() {
         let repo = tempfile::tempdir().unwrap();
         init_command(repo.path());
 
-        let workflow = repo
-            .path()
-            .join(".ai/coducktor/workflows/fix-and-verify.yaml");
         let skill = repo
             .path()
             .join(".ai/coducktor/skills/project-conventions.md");
-        assert!(workflow.is_file());
         assert!(skill.is_file());
         assert!(
-            std::fs::read_to_string(&workflow)
+            std::fs::read_to_string(&skill)
                 .unwrap()
-                .contains("fix-and-verify")
+                .contains("duck run --skill project-conventions")
         );
+        assert!(!repo.path().join(".ai/coducktor/workflows").exists());
 
         // Idempotent: a second run leaves the files alone rather than erroring or duplicating.
-        let before = std::fs::read_to_string(&workflow).unwrap();
+        let before = std::fs::read_to_string(&skill).unwrap();
         init_command(repo.path());
-        assert_eq!(std::fs::read_to_string(&workflow).unwrap(), before);
+        assert_eq!(std::fs::read_to_string(&skill).unwrap(), before);
     }
 
     #[test]
@@ -659,42 +669,52 @@ mod tests {
         DefaultSessionFactory::with_env(env)
     }
 
-    #[test]
-    fn run_command_reaches_done_and_exits_zero_against_the_dry_run_mock() {
-        let repo = fake_repo_with_mock_claude();
-        let code = run_command_with_factory(
-            repo.path().to_path_buf(),
-            "investigate the login redirect bug mock:done".to_owned(),
-            None,
-            None,
+    fn dry_run_engine(repo: &Path) -> InProcessEngine {
+        let config = repo.join("workspace-config.json");
+        InProcessEngine::with_session_factory_at(
+            repo,
+            "0.0.0-headless-test",
             dry_run_factory(),
-        );
+            config,
+        )
+        .with_conversation_factory(dry_run_factory())
+    }
+
+    #[tokio::test]
+    async fn run_command_reaches_idle_and_exits_zero_against_the_dry_run_mock() {
+        let repo = fake_repo_with_mock_claude();
+        let engine = dry_run_engine(repo.path());
+        let code = run_command_with_engine(
+            &engine,
+            "investigate the login redirect bug mock:done".to_owned(),
+            Runner::Claude,
+            None,
+            None,
+            Vec::new(),
+            None,
+            false,
+            ConversationGitMode::Manual,
+        )
+        .await;
         assert_eq!(code, 0);
     }
 
-    #[test]
-    fn run_command_reports_an_unknown_workflow_and_exits_nonzero() {
+    #[tokio::test]
+    async fn run_command_rejects_an_empty_message() {
         let repo = fake_repo_with_mock_claude();
-        let code = run_command_with_factory(
-            repo.path().to_path_buf(),
-            "do it".to_owned(),
-            Some("no-such-workflow".to_owned()),
-            None,
-            dry_run_factory(),
-        );
-        assert_eq!(code, 1);
-    }
-
-    #[test]
-    fn run_command_rejects_an_empty_task() {
-        let repo = fake_repo_with_mock_claude();
-        let code = run_command_with_factory(
-            repo.path().to_path_buf(),
+        let engine = dry_run_engine(repo.path());
+        let code = run_command_with_engine(
+            &engine,
             "   ".to_owned(),
+            Runner::Claude,
             None,
             None,
-            dry_run_factory(),
-        );
+            Vec::new(),
+            None,
+            false,
+            ConversationGitMode::Manual,
+        )
+        .await;
         assert_eq!(code, 1);
     }
 

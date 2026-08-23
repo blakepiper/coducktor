@@ -6,7 +6,7 @@ mod events;
 mod in_process;
 mod scope;
 
-pub use engine::{Engine, StartRunInput, Topic};
+pub use engine::{Engine, Topic};
 pub use error::EngineError;
 pub use events::EngineEvent;
 pub use in_process::InProcessEngine;

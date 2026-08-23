@@ -1,7 +1,7 @@
 //! Tasks overview screen — `screens/tasks.rs`.
 //!
 //! Layout: title row (Active/Archived segments and counts), the run table, and
-//! compare-variant strips below.
+//! project-scoped historical task rows alongside current chats.
 
 use coducktor_contract::{ApiRun, ProcessUsage, RunStatus};
 use ratatui::Frame;

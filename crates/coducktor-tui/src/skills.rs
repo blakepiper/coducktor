@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use coducktor_contract::{Skill, SkillSource, WorkflowDef};
+use coducktor_contract::{Skill, SkillSource};
 
 /// Project-oriented skills first, user-global after.
 /// Team skills are configured and cached per project even though their files live
@@ -154,22 +154,13 @@ pub fn query_score(name: &str, description: Option<&str>, query: &str) -> f64 {
 const USAGE_BONUS_STEP: f64 = 0.5;
 
 /// The minimal "has a name and optional description" surface the shared ranking
-/// engine needs — implemented for both `Skill` and `WorkflowDef`.
+/// engine needs.
 trait Matchable {
     fn name(&self) -> &str;
     fn description(&self) -> Option<&str>;
 }
 
 impl Matchable for Skill {
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-}
-
-impl Matchable for WorkflowDef {
     fn name(&self) -> &str {
         &self.name
     }
@@ -231,11 +222,6 @@ pub fn search_skills<'a>(
     usage: Option<&BTreeMap<String, f64>>,
 ) -> Vec<&'a Skill> {
     rank_by_query(skills, query, usage)
-}
-
-/// Rank workflows for a picker by match quality — the workflow counterpart of `search_skills`.
-pub fn search_workflows<'a>(workflows: &'a [WorkflowDef], query: &str) -> Vec<&'a WorkflowDef> {
-    rank_by_query(workflows, query, None)
 }
 
 /// Partition skills into the picker display tiers: **Most used** first —
@@ -342,20 +328,6 @@ mod tests {
             body: String::new(),
             path: format!("/skills/{name}.md"),
             source,
-        }
-    }
-
-    fn workflow(
-        name: &str,
-        description: Option<&str>,
-        source: coducktor_contract::WorkflowSource,
-    ) -> WorkflowDef {
-        WorkflowDef {
-            name: name.to_owned(),
-            description: description.map(ToOwned::to_owned),
-            steps: Vec::new(),
-            source,
-            path: None,
         }
     }
 
@@ -616,25 +588,6 @@ mod tests {
         assert_eq!(
             names(&search_skills(&skills, "issue", None)),
             ["om-auto-fix-issue", "om-open-pr"]
-        );
-    }
-
-    #[test]
-    fn search_workflows_ranks_by_match_quality() {
-        let workflows = vec![
-            workflow(
-                "ship-it",
-                Some("review then deploy"),
-                coducktor_contract::WorkflowSource::File,
-            ),
-            workflow("review", None, coducktor_contract::WorkflowSource::File),
-        ];
-        assert_eq!(
-            search_workflows(&workflows, "review")
-                .into_iter()
-                .map(|w| w.name.clone())
-                .collect::<Vec<_>>(),
-            ["review", "ship-it"]
         );
     }
 

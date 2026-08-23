@@ -2,27 +2,22 @@ use async_trait::async_trait;
 use coducktor_contract::{
     AgentAccountDetailsResponse, AgentAccountStatusResponse, AgentConfigFileContent,
     AgentConfigListing, AgentProfileResponse, AgentProfileSelectionsResponse,
-    AgentProfilesResponse, ApiRun, ArchiveFinishedResponse, CancelAutoResumeResponse,
-    CancelResponse, ChangesPayload, ConfigResponse, ContinueInput, ContinueResponse,
-    CreateAgentProfileInput, CreatePrResponse, CreateRunInput, CreateRunResponse,
-    DeleteRunResponse, DeleteWorkflowResponse, EditQueuedMessageResponse, FinishResponse,
-    GitCommitInput, GitCommitResponse, GitPushResponse, GithubChecksData, GithubCommentsData,
-    GithubData, GithubMergeInput, GithubMergeResponse, GithubPrChangesData,
-    GithubPrMergeStateResponse, GithubRefStatusData, GroupResponse, HealthResponse,
-    IdeDirectoryResponse, IdeFileResponse, MarkAllReadResponse, MessageInput, MessageResponse,
-    OpenAgentAccountFileInput, OpenAgentAccountFileResponse, OpenInInput, OpenProjectInResponse,
-    OpenTargetsResponse, ParsedWorkflow, PatchRunInput, PickVariantRequest, PickVariantResponse,
-    PlanResponse, ProjectsResponse, ProviderConnectInput, ProviderConnectResponse,
-    ProviderStatusResponse, QueuedMessagePatchInput, ReclaimWorktreesResponse,
+    AgentProfilesResponse, ApiRun, ArchiveFinishedResponse, ChangesPayload, ConfigResponse,
+    CreateAgentProfileInput, CreatePrResponse, DeleteRunResponse, GitCommitInput,
+    GitCommitResponse, GitPushResponse, GithubChecksData, GithubCommentsData, GithubData,
+    GithubMergeInput, GithubMergeResponse, GithubPrChangesData, GithubPrMergeStateResponse,
+    GithubRefStatusData, HealthResponse, IdeDirectoryResponse, IdeFileResponse,
+    MarkAllReadResponse, OpenAgentAccountFileInput, OpenAgentAccountFileResponse, OpenInInput,
+    OpenProjectInResponse, OpenTargetsResponse, ProjectsResponse, ProviderConnectInput,
+    ProviderConnectResponse, ProviderStatusResponse, ReclaimWorktreesResponse,
     RegisterProjectInput, RegisterProjectResponse, RemoveAgentProfileResponse,
-    RemoveProjectResponse, RemoveQueuedMessageResponse, RemoveWorktreeResponse, RepoBranchRequest,
-    RepoBranchResponse, RepoCommitPayload, RepoResponse, RunCommitsResponse, RunHistoryContext,
-    RunHistoryPage, Runner, RunnerModelCatalogResponse, RunsIndexResponse, SaveWorkflowInput,
-    SaveWorkflowResponse, Scratchpad, SelectAgentProfileInput, SetAgentConfigInput, SetConfigInput,
-    SetScratchpadInput, SetWorkspaceConfigInput, SetWorkspaceUiStateInput, Skill, UiState,
-    UpdateAgentProfileInput, UpdateProjectInput, UpdateProjectResponse, WorkflowsResponse,
-    WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsageResponse, WorktreeEntry,
-    WorktreesResponse,
+    RemoveProjectResponse, RemoveWorktreeResponse, RepoBranchRequest, RepoBranchResponse,
+    RepoCommitPayload, RepoResponse, RunCommitsResponse, RunHistoryContext, RunHistoryPage, Runner,
+    RunnerModelCatalogResponse, RunsIndexResponse, Scratchpad, SelectAgentProfileInput,
+    SetAgentConfigInput, SetConfigInput, SetScratchpadInput, SetWorkspaceConfigInput,
+    SetWorkspaceUiStateInput, Skill, UiState, UpdateAgentProfileInput, UpdateProjectInput,
+    UpdateProjectResponse, WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsageResponse,
+    WorktreeEntry, WorktreesResponse,
 };
 use coducktor_contract::{
     AnswerConversationQuestionInput, AnswerConversationQuestionResponse,
@@ -40,9 +35,6 @@ use crate::events::EngineEvent;
 use crate::in_process::InProcessEngine;
 use crate::scope::Scope;
 
-/// Input accepted by the engine's start-run seam.
-pub type StartRunInput = CreateRunInput;
-
 /// Demand-driven live topics exposed to screens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Topic {
@@ -56,14 +48,6 @@ pub enum Topic {
 pub trait Engine: Send + Sync {
     async fn health(&self) -> Result<HealthResponse, EngineError>;
     async fn list_runs(&self, scope: &Scope) -> Result<Vec<ApiRun>, EngineError>;
-    async fn start_run(
-        &self,
-        scope: &Scope,
-        input: StartRunInput,
-    ) -> Result<CreateRunResponse, EngineError>;
-    /// Begin executing runs previously accepted by [`Engine::start_run`]. This is separate so a
-    /// UI can install the run-scoped live subscription before the first event is emitted.
-    async fn activate_runs(&self, scope: &Scope) -> Result<(), EngineError>;
     async fn get_run(&self, scope: &Scope, run_id: &str) -> Result<ApiRun, EngineError>;
     async fn archive_run(
         &self,
@@ -82,7 +66,6 @@ pub trait Engine: Send + Sync {
     -> Result<ArchiveFinishedResponse, EngineError>;
     async fn mark_all_read(&self, scope: &Scope) -> Result<MarkAllReadResponse, EngineError>;
     async fn runs_index(&self) -> Result<RunsIndexResponse, EngineError>;
-    async fn workflows(&self, scope: &Scope) -> Result<WorkflowsResponse, EngineError>;
     async fn skills(&self, scope: &Scope) -> Result<Vec<Skill>, EngineError>;
     async fn projects(&self) -> Result<ProjectsResponse, EngineError>;
     async fn register_project(
@@ -146,22 +129,6 @@ pub trait Engine: Send + Sync {
         number: u64,
     ) -> Result<GithubPrChangesData, EngineError>;
 
-    // ---- workflow builder writes -----------------------------------------------------------
-    async fn save_workflow(
-        &self,
-        scope: &Scope,
-        input: &SaveWorkflowInput,
-    ) -> Result<SaveWorkflowResponse, EngineError>;
-    async fn delete_workflow(
-        &self,
-        scope: &Scope,
-        name: &str,
-    ) -> Result<DeleteWorkflowResponse, EngineError>;
-    async fn parse_workflow(
-        &self,
-        scope: &Scope,
-        yaml: &str,
-    ) -> Result<ParsedWorkflow, EngineError>;
     async fn agent_profiles(&self) -> Result<AgentProfilesResponse, EngineError>;
     async fn ui_state(&self, scope: &Scope) -> Result<UiState, EngineError>;
     async fn put_ui_state(&self, scope: &Scope, state: &UiState) -> Result<UiState, EngineError>;
@@ -171,7 +138,6 @@ pub trait Engine: Send + Sync {
         scope: &Scope,
         input: &SetScratchpadInput,
     ) -> Result<Scratchpad, EngineError>;
-    async fn plan(&self, scope: &Scope, task: &str) -> Result<PlanResponse, EngineError>;
 
     // ---- task thread ----------------------------------------------------------------------
     async fn run_history(
@@ -185,39 +151,6 @@ pub trait Engine: Send + Sync {
         scope: &Scope,
         run_id: &str,
     ) -> Result<RunHistoryContext, EngineError>;
-    async fn patch_run(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: PatchRunInput,
-    ) -> Result<ApiRun, EngineError>;
-    async fn cancel_run(&self, scope: &Scope, run_id: &str) -> Result<CancelResponse, EngineError>;
-    async fn send_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: MessageInput,
-    ) -> Result<MessageResponse, EngineError>;
-    async fn edit_queued_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        message_id: &str,
-        input: QueuedMessagePatchInput,
-    ) -> Result<EditQueuedMessageResponse, EngineError>;
-    async fn remove_queued_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        message_id: &str,
-    ) -> Result<RemoveQueuedMessageResponse, EngineError>;
-    async fn finish_run(&self, scope: &Scope, run_id: &str) -> Result<FinishResponse, EngineError>;
-    async fn continue_run(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: ContinueInput,
-    ) -> Result<ContinueResponse, EngineError>;
     async fn open_in(
         &self,
         scope: &Scope,
@@ -270,13 +203,6 @@ pub trait Engine: Send + Sync {
         scope: &Scope,
         input: &RepoBranchRequest,
     ) -> Result<RepoBranchResponse, EngineError>;
-    async fn group(&self, scope: &Scope, group_id: &str) -> Result<GroupResponse, EngineError>;
-    async fn pick_variant(
-        &self,
-        scope: &Scope,
-        group_id: &str,
-        input: &PickVariantRequest,
-    ) -> Result<PickVariantResponse, EngineError>;
 
     // ---- conversations ----------------------------------------------------------------------
     // The conversation-first cockpit. One ordinary submission is exactly one provider turn:
@@ -382,11 +308,6 @@ pub trait Engine: Send + Sync {
         path: &str,
         content: &str,
     ) -> Result<IdeFileResponse, EngineError>;
-    async fn cancel_auto_resume(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-    ) -> Result<CancelAutoResumeResponse, EngineError>;
 
     // ---- Settings --------------------------------------------------------------------------
     /// Update the global settings slice (account defaults, resources, and project checkout root).
@@ -500,18 +421,6 @@ impl Engine for InProcessEngine {
 
     async fn list_runs(&self, scope: &Scope) -> Result<Vec<ApiRun>, EngineError> {
         self.scoped(scope)?.list_runs().await
-    }
-
-    async fn start_run(
-        &self,
-        scope: &Scope,
-        input: StartRunInput,
-    ) -> Result<CreateRunResponse, EngineError> {
-        self.scoped(scope)?.enqueue_run(input).await
-    }
-
-    async fn activate_runs(&self, scope: &Scope) -> Result<(), EngineError> {
-        self.scoped(scope)?.activate_runs()
     }
 
     // ---- conversations ----------------------------------------------------------------------
@@ -676,10 +585,6 @@ impl Engine for InProcessEngine {
         InProcessEngine::runs_index(self).await
     }
 
-    async fn workflows(&self, scope: &Scope) -> Result<WorkflowsResponse, EngineError> {
-        self.scoped(scope)?.workflows().await
-    }
-
     async fn skills(&self, scope: &Scope) -> Result<Vec<Skill>, EngineError> {
         self.scoped(scope)?.skills().await
     }
@@ -785,30 +690,6 @@ impl Engine for InProcessEngine {
         self.scoped(scope)?.github_pr_changes(number).await
     }
 
-    async fn save_workflow(
-        &self,
-        scope: &Scope,
-        input: &SaveWorkflowInput,
-    ) -> Result<SaveWorkflowResponse, EngineError> {
-        self.scoped(scope)?.save_workflow(input).await
-    }
-
-    async fn delete_workflow(
-        &self,
-        scope: &Scope,
-        name: &str,
-    ) -> Result<DeleteWorkflowResponse, EngineError> {
-        self.scoped(scope)?.delete_workflow(name).await
-    }
-
-    async fn parse_workflow(
-        &self,
-        scope: &Scope,
-        yaml: &str,
-    ) -> Result<ParsedWorkflow, EngineError> {
-        self.scoped(scope)?.parse_workflow(yaml).await
-    }
-
     async fn agent_profiles(&self) -> Result<AgentProfilesResponse, EngineError> {
         InProcessEngine::agent_profiles(self).await
     }
@@ -836,10 +717,6 @@ impl Engine for InProcessEngine {
         InProcessEngine::put_scratchpad(self, scope, input).await
     }
 
-    async fn plan(&self, scope: &Scope, task: &str) -> Result<PlanResponse, EngineError> {
-        self.scoped(scope)?.plan(task).await
-    }
-
     async fn run_history(
         &self,
         scope: &Scope,
@@ -855,64 +732,6 @@ impl Engine for InProcessEngine {
         run_id: &str,
     ) -> Result<RunHistoryContext, EngineError> {
         self.scoped(scope)?.run_history_context(run_id).await
-    }
-
-    async fn patch_run(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: PatchRunInput,
-    ) -> Result<ApiRun, EngineError> {
-        self.scoped(scope)?.patch_run(run_id, input).await
-    }
-
-    async fn cancel_run(&self, scope: &Scope, run_id: &str) -> Result<CancelResponse, EngineError> {
-        self.scoped(scope)?.cancel_run(run_id).await
-    }
-
-    async fn send_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: MessageInput,
-    ) -> Result<MessageResponse, EngineError> {
-        self.scoped(scope)?.send_message(run_id, input).await
-    }
-
-    async fn edit_queued_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        message_id: &str,
-        input: QueuedMessagePatchInput,
-    ) -> Result<EditQueuedMessageResponse, EngineError> {
-        self.scoped(scope)?
-            .edit_queued_message(run_id, message_id, input)
-            .await
-    }
-
-    async fn remove_queued_message(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        message_id: &str,
-    ) -> Result<RemoveQueuedMessageResponse, EngineError> {
-        self.scoped(scope)?
-            .remove_queued_message(run_id, message_id)
-            .await
-    }
-
-    async fn finish_run(&self, scope: &Scope, run_id: &str) -> Result<FinishResponse, EngineError> {
-        self.scoped(scope)?.finish_run(run_id).await
-    }
-
-    async fn continue_run(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-        input: ContinueInput,
-    ) -> Result<ContinueResponse, EngineError> {
-        self.scoped(scope)?.continue_run(run_id, input).await
     }
 
     async fn open_in(
@@ -1016,19 +835,6 @@ impl Engine for InProcessEngine {
         self.scoped(scope)?.repo_branch(input).await
     }
 
-    async fn group(&self, scope: &Scope, group_id: &str) -> Result<GroupResponse, EngineError> {
-        self.scoped(scope)?.group(group_id).await
-    }
-
-    async fn pick_variant(
-        &self,
-        scope: &Scope,
-        group_id: &str,
-        input: &PickVariantRequest,
-    ) -> Result<PickVariantResponse, EngineError> {
-        self.scoped(scope)?.pick_variant(group_id, input).await
-    }
-
     async fn ide_tree(
         &self,
         scope: &Scope,
@@ -1053,14 +859,6 @@ impl Engine for InProcessEngine {
         content: &str,
     ) -> Result<IdeFileResponse, EngineError> {
         self.scoped(scope)?.ide_save(path, content).await
-    }
-
-    async fn cancel_auto_resume(
-        &self,
-        scope: &Scope,
-        run_id: &str,
-    ) -> Result<CancelAutoResumeResponse, EngineError> {
-        self.scoped(scope)?.cancel_auto_resume(run_id).await
     }
 
     async fn put_workspace_config(

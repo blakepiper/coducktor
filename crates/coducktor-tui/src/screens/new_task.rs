@@ -10,7 +10,7 @@
 
 use coducktor_contract::{
     ProviderStatusResponse, ReasoningEffort, RepoInfo, Runner, RunnerModelCatalogResponse, Skill,
-    UiState, WorkflowDef, WorkspaceConfigResponse,
+    UiState, WorkspaceConfigResponse,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -107,7 +107,6 @@ impl PickerKind {
 #[derive(Debug, Clone, Default)]
 pub struct NewTaskData {
     pub skills: Vec<Skill>,
-    pub workflows: Vec<WorkflowDef>,
     pub config: Option<ComposerConfig>,
     pub workspace_config: Option<WorkspaceConfigResponse>,
     pub provider_status: Option<ProviderStatusResponse>,
@@ -1373,16 +1372,6 @@ mod tests {
         }
     }
 
-    fn workflow(name: &str) -> WorkflowDef {
-        WorkflowDef {
-            name: name.to_owned(),
-            description: None,
-            steps: Vec::new(),
-            source: coducktor_contract::WorkflowSource::BuiltIn,
-            path: None,
-        }
-    }
-
     fn connected_provider(runner: Runner) -> ProviderStatus {
         ProviderStatus {
             provider: runner,
@@ -1409,7 +1398,6 @@ mod tests {
             skill("om-fix", coducktor_contract::SkillSource::Ai),
             skill("om-open-pr", coducktor_contract::SkillSource::Global),
         ];
-        app.new_task_ui.data.workflows = vec![workflow("quick-task")];
         app.new_task_ui.data.provider_status = Some(ProviderStatusResponse {
             providers: vec![connected_provider(Runner::Claude)],
         });
@@ -1869,7 +1857,7 @@ mod tests {
         assert!(
             app.pending
                 .iter()
-                .all(|action| !matches!(action, PendingAction::StartRun { .. })),
+                .all(|action| !matches!(action, PendingAction::CreateConversation { .. })),
             "empty draft must not start"
         );
         assert!(app.notice.is_some());
@@ -1883,7 +1871,7 @@ mod tests {
         assert!(
             app.pending
                 .iter()
-                .all(|action| !matches!(action, PendingAction::StartRun { .. }))
+                .all(|action| !matches!(action, PendingAction::CreateConversation { .. }))
         );
         assert!(app.notice.as_deref().unwrap().contains("provider"));
     }

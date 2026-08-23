@@ -75,9 +75,9 @@ use coducktor_core::workflows::load::{WORKFLOWS_DIR, load_workflows};
 use coducktor_core::workflows::run::{
     AUTOMATIC_COMMIT_MESSAGE_NUDGE, AUTONOMOUS_NUDGE, AdmittedTurn, CancellationToken,
     CheckExecutor, CheckResult, DiffInspector, EventInput, FinishStart, GitAutoMessage,
-    MONITORING_WAKE_PROMPT, PromptImage, RepositoryRootLease, RunManager, RuntimeActive,
-    RuntimeOptions, SessionFactory, SessionOutcome, StartRunInput as CoreStartRunInput, TurnStep,
-    WorkspaceSemaphore, review_gate_enabled,
+    PromptImage, RepositoryRootLease, RunManager, RuntimeActive, RuntimeOptions, SessionFactory,
+    SessionOutcome, StartRunInput as CoreStartRunInput, TurnStep, WorkspaceSemaphore,
+    review_gate_enabled,
 };
 use coducktor_core::workflows::types::{parse_workflow_file_doc, steps_issue};
 use coducktor_core::workspace::agent_accounts::{
@@ -378,6 +378,7 @@ impl SessionFactory for SharedSessionFactory {
 /// runs a turn. Each clone shares the same manager, factory, cancellation registry, and worker
 /// registry — cheap to hand to a new thread, and cheap to hand back to itself for the next
 /// admitted turn a just-applied outcome unblocked.
+#[allow(dead_code)]
 #[derive(Clone)]
 struct TurnDispatch {
     manager: Arc<RunManagerMutex<RunManager>>,
@@ -387,6 +388,7 @@ struct TurnDispatch {
     workers: Arc<Mutex<BTreeMap<String, std::thread::JoinHandle<()>>>>,
 }
 
+#[allow(dead_code)]
 impl TurnDispatch {
     fn active_step_id(&self, run_id: &str, active: &RuntimeActive) -> Option<String> {
         match active.step_id() {
@@ -864,95 +866,6 @@ impl TurnDispatch {
         let admitted = self.manager.lock().take_pending_turns();
         self.dispatch(admitted);
     }
-
-    /// Dispatch a monitoring check-in `RunManager::begin_monitoring_wake` already detached from
-    /// `self.active`. A `RuntimeActive` in hand means the manager already marked the run
-    /// `in_flight`, so — unlike `spawn`'s `AdmittedTurn` path — a failed thread spawn cannot just
-    /// report a failure by run id; the still-live session must go somewhere, or it leaks. It is
-    /// kept in a cell reachable from both the spawn closure and this call so whichever one
-    /// actually runs (never both) can retrieve it.
-    fn wake(&self, run_id: String, active: RuntimeActive) {
-        let cell = Arc::new(Mutex::new(Some(active)));
-        let dispatch = self.clone();
-        let thread_cell = cell.clone();
-        let thread_run_id = run_id.clone();
-        let spawned = std::thread::Builder::new()
-            .name("coducktor-monitor-wake".to_owned())
-            .spawn(move || {
-                if let Some(active) = thread_cell.lock().ok().and_then(|mut cell| cell.take()) {
-                    dispatch.run_wake(thread_run_id, active);
-                }
-            });
-        match spawned {
-            Ok(handle) => {
-                if let Ok(mut workers) = self.workers.lock() {
-                    workers.insert(run_id, handle);
-                }
-            }
-            Err(_) => {
-                if let Some(active) = cell.lock().ok().and_then(|mut cell| cell.take()) {
-                    self.manager.lock().abandon_monitoring_wake(&run_id, active);
-                }
-            }
-        }
-    }
-
-    fn run_wake(&self, run_id: String, mut active: RuntimeActive) {
-        let Some(step_id) = self.active_step_id(&run_id, &active) else {
-            return;
-        };
-        let send_result =
-            active
-                .session_mut()
-                .send_message(MONITORING_WAKE_PROMPT, &[], &mut |event| {
-                    self.apply_event(&run_id, &step_id, event)
-                });
-        let cancellation = self
-            .cancellations
-            .lock()
-            .ok()
-            .and_then(|tokens| tokens.get(&run_id).cloned())
-            .unwrap_or_default();
-        self.autosave_after_turn(&run_id, &send_result);
-        let mut step = {
-            // A monitoring wake reuses the cancellation token registered when its session opened,
-            // so cancellation wins even if the provider reports some other outcome while stopping.
-            self.manager.lock().apply_active_turn(
-                &run_id,
-                active,
-                send_result,
-                cancellation.is_requested(),
-            )
-        };
-        self.autosave_after_settlement(&run_id);
-        loop {
-            let active = match step {
-                Ok(TurnStep::Done) | Err(_) => break,
-                Ok(TurnStep::Nudge(active)) => active,
-                Ok(TurnStep::QueuedMessage {
-                    active,
-                    prompt,
-                    images,
-                }) => {
-                    step = self.run_queued_message(
-                        &run_id,
-                        &step_id,
-                        active,
-                        prompt,
-                        images,
-                        &cancellation,
-                    );
-                    continue;
-                }
-                Ok(TurnStep::GitAutoCommit(active)) => {
-                    self.run_git_auto_commit(&run_id, &step_id, active, &cancellation);
-                    break;
-                }
-            };
-            step = self.run_nudge(&run_id, &step_id, active, &cancellation);
-        }
-        self.redispatch();
-    }
 }
 
 /// A 5-minute TTL cache so a slow or failing model probe does not re-run on every picker update.
@@ -1176,6 +1089,7 @@ fn effective_runtime_options(
 }
 
 /// Build a lifecycle event without repeating the full `EventInput` construction at each site.
+#[allow(dead_code)]
 fn lifecycle_event(message: String) -> EventInput {
     let mut event = EventInput::new("lifecycle");
     event
@@ -1184,13 +1098,14 @@ fn lifecycle_event(message: String) -> EventInput {
     event
 }
 
+// Legacy task records still share this implementation for read/archive/delete/Git compatibility.
+// Its workflow mutation methods are crate-private and retained only for historical unit fixtures.
+#[allow(dead_code)]
 impl InProcessEngine {
     /// Build a manager over `repo_root` wired with the real [`DefaultSessionFactory`]. Events
     /// are published through an in-process broadcast channel.
     pub fn new(repo_root: impl Into<PathBuf>, version: impl Into<String>) -> Self {
-        let engine = Self::with_session_factory(repo_root, version, DefaultSessionFactory::new());
-        engine.spawn_monitoring_scheduler();
-        engine
+        Self::with_session_factory(repo_root, version, DefaultSessionFactory::new())
     }
 
     /// Same as [`Self::new`], but over an explicit [`SessionFactory`] — the seam a test (or a
@@ -1568,7 +1483,10 @@ impl InProcessEngine {
     }
 
     /// Mirrors `create_run`'s handler exactly, including its `variants` validation.
-    pub async fn start_run(&self, input: CreateRunInput) -> Result<CreateRunResponse, EngineError> {
+    pub(crate) async fn start_run(
+        &self,
+        input: CreateRunInput,
+    ) -> Result<CreateRunResponse, EngineError> {
         // Admission is durable, but execution is deliberately separate. Starting a provider
         // turn here used to hold the manager mutex throughout `RunManager::pump`, making the
         // request path (and any caller sharing that manager) wait behind runner I/O. The TUI
@@ -1578,7 +1496,7 @@ impl InProcessEngine {
     }
 
     /// Persist queued runs and return their ids before any agent process is opened.
-    pub async fn enqueue_run(
+    pub(crate) async fn enqueue_run(
         &self,
         input: CreateRunInput,
     ) -> Result<CreateRunResponse, EngineError> {
@@ -1835,7 +1753,7 @@ impl InProcessEngine {
 
     /// Run the accepted queue on a worker so the engine loop can keep drawing and consuming the
     /// live broadcast emitted by the manager's event sink.
-    pub fn activate_runs(&self) -> Result<(), EngineError> {
+    pub(crate) fn activate_runs(&self) -> Result<(), EngineError> {
         self.reap_finished_activation_workers()?;
         let mut workers = self.activation_workers.lock().map_err(|_| lock_err())?;
         if workers
@@ -1883,66 +1801,6 @@ impl InProcessEngine {
             cancellations: self.cancellations.clone(),
             workers: self.turn_workers.clone(),
         }
-    }
-
-    /// How often the monitoring scheduler wakes to check every currently open project's managers
-    /// for a due monitoring session. Real due wakes are dispatched the moment this notices them;
-    /// this is the coarse-grained bound on that latency, not a busy/tight loop — the durable wake
-    /// interval a user configures is denominated in minutes, so a few seconds of slack against it
-    /// is immaterial.
-    const MONITORING_SCHEDULER_INTERVAL: Duration = Duration::from_secs(15);
-
-    /// Start the one process-wide background thread that reconciles monitoring wake deadlines.
-    /// Only called from [`Self::new`] — every test and embedding constructor
-    /// (`with_session_factory`/`with_session_factory_at`) intentionally does not start it, so a
-    /// test suite that builds hundreds of engines never accumulates hundreds of sleeping threads.
-    fn spawn_monitoring_scheduler(&self) {
-        self.spawn_monitoring_scheduler_with_interval(Self::MONITORING_SCHEDULER_INTERVAL);
-    }
-
-    /// The actual scheduler, parameterized so a test can use a short interval instead of waiting
-    /// out the real one.
-    fn spawn_monitoring_scheduler_with_interval(&self, interval: Duration) {
-        let managers = self.managers.clone();
-        let session_factory = self.session_factory.clone();
-        let state_home = self.state_home.clone();
-        let cancellations = self.cancellations.clone();
-        let workers = self.turn_workers.clone();
-        let _ = std::thread::Builder::new()
-            .name("coducktor-monitor".to_owned())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(interval);
-                    let now = coducktor_core::time::now_iso8601();
-                    let snapshot: Vec<Arc<RunManagerMutex<RunManager>>> = match managers.lock() {
-                        Ok(managers) => managers
-                            .values()
-                            .map(|entry| entry.manager.clone())
-                            .collect(),
-                        Err(_) => continue,
-                    };
-                    for manager in snapshot {
-                        let due = manager.lock().due_monitoring_wakes(&now);
-                        if due.is_empty() {
-                            continue;
-                        }
-                        let dispatch = TurnDispatch {
-                            manager: manager.clone(),
-                            session_factory: session_factory.clone(),
-                            state_home: state_home.clone(),
-                            cancellations: cancellations.clone(),
-                            workers: workers.clone(),
-                        };
-                        for run_id in due {
-                            let active =
-                                manager.lock().begin_monitoring_wake(&run_id).ok().flatten();
-                            if let Some(active) = active {
-                                dispatch.wake(run_id, active);
-                            }
-                        }
-                    }
-                }
-            });
     }
 
     /// Join completed activation workers irrespective of the project that started them. This
@@ -2121,7 +1979,7 @@ impl InProcessEngine {
         Ok(MarkAllReadResponse { read: read as f64 })
     }
 
-    pub async fn patch_run(
+    pub(crate) async fn patch_run(
         &self,
         run_id: &str,
         input: PatchRunInput,
@@ -2154,7 +2012,7 @@ impl InProcessEngine {
             .ok_or(EngineError::NotFound)
     }
 
-    pub async fn cancel_run(&self, run_id: &str) -> Result<CancelResponse, EngineError> {
+    pub(crate) async fn cancel_run(&self, run_id: &str) -> Result<CancelResponse, EngineError> {
         let signalled = self
             .cancellations
             .lock()
@@ -2191,7 +2049,7 @@ impl InProcessEngine {
         Ok(CancelResponse { cancelled })
     }
 
-    pub async fn finish_run(&self, run_id: &str) -> Result<FinishResponse, EngineError> {
+    pub(crate) async fn finish_run(&self, run_id: &str) -> Result<FinishResponse, EngineError> {
         let mut manager = self.manager.lock();
         if manager.get_run(run_id).is_none() {
             return Err(EngineError::NotFound);
@@ -2257,7 +2115,7 @@ impl InProcessEngine {
 
     // ---- workflows + skills ----------------------------------------------------------------
 
-    pub async fn workflows(&self) -> Result<WorkflowsResponse, EngineError> {
+    pub(crate) async fn workflows(&self) -> Result<WorkflowsResponse, EngineError> {
         let (workflows, issues) = load_workflows(&self.repo_root);
         Ok(WorkflowsResponse { workflows, issues })
     }
@@ -2269,7 +2127,7 @@ impl InProcessEngine {
     // ---- workflow builder writes ------------------------------------------------------------
 
     /// Validate and save a workflow definition as YAML.
-    pub async fn save_workflow(
+    pub(crate) async fn save_workflow(
         &self,
         input: &SaveWorkflowInput,
     ) -> Result<SaveWorkflowResponse, EngineError> {
@@ -2305,7 +2163,10 @@ impl InProcessEngine {
     }
 
     /// Delete a user-authored workflow.
-    pub async fn delete_workflow(&self, name: &str) -> Result<DeleteWorkflowResponse, EngineError> {
+    pub(crate) async fn delete_workflow(
+        &self,
+        name: &str,
+    ) -> Result<DeleteWorkflowResponse, EngineError> {
         let (workflows, _) = load_workflows(&self.repo_root);
         let workflow = workflows
             .into_iter()
@@ -2331,7 +2192,7 @@ impl InProcessEngine {
     }
 
     /// Parse and validate workflow YAML.
-    pub async fn parse_workflow(&self, yaml: &str) -> Result<ParsedWorkflow, EngineError> {
+    pub(crate) async fn parse_workflow(&self, yaml: &str) -> Result<ParsedWorkflow, EngineError> {
         if yaml.trim().is_empty() || yaml.chars().count() > 100_000 {
             return Err(EngineError::Conflict {
                 reason: "yaml must be between 1 and 100000 characters".to_owned(),
@@ -3368,7 +3229,7 @@ impl InProcessEngine {
         Ok(runs)
     }
 
-    pub async fn group(&self, group_id: &str) -> Result<GroupResponse, EngineError> {
+    pub(crate) async fn group(&self, group_id: &str) -> Result<GroupResponse, EngineError> {
         let group_id = group_id.to_owned();
         let repo_root = self.repo_root.clone();
         let runs = self.group_variants(&group_id)?;
@@ -3408,7 +3269,7 @@ impl InProcessEngine {
         Ok(GroupResponse { group_id, runs })
     }
 
-    pub async fn pick_variant(
+    pub(crate) async fn pick_variant(
         &self,
         group_id: &str,
         input: &PickVariantRequest,
@@ -3636,7 +3497,7 @@ impl InProcessEngine {
 
     /// Return the safe single-step fallback plan. It is gated by task-length validation and the
     /// default runner's provider not being disabled in Settings.
-    pub async fn plan(&self, task: &str) -> Result<PlanResponse, EngineError> {
+    pub(crate) async fn plan(&self, task: &str) -> Result<PlanResponse, EngineError> {
         let trimmed = task.trim();
         if trimmed.is_empty() || trimmed.chars().count() > 100_000 {
             return Err(EngineError::Conflict {
@@ -4204,7 +4065,7 @@ impl InProcessEngine {
     // run_git_commit/run_git_push/run_commits/run_pr/run_history/run_history_context/
     // open_run_in_cli/open_run_in handlers) ---------------------------------------------
 
-    pub async fn send_message(
+    pub(crate) async fn send_message(
         &self,
         run_id: &str,
         input: MessageInput,
@@ -4268,7 +4129,7 @@ impl InProcessEngine {
         }
     }
 
-    pub async fn continue_run(
+    pub(crate) async fn continue_run(
         &self,
         run_id: &str,
         input: ContinueInput,
@@ -4304,7 +4165,7 @@ impl InProcessEngine {
         }
     }
 
-    pub async fn edit_queued_message(
+    pub(crate) async fn edit_queued_message(
         &self,
         run_id: &str,
         message_id: &str,
@@ -4393,7 +4254,7 @@ impl InProcessEngine {
         })
     }
 
-    pub async fn remove_queued_message(
+    pub(crate) async fn remove_queued_message(
         &self,
         run_id: &str,
         message_id: &str,
@@ -4428,7 +4289,7 @@ impl InProcessEngine {
         Ok(RemoveQueuedMessageResponse { removed: true })
     }
 
-    pub async fn cancel_auto_resume(
+    pub(crate) async fn cancel_auto_resume(
         &self,
         run_id: &str,
     ) -> Result<CancelAutoResumeResponse, EngineError> {
@@ -4846,9 +4707,12 @@ impl InProcessEngine {
     }
 }
 
+#[allow(dead_code)]
 const MAX_QUEUED_IMAGES: usize = 8;
+#[allow(dead_code)]
 const MAX_FOLDED_TASK_CHARS: usize = 200_000;
 
+#[allow(dead_code)]
 fn image_input_urls(images: &[ImageInput]) -> Vec<String> {
     images
         .iter()
@@ -4856,6 +4720,7 @@ fn image_input_urls(images: &[ImageInput]) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn prompt_images(images: Vec<ImageInput>) -> Vec<PromptImage> {
     images
         .into_iter()
@@ -4866,6 +4731,7 @@ fn prompt_images(images: Vec<ImageInput>) -> Vec<PromptImage> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn folded_task_length(task: &str, messages: &[coducktor_contract::QueuedMessage]) -> usize {
     std::iter::once(task)
         .chain(messages.iter().map(|message| message.text.as_str()))
@@ -4876,10 +4742,12 @@ fn folded_task_length(task: &str, messages: &[coducktor_contract::QueuedMessage]
         .len()
 }
 
+#[allow(dead_code)]
 fn valid_queued_text(text: &str) -> bool {
     text.chars().count() <= 100_000
 }
 
+#[allow(dead_code)]
 fn queue_message_on_manager(
     manager: &mut RunManager,
     run: &coducktor_contract::RunRecord,
@@ -5502,6 +5370,7 @@ fn validate_project_update(input: &UpdateProjectInput) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn fallback_plan() -> PlanResponse {
     PlanResponse {
         name: None,
@@ -7004,18 +6873,14 @@ mod tests {
             },
         );
         let scope = Scope::Project("default".to_owned());
-        let CreateRunResponse::Single(run) = <InProcessEngine as crate::Engine>::start_run(
-            &engine,
-            &scope,
-            steps_input("block until cancelled"),
-        )
-        .await
-        .unwrap() else {
+        let CreateRunResponse::Single(run) =
+            legacy_start_run(&engine, &scope, steps_input("block until cancelled"))
+                .await
+                .unwrap()
+        else {
             panic!("expected one run");
         };
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &scope).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 if tokens.lock().unwrap().contains_key(&run.id) {
@@ -7039,9 +6904,7 @@ mod tests {
         assert!(read_started.elapsed() < std::time::Duration::from_millis(100));
 
         let started = Instant::now();
-        let response = <InProcessEngine as crate::Engine>::cancel_run(&engine, &scope, &run.id)
-            .await
-            .unwrap();
+        let response = legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
         assert!(response.cancelled);
         assert!(started.elapsed() < std::time::Duration::from_millis(100));
 
@@ -7328,18 +7191,14 @@ mod tests {
             },
         );
         let scope = Scope::Project("default".to_owned());
-        let CreateRunResponse::Single(run) = <InProcessEngine as crate::Engine>::start_run(
-            &engine,
-            &scope,
-            steps_input("block while opening"),
-        )
-        .await
-        .unwrap() else {
+        let CreateRunResponse::Single(run) =
+            legacy_start_run(&engine, &scope, steps_input("block while opening"))
+                .await
+                .unwrap()
+        else {
             panic!("expected one run");
         };
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &scope).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             while !opened.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -7349,9 +7208,7 @@ mod tests {
         .unwrap();
 
         let started = Instant::now();
-        let response = <InProcessEngine as crate::Engine>::cancel_run(&engine, &scope, &run.id)
-            .await
-            .unwrap();
+        let response = legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
         assert!(response.cancelled);
         assert!(started.elapsed() < Duration::from_millis(100));
 
@@ -7393,18 +7250,14 @@ mod tests {
             config_path,
         );
         let scope = Scope::Project("project-a".to_owned());
-        let CreateRunResponse::Single(run) = <InProcessEngine as crate::Engine>::start_run(
-            &engine,
-            &scope,
-            steps_input("block while indexing"),
-        )
-        .await
-        .unwrap() else {
+        let CreateRunResponse::Single(run) =
+            legacy_start_run(&engine, &scope, steps_input("block while indexing"))
+                .await
+                .unwrap()
+        else {
             panic!("expected one run");
         };
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &scope).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if tokens.lock().unwrap().contains_key(&run.id) {
@@ -7421,9 +7274,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(index.runs.iter().any(|entry| entry.id == run.id));
 
-        <InProcessEngine as crate::Engine>::cancel_run(&engine, &scope, &run.id)
-            .await
-            .unwrap();
+        legacy_cancel_run(&engine, &scope, &run.id).await.unwrap();
     }
 
     /// R3's required refresh-at-scale case: a 300-run project (past the per-project index
@@ -7463,17 +7314,13 @@ mod tests {
 
         let large_scope = Scope::Project("large".to_owned());
         for index in 0..300 {
-            <InProcessEngine as crate::Engine>::start_run(
-                &engine,
-                &large_scope,
-                steps_input(&format!("run {index}")),
-            )
-            .await
-            .unwrap();
+            legacy_start_run(&engine, &large_scope, steps_input(&format!("run {index}")))
+                .await
+                .unwrap();
         }
 
         let blocked_scope = Scope::Project("blocked".to_owned());
-        let CreateRunResponse::Single(run) = <InProcessEngine as crate::Engine>::start_run(
+        let CreateRunResponse::Single(run) = legacy_start_run(
             &engine,
             &blocked_scope,
             steps_input("block while the large project refreshes"),
@@ -7482,9 +7329,7 @@ mod tests {
         .unwrap() else {
             panic!("expected one run");
         };
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &blocked_scope)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &blocked_scope).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if tokens.lock().unwrap().contains_key(&run.id) {
@@ -7513,7 +7358,7 @@ mod tests {
         );
         assert!(index.truncated.iter().any(|id| id == "large"));
 
-        <InProcessEngine as crate::Engine>::cancel_run(&engine, &blocked_scope, &run.id)
+        legacy_cancel_run(&engine, &blocked_scope, &run.id)
             .await
             .unwrap();
     }
@@ -7716,106 +7561,6 @@ mod tests {
             elapsed < Duration::from_millis(300),
             "shutdown waited {elapsed:?} for a worker that never checks its cancellation token"
         );
-    }
-
-    struct MonitoringSession {
-        sent: Arc<AtomicUsize>,
-    }
-
-    impl AgentSession for MonitoringSession {
-        fn turn(
-            &mut self,
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            Ok(SessionOutcome::Waiting(
-                coducktor_core::workflows::run::SessionReport {
-                    decision: Some(coducktor_core::workflows::run::TurnMarkerDecision::Monitoring),
-                    ..Default::default()
-                },
-            ))
-        }
-
-        fn send_message(
-            &mut self,
-            _prompt: &str,
-            _images: &[PromptImage],
-            _on_event: &mut dyn FnMut(EventInput) -> io::Result<()>,
-        ) -> Result<SessionOutcome, String> {
-            self.sent.fetch_add(1, Ordering::SeqCst);
-            Ok(SessionOutcome::Completed(
-                coducktor_core::workflows::run::SessionReport::default(),
-            ))
-        }
-    }
-
-    struct MonitoringFactory {
-        sent: Arc<AtomicUsize>,
-    }
-
-    impl SessionFactory for MonitoringFactory {
-        fn open(&self, _request: SessionRequest) -> Result<Box<dyn AgentSession + Send>, String> {
-            Ok(Box::new(MonitoringSession {
-                sent: self.sent.clone(),
-            }))
-        }
-    }
-
-    /// R7 end-to-end: a session that parks for monitoring gets a real check-in nudge once its
-    /// durable `monitoringWakeAt` deadline passes, with nothing polling in a tight loop — the
-    /// scheduler only wakes on its own bounded interval (here shortened for the test) and does
-    /// nothing on cycles with no due session.
-    #[tokio::test]
-    async fn a_parked_monitoring_session_is_woken_once_its_deadline_passes() {
-        let dir = TempDir::new().unwrap();
-        let sent = Arc::new(AtomicUsize::new(0));
-        let engine = InProcessEngine::with_session_factory(
-            dir.path(),
-            "0.0.0-test",
-            MonitoringFactory { sent: sent.clone() },
-        );
-        {
-            let mut manager = engine.manager.lock();
-            let mut options = manager.runtime_options();
-            // A zero-minute interval means the deadline is already due the instant it parks —
-            // deterministic without needing to wait out a real interval.
-            options.monitoring_wake_interval_minutes = Some(0);
-            manager.set_runtime_options(options);
-        }
-        let CreateRunResponse::Single(run) =
-            engine.start_run(steps_input("watch it")).await.unwrap()
-        else {
-            panic!("expected one run");
-        };
-        engine.activate_runs().unwrap();
-
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let current = engine.get_run(&run.id).await.unwrap();
-                if current.record.activity == Some(coducktor_contract::RunActivity::Monitoring) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("session should park for monitoring");
-        assert_eq!(
-            sent.load(Ordering::SeqCst),
-            0,
-            "not woken before the scheduler runs"
-        );
-
-        engine.spawn_monitoring_scheduler_with_interval(Duration::from_millis(20));
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while sent.load(Ordering::SeqCst) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the monitoring session should have received a check-in nudge");
-
-        activate_until_terminal(&engine, &run.id).await;
     }
 
     #[tokio::test]
@@ -8055,18 +7800,14 @@ mod tests {
         let scope_b = Scope::Project("project-b".to_owned());
 
         let mut workspace_events = engine.subscribe(Topic::Named("workspace".to_owned()));
-        let CreateRunResponse::Single(run_b) = <InProcessEngine as crate::Engine>::start_run(
-            &engine,
-            &scope_b,
-            steps_input("only in B"),
-        )
-        .await
-        .unwrap() else {
+        let CreateRunResponse::Single(run_b) =
+            legacy_start_run(&engine, &scope_b, steps_input("only in B"))
+                .await
+                .unwrap()
+        else {
             panic!("expected a single run");
         };
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope_b)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &scope_b).await.unwrap();
 
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
@@ -8185,12 +7926,8 @@ mod tests {
         let scope = Scope::Project("default".to_owned());
         let mut input = steps_input("use the work login");
         input.agent_profile = Some("work".to_owned());
-        <InProcessEngine as crate::Engine>::start_run(&engine, &scope, input)
-            .await
-            .unwrap();
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope)
-            .await
-            .unwrap();
+        legacy_start_run(&engine, &scope, input).await.unwrap();
+        legacy_activate_runs(&engine, &scope).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if !envs.lock().unwrap().is_empty() {
@@ -8252,7 +7989,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_resource_updates_reconfigure_open_managers_for_future_admission() {
+    async fn workspace_resource_updates_reconfigure_only_retained_admission_limits() {
         let repo = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let engine = InProcessEngine::with_session_factory_at(
@@ -8278,12 +8015,12 @@ mod tests {
 
         let manager = engine.manager.lock();
         assert_eq!(manager.runtime_options().max_parallel, 1);
-        assert_eq!(manager.runtime_options().max_monitoring_sessions, 1);
+        assert_eq!(manager.runtime_options().max_monitoring_sessions, 2);
         assert_eq!(
             manager.runtime_options().monitoring_wake_interval_minutes,
             Some(5)
         );
-        assert!(!manager.runtime_options().auto_resume_on_usage_limit);
+        assert!(manager.runtime_options().auto_resume_on_usage_limit);
     }
 
     #[test]
@@ -9291,8 +9028,8 @@ mod tests {
             defaults.reasoning,
             Some(coducktor_contract::ReasoningEffort::High)
         );
-        assert_eq!(defaults.variants, Some(3));
-        assert_eq!(defaults.autonomous, Some(false));
+        assert_eq!(defaults.variants, None);
+        assert_eq!(defaults.autonomous, None);
         assert_eq!(defaults.worktree, Some(true));
         assert_eq!(defaults.git_auto, Some(true));
 
@@ -9310,6 +9047,62 @@ mod tests {
             .await
             .unwrap();
         assert!(cleared.composer_defaults.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_project_config_write_retires_orchestration_keys_and_keeps_unknown_siblings() {
+        let dir = TempDir::new().unwrap();
+        let state_home = dir.path().join(".coducktor");
+        let path = repo_config_path_at(dir.path(), &state_home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "defaultRunner": "auto",
+                "plannerModel": "opus",
+                "namerModel": "haiku",
+                "liveTitleUpdates": true,
+                "reviewGate": true,
+                "systemPrompt": "keep working",
+                "futureTopLevel": {"keep": true},
+                "composerDefaults": {
+                    "reasoning": "high",
+                    "variants": 3,
+                    "autonomous": true,
+                    "worktree": true,
+                    "futureComposer": "keep"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let engine = engine(&dir);
+
+        engine
+            .put_config(&SetConfigInput {
+                base_branch: Some(Some("main".to_owned())),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let raw: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(raw["futureTopLevel"]["keep"], true);
+        assert_eq!(raw["composerDefaults"]["futureComposer"], "keep");
+        assert_eq!(raw["composerDefaults"]["reasoning"], "high");
+        assert_eq!(raw["composerDefaults"]["worktree"], true);
+        assert_eq!(raw["defaultRunner"], "claude");
+        for key in [
+            "plannerModel",
+            "namerModel",
+            "liveTitleUpdates",
+            "reviewGate",
+            "systemPrompt",
+        ] {
+            assert!(raw.get(key).is_none(), "retained {key}");
+        }
+        assert!(raw["composerDefaults"].get("variants").is_none());
+        assert!(raw["composerDefaults"].get("autonomous").is_none());
     }
 
     #[tokio::test]
@@ -9507,9 +9300,7 @@ mod tests {
         let mut input = steps_input("write only in the isolated checkout");
         input.worktree = None;
         let CreateRunResponse::Single(accepted) =
-            <InProcessEngine as crate::Engine>::start_run(&engine, &scope, input)
-                .await
-                .unwrap()
+            legacy_start_run(&engine, &scope, input).await.unwrap()
         else {
             panic!("expected one run");
         };
@@ -9523,9 +9314,7 @@ mod tests {
         let expected_branch = format!("duck/{}", &accepted.id[..8]);
         assert_eq!(accepted.branch.as_deref(), Some(expected_branch.as_str()));
 
-        <InProcessEngine as crate::Engine>::activate_runs(&engine, &scope)
-            .await
-            .unwrap();
+        legacy_activate_runs(&engine, &scope).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if !cwds.lock().unwrap().is_empty() {
@@ -11276,4 +11065,26 @@ mod tests {
             }
         );
     }
+}
+#[cfg(test)]
+async fn legacy_start_run(
+    engine: &InProcessEngine,
+    scope: &Scope,
+    input: CreateRunInput,
+) -> Result<CreateRunResponse, EngineError> {
+    engine.scoped(scope)?.start_run(input).await
+}
+
+#[cfg(test)]
+async fn legacy_activate_runs(engine: &InProcessEngine, scope: &Scope) -> Result<(), EngineError> {
+    engine.scoped(scope)?.activate_runs()
+}
+
+#[cfg(test)]
+async fn legacy_cancel_run(
+    engine: &InProcessEngine,
+    scope: &Scope,
+    run_id: &str,
+) -> Result<CancelResponse, EngineError> {
+    engine.scoped(scope)?.cancel_run(run_id).await
 }

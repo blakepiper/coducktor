@@ -14,10 +14,10 @@
 use coducktor_contract::{
     AgentConfigFileContent, AgentConfigListing, AgentDefaultsPatch, AgentProfilesResponse,
     Appearance, ComposerDefaultsPatch, ConfigResponse, NotificationsUiState,
-    ProjectComposerDefaults, PromptTemplate, ReasoningEffort, Runner, RunnerModelCatalogResponse,
-    RunnerModelsPatch, SelectAgentProfileInput, SetConfigInput, SetWorkspaceConfigInput,
-    TaskSource, UiState, UpdateAgentProfileInput, UpdateProjectInput, WorkspaceConfigResponse,
-    WorkspaceUiState, WorkspaceUsageResponse, WorktreesResponse, runner_discovers_models,
+    ProjectComposerDefaults, PromptTemplate, Runner, RunnerModelCatalogResponse, RunnerModelsPatch,
+    SelectAgentProfileInput, SetConfigInput, SetWorkspaceConfigInput, UiState,
+    UpdateAgentProfileInput, UpdateProjectInput, WorkspaceConfigResponse, WorkspaceUiState,
+    WorkspaceUsageResponse, WorktreesResponse, runner_discovers_models,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -131,14 +131,8 @@ pub enum EditTarget {
     BaseBranch,
     Model(Runner),
     GlobalModel(Runner),
-    TaskSource,
-    ComposerVariants,
-    ProjectComposerVariants,
-    SystemPrompt,
     WorktreeRetention,
     MaxParallel,
-    MaxMonitoringSessions,
-    MonitoringWakeInterval,
     MemoryLimitMb,
     WorktreeRetentionDefault,
     ChecksoutRoot,
@@ -324,29 +318,8 @@ fn rows_agents(app: &App) -> Vec<Row> {
     let workspace = app.settings_ui.workspace_config.as_ref();
     let composer = workspace.map(|config| &config.composer_defaults);
     let project_composer = config.composer_defaults.as_ref();
-    let source = app
-        .settings_ui
-        .ui_state
-        .as_ref()
-        .and_then(|state| state.last_task.as_ref())
-        .map(task_source_label)
-        .unwrap_or_else(|| "execution".to_owned());
-    let reasoning = composer
-        .and_then(|defaults| defaults.reasoning)
-        .map(reasoning_label)
-        .map(str::to_owned)
-        .unwrap_or_else(|| "auto".to_owned());
-    let variants = composer.and_then(|defaults| defaults.variants).unwrap_or(1);
     let worktree = composer
         .map(|defaults| defaults.worktree.unwrap_or(defaults.inherited_worktree))
-        .unwrap_or(true);
-    let autonomous = composer
-        .and_then(|defaults| {
-            defaults.autonomous.or(match defaults.inherited_autonomous {
-                coducktor_contract::InheritedAutonomous::Value(value) => Some(value),
-                coducktor_contract::InheritedAutonomous::SourceDependent => None,
-            })
-        })
         .unwrap_or(true);
     let git_auto = composer
         .and_then(|defaults| defaults.git_auto)
@@ -370,31 +343,6 @@ fn rows_agents(app: &App) -> Vec<Row> {
             opt_str(&config.default_models.opencode),
         ),
         row("Project model — pi", opt_str(&config.default_models.pi)),
-        row("System prompt", opt_str(&config.system_prompt)),
-        row(
-            "Live title updates",
-            bool_label(config.live_title_updates.unwrap_or(true)),
-        ),
-        row(
-            "Review gate",
-            bool_label(config.review_gate.unwrap_or(true)),
-        ),
-        row("Default task source", source),
-        row(
-            "Project reasoning",
-            project_composer
-                .and_then(|defaults| defaults.reasoning)
-                .map(reasoning_label)
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("inherit ({reasoning})")),
-        ),
-        row(
-            "Project variants",
-            project_composer
-                .and_then(|defaults| defaults.variants)
-                .map(|variants| variants.to_string())
-                .unwrap_or_else(|| format!("inherit ({variants})")),
-        ),
         row(
             "Project worktree",
             project_composer
@@ -402,28 +350,6 @@ fn rows_agents(app: &App) -> Vec<Row> {
                 .map(bool_label)
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("inherit ({})", bool_label(worktree))),
-        ),
-        row(
-            "Project task mode",
-            project_composer
-                .and_then(|defaults| defaults.autonomous)
-                .map(|autonomous| {
-                    if autonomous {
-                        "autonomous".to_owned()
-                    } else {
-                        "manual approval".to_owned()
-                    }
-                })
-                .unwrap_or_else(|| {
-                    format!(
-                        "inherit ({})",
-                        if autonomous {
-                            "autonomous"
-                        } else {
-                            "manual approval"
-                        }
-                    )
-                }),
         ),
         row(
             "Project git mode",
@@ -447,13 +373,6 @@ fn rows_global_agents(app: &App) -> Vec<Row> {
     let agent = &workspace.agent_defaults;
     let composer = &workspace.composer_defaults;
     let worktree = composer.worktree.unwrap_or(composer.inherited_worktree);
-    let autonomous = composer
-        .autonomous
-        .or(match composer.inherited_autonomous {
-            coducktor_contract::InheritedAutonomous::Value(value) => Some(value),
-            coducktor_contract::InheritedAutonomous::SourceDependent => None,
-        })
-        .unwrap_or(true);
     let git_auto = composer.git_auto.unwrap_or(false);
     vec![
         row(
@@ -491,23 +410,7 @@ fn rows_global_agents(app: &App) -> Vec<Row> {
             "Default model — pi",
             opt_str(&agent.models.as_ref().and_then(|models| models.pi.clone())),
         ),
-        row(
-            "Default reasoning",
-            composer.reasoning.map(reasoning_label).unwrap_or("auto"),
-        ),
-        row(
-            "Default variants",
-            composer.variants.unwrap_or(1).to_string(),
-        ),
         row("Default worktree", bool_label(worktree)),
-        row(
-            "Default task mode",
-            if autonomous {
-                "autonomous"
-            } else {
-                "manual approval"
-            },
-        ),
         row("Default git mode", git_mode_label(git_auto)),
     ]
 }
@@ -522,30 +425,15 @@ fn runner_selection_label(selection: coducktor_contract::RunnerSelection) -> &'s
     }
 }
 
-fn reasoning_label(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::Auto => "auto",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::XHigh => "max",
-    }
-}
-
-fn task_source_label(source: &TaskSource) -> String {
-    match source {
-        TaskSource::Baseline => "execution".to_owned(),
-        TaskSource::Skill { reference } => format!("skill:{reference}"),
-        TaskSource::Workflow { reference } => format!("workflow:{reference}"),
-    }
-}
-
 fn cycle_runner_selection(
     current: coducktor_contract::RunnerSelection,
     backward: bool,
 ) -> coducktor_contract::RunnerSelection {
     use coducktor_contract::RunnerSelection::*;
-    const ORDER: [coducktor_contract::RunnerSelection; 5] = [Auto, Claude, Codex, OpenCode, Pi];
+    const ORDER: [coducktor_contract::RunnerSelection; 4] = [Claude, Codex, OpenCode, Pi];
+    if current == Auto {
+        return Claude;
+    }
     let position = ORDER
         .iter()
         .position(|value| *value == current)
@@ -819,23 +707,7 @@ fn rows_resources(app: &App) -> Vec<Row> {
     };
     let resources = &config.resources;
     let mut rows = vec![
-        row("Max parallel tasks", resources.max_parallel.to_string()),
-        row(
-            "Max monitoring sessions",
-            resources.max_monitoring_sessions.to_string(),
-        ),
-        row(
-            "Monitoring wake interval (min)",
-            opt_num(resources.monitoring_wake_interval_minutes),
-        ),
-        row(
-            "Auto-resume on usage limit",
-            bool_label(resources.auto_resume_on_usage_limit),
-        ),
-        row(
-            "Intelligent context refresh",
-            bool_label(resources.intelligent_context_refresh),
-        ),
+        row("Max parallel chats", resources.max_parallel.to_string()),
         row(
             "Memory limit (MB) · unavailable",
             format!(
@@ -849,15 +721,6 @@ fn rows_resources(app: &App) -> Vec<Row> {
         ),
     ];
     if let Some(usage) = &app.settings_ui.workspace_usage {
-        if let Some(health) = usage.policy_health {
-            rows.push(row(
-                "Routing health",
-                format!(
-                    "{}/{} ready · {} unknown",
-                    health.ready_candidates, health.total_candidates, health.unknown_candidates
-                ),
-            ));
-        }
         if let Some(refresh) = &usage.refresh
             && let Some(observed_at) = &refresh.observed_at
         {
@@ -1289,10 +1152,8 @@ fn cycle(app: &mut App, backward: bool) {
                 (app.settings_ui.add_account_provider + 1) % len
             };
         }
-        (SettingsSection::Agents, 10) => cycle_project_reasoning(app, backward),
-        (SettingsSection::Agents, 12) => cycle_project_worktree(app, backward),
-        (SettingsSection::Agents, 13) => cycle_project_autonomous(app, backward),
-        (SettingsSection::Agents, 14) => cycle_project_git_auto(app, backward),
+        (SettingsSection::Agents, 6) => cycle_project_worktree(app, backward),
+        (SettingsSection::Agents, 7) => cycle_project_git_auto(app, backward),
         (SettingsSection::Appearance, index) => cycle_appearance(app, index, backward),
         (SettingsSection::Notifications, 0) => toggle_notifications(app),
         (SettingsSection::Resources, index) => toggle_or_ignore_resource(app, index),
@@ -1303,44 +1164,10 @@ fn cycle(app: &mut App, backward: bool) {
 fn cycle_global_agents(app: &mut App, row: usize, backward: bool) {
     match row {
         0 => cycle_global_runner(app, backward),
-        5 => cycle_default_reasoning(app, backward),
-        7 => cycle_default_worktree(app),
-        8 => cycle_default_autonomous(app),
-        9 => cycle_default_git_auto(app),
+        5 => cycle_default_worktree(app),
+        6 => cycle_default_git_auto(app),
         _ => {}
     }
-}
-
-fn cycle_default_reasoning(app: &mut App, backward: bool) {
-    let current = app
-        .settings_ui
-        .workspace_config
-        .as_ref()
-        .and_then(|config| config.composer_defaults.reasoning)
-        .unwrap_or(ReasoningEffort::Auto);
-    let order = [
-        ReasoningEffort::Auto,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-        ReasoningEffort::XHigh,
-    ];
-    let position = order
-        .iter()
-        .position(|value| *value == current)
-        .unwrap_or(0);
-    let next = if backward {
-        order[(position + order.len() - 1) % order.len()]
-    } else {
-        order[(position + 1) % order.len()]
-    };
-    put_composer_defaults(
-        app,
-        ComposerDefaultsPatch {
-            reasoning: Some(Some(next)),
-            ..Default::default()
-        },
-    );
 }
 
 fn cycle_default_worktree(app: &mut App) {
@@ -1359,29 +1186,6 @@ fn cycle_default_worktree(app: &mut App) {
         app,
         ComposerDefaultsPatch {
             worktree: Some(Some(!current)),
-            ..Default::default()
-        },
-    );
-}
-
-fn cycle_default_autonomous(app: &mut App) {
-    let current = app
-        .settings_ui
-        .workspace_config
-        .as_ref()
-        .and_then(|config| {
-            config.composer_defaults.autonomous.or(
-                match config.composer_defaults.inherited_autonomous {
-                    coducktor_contract::InheritedAutonomous::Value(value) => Some(value),
-                    coducktor_contract::InheritedAutonomous::SourceDependent => None,
-                },
-            )
-        })
-        .unwrap_or(true);
-    put_composer_defaults(
-        app,
-        ComposerDefaultsPatch {
-            autonomous: Some(Some(!current)),
             ..Default::default()
         },
     );
@@ -1423,34 +1227,6 @@ fn put_project_composer_defaults(
     });
 }
 
-fn cycle_project_reasoning(app: &mut App, backward: bool) {
-    let current = project_composer_defaults(app).and_then(|defaults| defaults.reasoning);
-    let order = [
-        None,
-        Some(ReasoningEffort::Auto),
-        Some(ReasoningEffort::Low),
-        Some(ReasoningEffort::Medium),
-        Some(ReasoningEffort::High),
-        Some(ReasoningEffort::XHigh),
-    ];
-    let position = order
-        .iter()
-        .position(|value| *value == current)
-        .unwrap_or(0);
-    let next = if backward {
-        order[(position + order.len() - 1) % order.len()]
-    } else {
-        order[(position + 1) % order.len()]
-    };
-    put_project_composer_defaults(
-        app,
-        coducktor_contract::ComposerDefaultsPatch {
-            reasoning: Some(next),
-            ..Default::default()
-        },
-    );
-}
-
 fn cycle_project_worktree(app: &mut App, backward: bool) {
     let current = project_composer_defaults(app).and_then(|defaults| defaults.worktree);
     let order = [None, Some(false), Some(true)];
@@ -1467,27 +1243,6 @@ fn cycle_project_worktree(app: &mut App, backward: bool) {
         app,
         coducktor_contract::ComposerDefaultsPatch {
             worktree: Some(next),
-            ..Default::default()
-        },
-    );
-}
-
-fn cycle_project_autonomous(app: &mut App, backward: bool) {
-    let current = project_composer_defaults(app).and_then(|defaults| defaults.autonomous);
-    let order = [None, Some(false), Some(true)];
-    let position = order
-        .iter()
-        .position(|value| *value == current)
-        .unwrap_or(0);
-    let next = if backward {
-        order[(position + order.len() - 1) % order.len()]
-    } else {
-        order[(position + 1) % order.len()]
-    };
-    put_project_composer_defaults(
-        app,
-        coducktor_contract::ComposerDefaultsPatch {
-            autonomous: Some(next),
             ..Default::default()
         },
     );
@@ -1637,25 +1392,7 @@ fn toggle_notifications(app: &mut App) {
         .push(PendingAction::SettingsPutWorkspaceUiState { input });
 }
 
-fn toggle_or_ignore_resource(app: &mut App, row: usize) {
-    let Some(config) = app.settings_ui.workspace_config.clone() else {
-        return;
-    };
-    let mut patch = coducktor_contract::WorkspaceResourcesPatch::default();
-    match row {
-        3 => patch.auto_resume_on_usage_limit = Some(!config.resources.auto_resume_on_usage_limit),
-        4 => {
-            patch.intelligent_context_refresh = Some(!config.resources.intelligent_context_refresh)
-        }
-        _ => return,
-    }
-    let input = SetWorkspaceConfigInput {
-        resources: Some(patch),
-        ..Default::default()
-    };
-    app.pending
-        .push(PendingAction::SettingsPutWorkspaceConfig { input });
-}
+fn toggle_or_ignore_resource(_app: &mut App, _row: usize) {}
 
 fn activate(app: &mut App) {
     let section = current_section(app);
@@ -1954,75 +1691,18 @@ fn activate_agents(app: &mut App, row: usize) {
         3 => open_model_picker(app, ModelScope::Project, Runner::Codex),
         4 => open_model_picker(app, ModelScope::Project, Runner::OpenCode),
         5 => open_model_picker(app, ModelScope::Project, Runner::Pi),
-        6 => start_edit(
-            app,
-            EditTarget::SystemPrompt,
-            config.system_prompt.unwrap_or_default(),
-        ),
-        7 => {
-            let input = SetConfigInput {
-                live_title_updates: Some(Some(!config.live_title_updates.unwrap_or(true))),
-                ..Default::default()
-            };
-            app.pending.push(PendingAction::SettingsPutConfig {
-                project: app.settings_ui.project.clone(),
-                input,
-            });
-        }
-        8 => {
-            let input = SetConfigInput {
-                review_gate: Some(Some(!config.review_gate.unwrap_or(true))),
-                ..Default::default()
-            };
-            app.pending.push(PendingAction::SettingsPutConfig {
-                project: app.settings_ui.project.clone(),
-                input,
-            });
-        }
-        9 => start_edit(
-            app,
-            EditTarget::TaskSource,
-            app.settings_ui
-                .ui_state
-                .as_ref()
-                .and_then(|state| state.last_task.as_ref())
-                .map(task_source_label)
-                .unwrap_or_else(|| "execution".to_owned()),
-        ),
-        10 => cycle_project_reasoning(app, false),
-        11 => start_edit(
-            app,
-            EditTarget::ProjectComposerVariants,
-            app.settings_ui
-                .config
-                .as_ref()
-                .and_then(|config| config.composer_defaults.as_ref())
-                .and_then(|defaults| defaults.variants)
-                .map(|variants| variants.to_string())
-                .unwrap_or_default(),
-        ),
-        12..=14 => cycle(app, false),
+        6..=7 => cycle(app, false),
         _ => {}
     }
 }
 
 fn activate_global_agents(app: &mut App, row: usize) {
     match row {
-        0 | 5 | 7 | 8 | 9 => cycle_global_agents(app, row, false),
+        0 | 5 | 6 => cycle_global_agents(app, row, false),
         1 => open_model_picker(app, ModelScope::Global, Runner::Claude),
         2 => open_model_picker(app, ModelScope::Global, Runner::Codex),
         3 => open_model_picker(app, ModelScope::Global, Runner::OpenCode),
         4 => open_model_picker(app, ModelScope::Global, Runner::Pi),
-        6 => start_edit(
-            app,
-            EditTarget::ComposerVariants,
-            app.settings_ui
-                .workspace_config
-                .as_ref()
-                .and_then(|config| config.composer_defaults.variants)
-                .unwrap_or(1)
-                .to_string(),
-        ),
         _ => {}
     }
 }
@@ -2223,67 +1903,6 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
                 },
             });
         }
-        EditTarget::SystemPrompt => {
-            let input = SetConfigInput {
-                system_prompt: Some(if text.is_empty() { None } else { Some(text) }),
-                ..Default::default()
-            };
-            app.pending
-                .push(PendingAction::SettingsPutConfig { project, input });
-        }
-        EditTarget::TaskSource => {
-            let Some(source) = parse_task_source(&text) else {
-                app.settings_ui.notice =
-                    Some("source must be execution, skill:<name>, or workflow:<name>".to_owned());
-                return;
-            };
-            let mut state = app.settings_ui.ui_state.clone().unwrap_or_default();
-            state.last_task = Some(source);
-            app.settings_ui.ui_state = Some(state.clone());
-            app.pending
-                .push(PendingAction::PutUiState { project, state });
-        }
-        EditTarget::ComposerVariants => {
-            let Ok(variants) = text.parse::<u64>() else {
-                app.settings_ui.notice = Some("default variants must be 1, 2, or 3".to_owned());
-                return;
-            };
-            if !(1..=3).contains(&variants) {
-                app.settings_ui.notice = Some("default variants must be 1, 2, or 3".to_owned());
-                return;
-            }
-            put_composer_defaults(
-                app,
-                ComposerDefaultsPatch {
-                    variants: Some(Some(variants)),
-                    ..Default::default()
-                },
-            );
-        }
-        EditTarget::ProjectComposerVariants => {
-            let variants = if text.is_empty() || text.eq_ignore_ascii_case("inherit") {
-                None
-            } else {
-                let Ok(variants) = text.parse::<u64>() else {
-                    app.settings_ui.notice =
-                        Some("project variants must be 1, 2, 3, or inherit".to_owned());
-                    return;
-                };
-                if !(1..=3).contains(&variants) {
-                    app.settings_ui.notice =
-                        Some("project variants must be 1, 2, 3, or inherit".to_owned());
-                    return;
-                }
-                Some(variants)
-            };
-            put_project_composer_defaults(
-                app,
-                ComposerDefaultsPatch {
-                    variants: Some(variants),
-                    ..Default::default()
-                },
-            );
-        }
         EditTarget::WorktreeRetention => {
             if let Ok(value) = text.parse::<u64>() {
                 let input = SetConfigInput {
@@ -2295,8 +1914,6 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
             }
         }
         EditTarget::MaxParallel
-        | EditTarget::MaxMonitoringSessions
-        | EditTarget::MonitoringWakeInterval
         | EditTarget::MemoryLimitMb
         | EditTarget::WorktreeRetentionDefault => {
             // Reserved for a future numeric-resource picker; Resources' number fields are
@@ -2383,33 +2000,13 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
     }
 }
 
-fn parse_task_source(value: &str) -> Option<TaskSource> {
-    if value.eq_ignore_ascii_case("execution") || value.eq_ignore_ascii_case("baseline") {
-        return Some(TaskSource::Baseline);
-    }
-    let (prefix, reference) = value.split_once(':')?;
-    let reference = reference.trim();
-    if reference.is_empty() {
-        return None;
-    }
-    match prefix.to_ascii_lowercase().as_str() {
-        "skill" => Some(TaskSource::Skill {
-            reference: reference.to_owned(),
-        }),
-        "workflow" => Some(TaskSource::Workflow {
-            reference: reference.to_owned(),
-        }),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::input::keymap::Keymap;
     use coducktor_contract::{
-        AgentDefaults, ComposerDefaults, InheritedAutonomous, ProjectComposerDefaults,
-        RunnerModels, RunnerSelection, WorkspaceResources,
+        AgentDefaults, ComposerDefaults, InheritedAutonomous, RunnerModels, RunnerSelection,
+        WorkspaceResources,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -2553,7 +2150,8 @@ mod tests {
         assert!(content.contains("Global settings"));
         assert!(content.contains("Default runner"));
         assert!(content.contains("Default model — codex"));
-        assert!(content.contains("Default reasoning"));
+        assert!(content.contains("Default worktree"));
+        assert!(content.contains("Default git mode"));
         assert!(content.contains("Projects"));
         assert!(content.contains("Appearance"));
     }
@@ -2596,11 +2194,10 @@ mod tests {
             }),
         });
         let content = render_text(&mut app, 120, 40);
-        assert!(content.contains("Routing health"));
         assert!(content.contains("Codex · default"));
         assert!(content.contains("Weekly window"));
         assert!(content.contains("0% used"));
-        assert!(content.contains("Monitoring wake interval (min)"));
+        assert!(content.contains("Max parallel chats"));
         assert!(content.contains("Memory limit (MB) · unavailable"));
         assert!(!content.contains("100% available"));
     }
@@ -2747,12 +2344,8 @@ mod tests {
         let content = render_text(&mut app, 120, 40);
 
         for (label, unavailable) in [
-            ("Max parallel tasks", false),
-            ("Max monitoring sessions", false),
-            ("Auto-resume on usage limit", false),
-            ("Intelligent context refresh", false),
+            ("Max parallel chats", false),
             ("Default worktree retention", false),
-            ("Monitoring wake interval (min)", false),
             ("Memory limit (MB) · unavailable", true),
         ] {
             assert!(
@@ -2869,20 +2462,6 @@ mod tests {
     }
 
     #[test]
-    fn toggling_review_gate_queues_the_negated_value() {
-        let mut app = app_with_settings();
-        for _ in 0..8 {
-            handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        }
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let pending = app.take_pending();
-        assert!(pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutConfig { input, .. } if input.review_gate == Some(Some(false))
-        )));
-    }
-
-    #[test]
     fn project_model_picker_uses_matching_discovered_catalog_and_persists_selection() {
         let mut app = app_with_settings();
         app.settings_ui.row = 3;
@@ -2983,85 +2562,6 @@ mod tests {
                     .and_then(|defaults| defaults.models.as_ref())
                     .and_then(|models| models.claude.as_ref())
                     == Some(&Some("opus".to_owned()))
-        )));
-    }
-
-    #[test]
-    fn composer_defaults_are_editable_from_agents_settings() {
-        let mut app = app_with_global_settings();
-        app.pending.clear();
-        app.settings_ui.row = 5;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutWorkspaceConfig { input }
-                if input.composer_defaults.as_ref().and_then(|defaults| defaults.reasoning)
-                    == Some(Some(ReasoningEffort::Low))
-        )));
-
-        app.pending.clear();
-        app.settings_ui.row = 6;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-        );
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE),
-        );
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutWorkspaceConfig { input }
-                if input.composer_defaults.as_ref().and_then(|defaults| defaults.variants)
-                    == Some(Some(3))
-        )));
-    }
-
-    #[test]
-    fn project_composer_defaults_are_editable_and_can_inherit() {
-        let mut app = app_with_settings();
-        app.pending.clear();
-        app.settings_ui.row = 10;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutConfig { input, .. }
-                if input.composer_defaults.as_ref().and_then(|defaults| defaults.reasoning)
-                    == Some(Some(ReasoningEffort::Auto))
-        )));
-
-        app.pending.clear();
-        app.settings_ui.row = 11;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE),
-        );
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutConfig { input, .. }
-                if input.composer_defaults.as_ref().and_then(|defaults| defaults.variants)
-                    == Some(Some(3))
-        )));
-
-        app.settings_ui.config = Some(ConfigResponse {
-            composer_defaults: Some(ProjectComposerDefaults {
-                reasoning: Some(ReasoningEffort::Auto),
-                ..Default::default()
-            }),
-            ..sample_config()
-        });
-        app.pending.clear();
-        app.settings_ui.row = 10;
-        handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert!(app.pending.iter().any(|action| matches!(
-            action,
-            PendingAction::SettingsPutConfig { input, .. }
-                if input.composer_defaults.as_ref().and_then(|defaults| defaults.reasoning)
-                    == Some(None)
         )));
     }
 

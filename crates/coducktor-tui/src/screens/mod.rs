@@ -1,5 +1,4 @@
 pub mod chats_util;
-pub mod compare;
 pub mod github;
 pub mod global_tasks;
 pub mod ide;
@@ -13,4 +12,3 @@ pub mod task_git;
 pub mod tasks;
 pub mod terminal;
 pub mod thread;
-pub mod workflows;

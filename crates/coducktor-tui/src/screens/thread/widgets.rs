@@ -963,14 +963,6 @@ fn render_child_line(item: &UiItem, theme: &Theme) -> Line<'static> {
     }
 }
 
-pub(super) fn queue_hint(is_queued: bool) -> &'static str {
-    if is_queued {
-        "Messages you add now are folded into the prompt before the run starts."
-    } else {
-        ""
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::agent_metadata;

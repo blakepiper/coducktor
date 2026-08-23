@@ -14,7 +14,7 @@ pub mod projection;
 pub mod reducer;
 mod widgets;
 
-use coducktor_contract::{ApiRun, ImageInput, MessageInput, RunEvent, RunStatus};
+use coducktor_contract::{ApiRun, ImageInput, RunEvent, RunStatus};
 use coducktor_protocol::UiItem;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -29,7 +29,6 @@ use crate::widgets::transcript::{
     Transcript, TranscriptItem,
 };
 
-use actions::is_run_active;
 use projection::ThreadViewModel;
 use reducer::{
     NoteTone, ThreadAsk, ThreadEntry, ThreadReduceOptions, ThreadState, reduce_thread,
@@ -982,42 +981,20 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let theme = app.theme;
     let record = &run.record;
 
-    let step_rail_height = if record.steps.is_empty() {
-        0
-    } else if app.thread_ui.steps_collapsed {
-        1
-    } else {
-        (record.steps.len() as u16 + 1).min(6)
-    };
-
-    let ask = pending_ask(&app.thread_ui.data.state).cloned();
-    let ask_height = ask
-        .as_ref()
-        .map(|ask| {
-            let rows: usize = ask.questions.iter().map(|q| 1 + q.options.len()).sum();
-            (rows as u16 + 2).min(12)
-        })
-        .unwrap_or(0);
-    let review_height = if record.status == RunStatus::Review {
-        3
-    } else {
-        0
-    };
-    let auto_resume_height = if record.auto_resume_at.is_some() {
-        1
-    } else {
-        0
-    };
+    // Legacy workflow records remain inspectable, archivable, and deletable, but every execution
+    // control is retired. Their old steps, pending questions, review gate, monitoring state, and
+    // composer are historical transcript data rather than actionable product state.
+    let step_rail_height = 0;
+    let ask = None;
+    let ask_height = 0;
+    let review_height = 0;
+    let auto_resume_height = 0;
     let hint_height = 1;
     // One row, always reserved. During a run it holds the live-activity line; the moment the run
     // reaches a terminal status the same row converts into the run-end rule. Reserving it
     // unconditionally is what keeps that conversion from shifting the composer under the cursor.
     let live_activity_height = 1;
-    let composer_height = app
-        .thread_ui
-        .composer
-        .height_for_width(area.width.saturating_sub(3))
-        + 2;
+    let composer_height = 0;
     let base_dock_height = ask_height
         + review_height
         + auto_resume_height
@@ -1189,20 +1166,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         widgets::render_latest_message(frame, dock_rows[3], message, &theme);
     }
     if hint_height > 0 {
-        let text = match record.status {
-            RunStatus::Queued if app.thread_ui.cancel_pending => "Stopping the agent…",
-            RunStatus::Queued => widgets::queue_hint(true),
-            RunStatus::Idle => "Session is ready for a follow-up.",
-            RunStatus::Waiting => "Waiting for your reply.",
-            RunStatus::Running if app.thread_ui.cancel_pending => "Stopping the agent…",
-            RunStatus::Running => "Agent is working · Enter queues a follow-up for the next turn.",
-            // The rule directly below says the run stopped and how, so the hint is down to the
-            // one thing it alone can say: the keybinding.
-            RunStatus::Done | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Review => {
-                "Enter · follow up"
-            }
-        };
-        widgets::render_status_hint(frame, dock_rows[4], text, &theme);
+        widgets::render_status_hint(
+            frame,
+            dock_rows[4],
+            "Historical task · read-only · start a new chat to continue",
+            &theme,
+        );
     }
     if let Some(outcome) = RunOutcome::from_status(record.status) {
         widgets::render_run_end_banner(
@@ -1239,35 +1208,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         };
         widgets::render_live_activity(frame, dock_rows[5], &activity, &theme);
     }
-    app.thread_ui
-        .composer
-        .set_title(if app.thread_ui.pending_prompt.is_some() {
-            if app.thread_ui.pending_prompt_queued {
-                "QUEUEING"
-            } else {
-                "SENDING"
-            }
-        } else if app.thread_ui.delivery_error {
-            "SEND FAILED · RETRY"
-        } else {
-            match record.status {
-                RunStatus::Queued => "FOLLOW UP",
-                RunStatus::Idle => "FOLLOW UP",
-                RunStatus::Waiting => "ANSWER",
-                RunStatus::Running => "FOLLOW UP",
-                RunStatus::Review | RunStatus::Done | RunStatus::Failed | RunStatus::Cancelled => {
-                    "FOLLOW UP"
-                }
-            }
-        });
-    app.thread_ui
-        .composer
-        .render(frame, dock_rows[6], theme, &mut app.hitmap, 4);
-    app.hitmap.register(
-        dock_rows[6],
-        3,
-        crate::input::hitmap::HitAction::ThreadScreen(ThreadAction::FocusComposer),
-    );
 
     if let Some(agent_id) = app.thread_ui.subagent_sheet.clone()
         && let Some(agent) = find_subagent(&app.thread_ui.data.state, &agent_id)
@@ -1773,41 +1713,8 @@ fn submit_composer(app: &mut App, text: String, images: Vec<ImageInput>) -> bool
         });
         return true;
     }
-    let Some(run) = app.thread_ui.data.run().cloned() else {
-        return false;
-    };
-    let project = app.thread_ui.data.project.clone();
-    let id = app.thread_ui.data.run_id.clone();
-    let images = (!images.is_empty()).then_some(images);
-    let pending_label = if text.is_empty() {
-        "[Image]".to_owned()
-    } else {
-        text.clone()
-    };
-    if is_run_active(run.record.status) {
-        let queued = matches!(run.record.status, RunStatus::Queued | RunStatus::Running);
-        app.thread_ui.set_pending_composer(pending_label, queued);
-        app.pending.push(PendingAction::SendMessage {
-            project,
-            id,
-            input: MessageInput {
-                text: Some(text),
-                images,
-            },
-        });
-        true
-    } else {
-        // No prior session just means the engine starts a fresh step in this same run/worktree
-        // instead of resuming a transcript — still delivered as a follow-up, not a new task.
-        app.thread_ui.set_pending_composer(pending_label, false);
-        app.pending.push(PendingAction::ContinueRun {
-            project,
-            id,
-            text: Some(text),
-            images,
-        });
-        true
-    }
+    app.notice = followup_blocked_reason(app).map(ToOwned::to_owned);
+    false
 }
 
 fn handle_review_notes_key(app: &mut App, key: KeyEvent) -> bool {
@@ -1953,33 +1860,8 @@ fn send_ask_answer(app: &mut App, ask: &ThreadAsk) {
         });
         return;
     }
-    let Some(run) = app.thread_ui.data.run().cloned() else {
-        return;
-    };
-    let project = app.thread_ui.data.project.clone();
-    let id = app.thread_ui.data.run_id.clone();
-    match actions::ask_delivery_mode(&run) {
-        actions::DeliveryMode::Live => app.pending.push(PendingAction::SendMessage {
-            project,
-            id,
-            input: MessageInput {
-                text: Some(text),
-                images: None,
-            },
-        }),
-        actions::DeliveryMode::Resume => app.pending.push(PendingAction::ContinueRun {
-            project,
-            id,
-            text: Some(text),
-            images: None,
-        }),
-        actions::DeliveryMode::Unavailable => {
-            app.notice = Some(
-                "This session has ended and no agent session was recorded, so the answer cannot be delivered."
-                    .to_owned(),
-            );
-        }
-    }
+    app.notice =
+        Some("this historical task is read-only — start a new chat to continue".to_owned());
     app.thread_ui.ask_selections.clear();
     app.thread_ui.focus = ThreadFocus::Transcript;
 }
@@ -2042,25 +1924,17 @@ fn apply_action(app: &mut App, action: ThreadAction) {
     match action {
         // Git mode is a conversation-only control; a legacy record has no idle policy to flip.
         ThreadAction::ToggleGitMode => {}
-        ThreadAction::Finish => app.pending.push(PendingAction::FinishRun { project, id }),
-        ThreadAction::Continue => app.pending.push(PendingAction::ContinueRun {
-            project,
-            id,
-            text: None,
-            images: None,
-        }),
+        ThreadAction::Finish | ThreadAction::Continue => {
+            app.notice =
+                Some("this historical task is read-only — start a new chat to continue".to_owned())
+        }
         ThreadAction::Archive => app.pending.push(PendingAction::Archive {
             project,
             id,
             archived: !run.record.archived,
         }),
         ThreadAction::MarkUnread => app.pending.push(PendingAction::Unread { project, id }),
-        ThreadAction::Cancel => {
-            app.confirm = Some(crate::app::ConfirmRequest {
-                text: "Stop this run?".to_owned(),
-                action: PendingAction::CancelRun { project, id },
-            })
-        }
+        ThreadAction::Cancel => app.notice = Some("this historical task is read-only".to_owned()),
         ThreadAction::Delete => {
             app.confirm = Some(crate::app::ConfirmRequest {
                 text: format!(
@@ -2070,20 +1944,9 @@ fn apply_action(app: &mut App, action: ThreadAction) {
                 action: PendingAction::Delete { project, id },
             })
         }
-        ThreadAction::ReviewSendBack => {
-            let notes = app.thread_ui.review_notes.trim();
-            if notes.is_empty() {
-                app.notice = Some("Write what to change first.".to_owned());
-                app.thread_ui.focus = ThreadFocus::ReviewNotes;
-                return;
-            }
-            app.pending.push(PendingAction::ContinueRun {
-                project,
-                id,
-                text: Some(format!("Review feedback:\n{notes}")),
-                images: None,
-            });
-            app.thread_ui.review_notes.clear();
+        ThreadAction::ReviewSendBack | ThreadAction::ReviewAccept => {
+            app.notice =
+                Some("this historical task is read-only — start a new chat to continue".to_owned())
         }
         ThreadAction::ReviewDraftPr => app.pending.push(PendingAction::CreatePr { project, id }),
         ThreadAction::ReviewOpenPr => {
@@ -2091,16 +1954,8 @@ fn apply_action(app: &mut App, action: ThreadAction) {
                 app.open_url(&url);
             }
         }
-        ThreadAction::ReviewAccept => app.pending.push(PendingAction::FinishRun { project, id }),
-        ThreadAction::CancelAutoResume => app
-            .pending
-            .push(PendingAction::CancelAutoResume { project, id }),
-        ThreadAction::RemoveQueuedMessage(message_id) => {
-            app.pending.push(PendingAction::RemoveQueuedMessage {
-                project,
-                id,
-                message_id,
-            })
+        ThreadAction::CancelAutoResume | ThreadAction::RemoveQueuedMessage(_) => {
+            app.notice = Some("this historical task is read-only".to_owned())
         }
         ThreadAction::AskOption { .. }
         | ThreadAction::AskSend
@@ -2547,40 +2402,6 @@ mod tests {
     }
 
     #[test]
-    fn tab_and_shift_tab_cycle_header_actions_and_enter_activates_one() {
-        let mut app = app_with_run(RunStatus::Done);
-        app.thread_ui.focus = ThreadFocus::Transcript;
-        app.thread_ui.composer.blur();
-
-        assert!(handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-        ));
-        assert_eq!(app.thread_ui.header_action_focus, Some(0));
-        assert!(handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-        ));
-        assert_eq!(app.thread_ui.header_action_focus, Some(1));
-        assert!(handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
-        ));
-        assert_eq!(app.thread_ui.header_action_focus, Some(0));
-
-        assert!(handle_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        ));
-        assert_eq!(app.thread_ui.header_action_focus, None);
-        assert!(matches!(
-            app.pending.last(),
-            Some(PendingAction::ContinueRun { project, id, .. })
-                if project == "main" && id == "run-1"
-        ));
-    }
-
-    #[test]
     fn a_large_live_batch_rebuilds_the_transcript_once() {
         let mut app = app_with_run(RunStatus::Running);
         let metrics_before = app.thread_ui.projection_metrics();
@@ -2810,210 +2631,6 @@ mod tests {
     }
 
     #[test]
-    fn full_run_lifecycle_start_live_ask_answer_review_send_back_accept_archive() {
-        let mut app = app_with_run(RunStatus::Queued);
-        app.navigate_route(crate::app::Route::Thread {
-            project: "main".to_owned(),
-            id: "run-1".to_owned(),
-        });
-
-        // start → live: the run starts running and an assistant message streams in.
-        app.thread_ui
-            .set_run(run(RunStatus::Running, "Ship the shell"));
-        app.thread_ui.push_event(
-            1.0,
-            event(
-                1.0,
-                "item.started",
-                json!({"item": {"kind": "message", "id": "m1", "role": "assistant", "text": "Working on it."}}),
-            ),
-        );
-        let content = render_to_string(&mut app);
-        assert!(
-            content.contains("Working on it"),
-            "live message renders: {content}"
-        );
-
-        // ask: the agent asks a single-select question.
-        app.thread_ui.push_event(
-            2.0,
-            event(
-                2.0,
-                "ask.requested",
-                json!({
-                    "requestId": "ask-1",
-                    "questions": [{"header": "CONFIRM", "question": "Deploy now?", "options": [{"label": "Yes"}, {"label": "No"}]}],
-                }),
-            ),
-        );
-        let ask = pending_ask(&app.thread_ui.data.state)
-            .cloned()
-            .expect("ask card pending");
-        assert_eq!(ask.questions[0].header, "CONFIRM");
-
-        // answer: pick the option via the same hit path the mouse uses — a one-tap
-        // single-select question sends immediately.
-        apply_hit(
-            &mut app,
-            ThreadAction::AskOption {
-                question: 0,
-                option: 0,
-            },
-        );
-        assert_eq!(
-            app.pending,
-            vec![PendingAction::SendMessage {
-                project: "main".to_owned(),
-                id: "run-1".to_owned(),
-                input: MessageInput {
-                    text: Some("CONFIRM: Yes".to_owned()),
-                    images: None,
-                },
-            }]
-        );
-        app.pending.clear();
-        // The engine folds the answer back as a user-message, resolving the card.
-        app.thread_ui.push_event(
-            3.0,
-            event(3.0, "user-message", json!({"text": "CONFIRM: Yes"})),
-        );
-        assert!(
-            pending_ask(&app.thread_ui.data.state).is_none(),
-            "the ask resolves"
-        );
-
-        // review: the run parks for review.
-        app.thread_ui
-            .set_run(run(RunStatus::Review, "Ship the shell"));
-        let content = render_to_string(&mut app);
-        assert!(
-            content.contains("Review the changes"),
-            "the review panel renders: {content}"
-        );
-
-        // send back: notes go back into the session via continue, prefixed exactly as the
-        // legacy behavior requires.
-        app.thread_ui.review_notes = "please add a test".to_owned();
-        apply_action(&mut app, ThreadAction::ReviewSendBack);
-        assert_eq!(
-            app.pending,
-            vec![PendingAction::ContinueRun {
-                project: "main".to_owned(),
-                id: "run-1".to_owned(),
-                text: Some("Review feedback:\nplease add a test".to_owned()),
-                images: None,
-            }]
-        );
-        assert!(
-            app.thread_ui.review_notes.is_empty(),
-            "notes clear after sending"
-        );
-        app.pending.clear();
-
-        // accept: the review panel's Accept is the same mutation as the header's Finish.
-        apply_action(&mut app, ThreadAction::ReviewAccept);
-        assert_eq!(
-            app.pending,
-            vec![PendingAction::FinishRun {
-                project: "main".to_owned(),
-                id: "run-1".to_owned(),
-            }]
-        );
-        app.pending.clear();
-
-        // archive: once the run is terminal, Archive is offered and toggles the flag.
-        app.thread_ui
-            .set_run(run(RunStatus::Done, "Ship the shell"));
-        apply_action(&mut app, ThreadAction::Archive);
-        assert_eq!(
-            app.pending,
-            vec![PendingAction::Archive {
-                project: "main".to_owned(),
-                id: "run-1".to_owned(),
-                archived: true,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_session_scoped_permission_option_is_flagged_as_persistent() {
-        let mut app = app_with_run(RunStatus::Running);
-        app.thread_ui.push_event(
-            1.0,
-            event(
-                1.0,
-                "permission.requested",
-                json!({
-                    "requestId": "permission-1",
-                    "title": "Allow command: cargo test?",
-                    "options": [
-                        {"id": "allow_once", "label": "Allow once", "kind": "allow_once"},
-                        {"id": "allow_session", "label": "Allow session", "kind": "allow_always"},
-                        {"id": "reject_once", "label": "Reject", "kind": "reject_once"}
-                    ]
-                }),
-            ),
-        );
-        let content = render_to_string(&mut app);
-        assert!(
-            content.contains("Allow session (remembers this choice)"),
-            "a session-scoped grant is flagged as persistent: {content}"
-        );
-        assert!(
-            !content.contains("Allow once (remembers this choice)"),
-            "a once-only grant is not: {content}"
-        );
-    }
-
-    #[test]
-    fn a_multi_line_routing_note_renders_every_considered_candidate() {
-        let mut app = app_with_run(RunStatus::Running);
-        app.thread_ui.push_event(
-            1.0,
-            event(
-                1.0,
-                "note",
-                json!({"message": "Auto routing · selected Codex\n  Claude — reserved quota"}),
-            ),
-        );
-        let content = render_to_string(&mut app);
-        assert!(
-            content.contains("Auto routing · selected Codex"),
-            "{content}"
-        );
-        assert!(content.contains("Claude — reserved quota"), "{content}");
-    }
-
-    #[test]
-    fn review_send_back_refuses_empty_notes() {
-        let mut app = app_with_run(RunStatus::Review);
-        apply_action(&mut app, ThreadAction::ReviewSendBack);
-        assert!(app.pending.is_empty(), "an empty note is not sent");
-        assert_eq!(app.thread_ui.focus, ThreadFocus::ReviewNotes);
-    }
-
-    #[test]
-    fn cancel_offers_only_while_active_and_delete_only_once_terminal() {
-        let mut running = app_with_run(RunStatus::Running);
-        apply_action(&mut running, ThreadAction::Cancel);
-        assert!(
-            running.confirm.is_some(),
-            "cancel confirms on an active run"
-        );
-
-        let mut done = app_with_run(RunStatus::Done);
-        apply_action(&mut done, ThreadAction::Delete);
-        assert!(done.confirm.is_some(), "delete confirms on a terminal run");
-    }
-
-    #[test]
-    fn queued_messages_hint_and_composer_stay_available_while_queued() {
-        let mut app = app_with_run(RunStatus::Queued);
-        let content = render_to_string(&mut app);
-        assert!(content.contains("folded into the prompt"));
-    }
-
-    #[test]
     fn a_fresh_thread_focuses_the_composer_and_refresh_preserves_focus() {
         let mut app = app_with_run(RunStatus::Running);
         assert_eq!(app.thread_ui.focus, ThreadFocus::Composer);
@@ -3035,40 +2652,6 @@ mod tests {
             None,
         );
         assert_eq!(app.thread_ui.focus, ThreadFocus::Transcript);
-    }
-
-    #[test]
-    fn clicking_the_follow_up_card_focuses_the_composer() {
-        let mut app = app_with_run(RunStatus::Running);
-        app.thread_ui.focus = ThreadFocus::Transcript;
-        app.thread_ui.composer.blur();
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|frame| app.render(frame)).unwrap();
-
-        let composer_cell = (0..40)
-            .flat_map(|row| (0..120).map(move |column| (column, row)))
-            .find(|(column, row)| {
-                app.hitmap.hit(*column, *row)
-                    == Some(crate::input::hitmap::HitAction::ThreadScreen(
-                        ThreadAction::FocusComposer,
-                    ))
-            })
-            .expect("the rendered follow-up card is clickable");
-
-        app.handle_event(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: composer_cell.0,
-            row: composer_cell.1,
-            modifiers: KeyModifiers::NONE,
-        }));
-
-        assert_eq!(app.thread_ui.focus, ThreadFocus::Composer);
-        assert!(app.thread_ui.composer.focused);
-        app.handle_event(Event::Key(KeyEvent::new(
-            KeyCode::Char('x'),
-            KeyModifiers::NONE,
-        )));
-        assert_eq!(app.thread_ui.composer.text, "x");
     }
 
     #[test]
@@ -3124,34 +2707,6 @@ mod tests {
     }
 
     #[test]
-    fn running_follow_up_is_optimistic_then_visible_in_the_durable_queue() {
-        let mut app = app_with_run(RunStatus::Running);
-        app.thread_ui.composer.set_text("check the compact layout");
-        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(
-            app.pending.as_slice(),
-            [PendingAction::SendMessage { input, .. }]
-                if input.text.as_deref() == Some("check the compact layout")
-        ));
-        let pending = render_to_string(&mut app);
-        assert!(pending.contains("Queueing…"));
-        assert!(pending.contains("QUEUEING"));
-
-        let mut durable = app.thread_ui.data.run().cloned().unwrap();
-        durable.record.queued_messages = Some(vec![coducktor_contract::QueuedMessage {
-            id: "queued-1".to_owned(),
-            text: "check the compact layout".to_owned(),
-            images: None,
-            created_at: "2026-08-15T00:00:01Z".to_owned(),
-        }]);
-        app.thread_ui.set_run(durable);
-        let content = render_to_string(&mut app);
-        assert!(app.thread_ui.pending_prompt.is_none());
-        assert!(content.contains("Queued for the next turn"));
-        assert_eq!(content.matches("check the compact layout").count(), 1);
-    }
-
-    #[test]
     fn live_activity_line_includes_the_running_tool_and_usage() {
         let mut app = app_with_run(RunStatus::Running);
         app.thread_ui.push_event(
@@ -3169,39 +2724,6 @@ mod tests {
             ),
             "rendered thread: {content}"
         );
-    }
-
-    #[test]
-    fn renders_at_the_three_snapshot_sizes_running_with_plan_and_steps() {
-        for (width, height) in [(80, 24), (120, 40), (200, 60)] {
-            let mut app = app_with_run(RunStatus::Running);
-            app.thread_ui.push_event(
-                1.0,
-                event(
-                    1.0,
-                    "plan.updated",
-                    json!({"entries": [
-                        {"content": "write the reducer", "status": "completed"},
-                        {"content": "wire the screen", "status": "in_progress"},
-                        {"content": "add tests", "status": "pending"},
-                    ]}),
-                ),
-            );
-            app.thread_ui.push_event(
-                2.0,
-                event(
-                    2.0,
-                    "item.completed",
-                    json!({"item": {"kind": "message", "id": "m1", "role": "assistant", "text": "On it."}}),
-                ),
-            );
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| app.render(frame)).unwrap();
-            insta::assert_debug_snapshot!(
-                format!("thread_running_{width}x{height}"),
-                terminal.backend().buffer()
-            );
-        }
     }
 
     fn conversation_screen(
@@ -3433,43 +2955,6 @@ mod tests {
         );
     }
 
-    /// The row the rule lands in is reserved during the run too, so a run finishing under the
-    /// user's cursor does not move the composer out from under it.
-    #[test]
-    fn finishing_a_run_does_not_shift_the_composer() {
-        let composer_row = |status| {
-            let mut app = app_with_run(status);
-            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-            terminal.draw(|frame| app.render(frame)).unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            (0..40)
-                .find(|row| {
-                    (0..120)
-                        .map(|column| buffer[(column, *row)].symbol())
-                        .collect::<String>()
-                        .contains("FOLLOW UP")
-                })
-                .expect("the composer is on screen")
-        };
-        assert_eq!(
-            composer_row(RunStatus::Running),
-            composer_row(RunStatus::Done)
-        );
-    }
-
-    #[test]
-    fn renders_at_the_three_snapshot_sizes_review() {
-        for (width, height) in [(80, 24), (120, 40), (200, 60)] {
-            let mut app = app_with_run(RunStatus::Review);
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| app.render(frame)).unwrap();
-            insta::assert_debug_snapshot!(
-                format!("thread_review_{width}x{height}"),
-                terminal.backend().buffer()
-            );
-        }
-    }
-
     #[test]
     fn earlier_history_merges_by_sequence_without_duplicates_and_retains_cursor_state() {
         let mut app = app_with_run(RunStatus::Done);
@@ -3584,23 +3069,6 @@ mod tests {
 
         assert!(app.thread_ui.pending_prompt.is_none());
         assert!(!app.thread_ui.delivery_error);
-    }
-
-    #[test]
-    fn waiting_session_does_not_leave_a_working_outcome_row() {
-        let mut app = app_with_run(RunStatus::Waiting);
-        app.thread_ui.push_event(
-            1.0,
-            event(1.0, "text", json!({"text": "What should I do next?"})),
-        );
-
-        let content = render_to_string(&mut app);
-        assert!(content.contains("Waiting for your reply."));
-        assert!(!content.contains("Working…"));
-        assert!(
-            !content.contains("LATEST MESSAGE"),
-            "visible prose is not duplicated in the dock"
-        );
     }
 
     #[test]
@@ -3729,30 +3197,5 @@ mod tests {
         app.handle_event(crossterm::event::Event::Paste("first\nsecond".to_owned()));
 
         assert_eq!(app.thread_ui.composer.text, "first\nsecond");
-    }
-
-    #[test]
-    fn large_text_and_clipboard_image_are_delivered_and_restored_on_failure() {
-        let mut app = app_with_run(RunStatus::Running);
-        app.thread_ui.focus = ThreadFocus::Composer;
-        app.thread_ui.composer.focus();
-        let pasted = "x".repeat(crate::widgets::composer::LARGE_PASTE_CHAR_THRESHOLD + 1);
-        handle_paste(&mut app, &pasted);
-        app.thread_ui.composer.attach_clipboard_image(vec![1, 2, 3]);
-
-        handle_composer_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        let Some(PendingAction::SendMessage { input, .. }) = app.pending.first() else {
-            panic!("a message is queued");
-        };
-        assert_eq!(input.text.as_deref(), Some(pasted.as_str()));
-        assert_eq!(input.images.as_ref().map(Vec::len), Some(1));
-        assert!(app.thread_ui.composer.text.is_empty());
-
-        app.thread_ui.restore_pending_prompt("main", "run-1");
-        assert!(app.thread_ui.composer.text.contains("[Pasted Content "));
-        assert!(app.thread_ui.composer.text.contains("[Image #1]"));
-        assert_eq!(app.thread_ui.composer.submission_text(), pasted);
-        assert_eq!(app.thread_ui.composer.image_inputs().len(), 1);
     }
 }

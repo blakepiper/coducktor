@@ -1,9 +1,9 @@
 //! A centered overlay list picker — the shared surface behind every new-task pill.
 //!
 //! Two flavors, one widget:
-//! - the *searchable grouped* picker (the skill/workflow source pill): a search line
+//! - the *searchable grouped* picker (the skill attachment pill): a search line
 //!   plus items carrying a group heading and an "emphasized" (project-skill) flag;
-//! - the *simple radio* picker (runner, model, reasoning, variants, base, account):
+//! - the *simple radio* picker (harness, model, reasoning, base, account):
 //!   no search line, one flat list.
 //!
 //! The screen owns the candidate list: it recomputes the items whenever the query

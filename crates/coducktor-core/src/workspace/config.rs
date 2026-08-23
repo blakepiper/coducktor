@@ -66,6 +66,7 @@ fn runner_selection_value(runner: RunnerSelection) -> Value {
     )
 }
 
+#[cfg(test)]
 fn quota_provider_value(provider: QuotaProvider) -> Value {
     Value::String(
         match provider {
@@ -77,6 +78,7 @@ fn quota_provider_value(provider: QuotaProvider) -> Value {
     )
 }
 
+#[cfg(test)]
 fn unknown_usage_policy_value(policy: UnknownUsagePolicy) -> Value {
     Value::String(
         match policy {
@@ -87,6 +89,7 @@ fn unknown_usage_policy_value(policy: UnknownUsagePolicy) -> Value {
     )
 }
 
+#[cfg(test)]
 fn quality_preference_value(preference: QualityPreference) -> Value {
     Value::String(
         match preference {
@@ -300,24 +303,6 @@ impl Resources {
             vec![
                 ("maxParallel", Value::from(self.max_parallel)),
                 (
-                    "maxMonitoringSessions",
-                    Value::from(self.max_monitoring_sessions),
-                ),
-                (
-                    "monitoringWakeIntervalMinutes",
-                    self.monitoring_wake_interval_minutes
-                        .map(Value::from)
-                        .unwrap_or(Value::Null),
-                ),
-                (
-                    "autoResumeOnUsageLimit",
-                    Value::from(self.auto_resume_on_usage_limit),
-                ),
-                (
-                    "intelligentContextRefresh",
-                    Value::from(self.intelligent_context_refresh),
-                ),
-                (
                     "memoryLimitMb",
                     self.memory_limit_mb.map(Value::from).unwrap_or(Value::Null),
                 ),
@@ -372,14 +357,6 @@ impl ComposerDefaults {
                     self.reasoning
                         .map(|value| serde_json::to_value(value).unwrap_or(Value::Null))
                         .unwrap_or(Value::Null),
-                ),
-                (
-                    "variants",
-                    self.variants.map(Value::from).unwrap_or(Value::Null),
-                ),
-                (
-                    "autonomous",
-                    self.autonomous.map(Value::from).unwrap_or(Value::Null),
                 ),
                 (
                     "worktree",
@@ -481,6 +458,10 @@ impl AgentDefaults {
                 (
                     "runner",
                     self.runner
+                        .map(|runner| match runner {
+                            RunnerSelection::Auto => RunnerSelection::Claude,
+                            concrete => concrete,
+                        })
                         .map(runner_selection_value)
                         .unwrap_or(Value::Null),
                 ),
@@ -564,6 +545,7 @@ impl QuotaProviderPolicy {
         }
     }
 
+    #[cfg(test)]
     fn to_value(&self) -> Value {
         zod::merge_extra(
             &self.extra,
@@ -618,6 +600,7 @@ impl QuotaRoutePolicy {
         }
     }
 
+    #[cfg(test)]
     fn to_value(&self) -> Value {
         zod::merge_extra(
             &self.extra,
@@ -642,6 +625,7 @@ fn parse_quota_route_policies(value: Option<&Value>) -> BTreeMap<String, QuotaRo
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn quota_route_policies_to_value(policies: &BTreeMap<String, QuotaRoutePolicy>) -> Value {
     Value::Object(
         policies
@@ -758,6 +742,7 @@ impl QuotaRouting {
         }
     }
 
+    #[cfg(test)]
     fn to_value(&self) -> Value {
         let providers = zod::merge_extra(
             &self.providers_extra,
@@ -913,7 +898,6 @@ impl WorkspaceConfig {
                     ),
                 ),
                 ("agentDefaults", self.agent_defaults.to_value()),
-                ("quotaRouting", self.quota_routing.to_value()),
                 (
                     "projects",
                     Value::from(
@@ -1036,6 +1020,17 @@ pub fn merge_write_workspace_config(
 ) -> io::Result<WorkspaceConfig> {
     let mut next = load_workspace_config(path, env);
     mutator(&mut next);
+    next.resources.max_monitoring_sessions = Resources::default().max_monitoring_sessions;
+    next.resources.monitoring_wake_interval_minutes =
+        Resources::default().monitoring_wake_interval_minutes;
+    next.resources.auto_resume_on_usage_limit = Resources::default().auto_resume_on_usage_limit;
+    next.resources.intelligent_context_refresh = Resources::default().intelligent_context_refresh;
+    next.composer_defaults.variants = None;
+    next.composer_defaults.autonomous = None;
+    next.quota_routing = QuotaRouting::default();
+    if next.agent_defaults.runner == Some(RunnerSelection::Auto) {
+        next.agent_defaults.runner = Some(RunnerSelection::Claude);
+    }
     atomic_write_json_sync(path, &next.to_value())?;
     let _ = atomic_write_json_sync(&workspace_config_backup_path(path), &next.to_value());
     Ok(next)
@@ -1199,15 +1194,7 @@ mod tests {
         assert!(!config.quota_routing.accounts["work-claude"].auto_eligible);
         assert!(config.quota_routing.routes["opencode:default:anthropic/sonnet"].auto_eligible);
 
-        let written = config.to_value();
-        assert_eq!(
-            written["quotaRouting"]["providers"]["opencode"]["futureProviderKey"],
-            true
-        );
-        assert_eq!(
-            written["quotaRouting"]["accounts"]["work-claude"]["futureAccountKey"],
-            "keep"
-        );
+        assert!(config.to_value().get("quotaRouting").is_none());
     }
 
     #[test]
@@ -1219,16 +1206,67 @@ mod tests {
         });
         let config = WorkspaceConfig::parse(&raw, &env());
         assert_eq!(config.quota_routing.claude.max_concurrent_per_account, 3);
-        let written = config.to_value();
-        assert_eq!(
-            written["quotaRouting"]["providers"]["claude"]["maxConcurrent"],
-            3
-        );
+        let legacy = config.quota_routing.to_value();
+        assert_eq!(legacy["providers"]["claude"]["maxConcurrent"], 3);
         assert!(
-            written["quotaRouting"]["providers"]["claude"]
+            legacy["providers"]["claude"]
                 .get("maxConcurrentPerAccount")
                 .is_none()
         );
+        assert!(config.to_value().get("quotaRouting").is_none());
+    }
+
+    #[test]
+    fn a_write_retires_orchestration_keys_without_dropping_unknown_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "futureTopLevel": {"keep": true},
+                "resources": {
+                    "maxParallel": 4,
+                    "maxMonitoringSessions": 3,
+                    "monitoringWakeIntervalMinutes": 9,
+                    "autoResumeOnUsageLimit": true,
+                    "intelligentContextRefresh": true,
+                    "futureResource": "keep"
+                },
+                "composerDefaults": {
+                    "reasoning": "high",
+                    "variants": 3,
+                    "autonomous": true,
+                    "worktree": false,
+                    "futureComposer": "keep"
+                },
+                "agentDefaults": {"runner": "auto"},
+                "quotaRouting": {"enabled": true}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let written = merge_write_workspace_config(&path, &env(), |_| {}).unwrap();
+        let raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
+        assert_eq!(written.agent_defaults.runner, Some(RunnerSelection::Claude));
+        assert_eq!(raw["futureTopLevel"]["keep"], true);
+        assert_eq!(raw["resources"]["futureResource"], "keep");
+        assert_eq!(raw["composerDefaults"]["futureComposer"], "keep");
+        assert_eq!(raw["composerDefaults"]["reasoning"], "high");
+        assert_eq!(raw["composerDefaults"]["worktree"], false);
+        for key in [
+            "maxMonitoringSessions",
+            "monitoringWakeIntervalMinutes",
+            "autoResumeOnUsageLimit",
+            "intelligentContextRefresh",
+        ] {
+            assert!(raw["resources"].get(key).is_none(), "retained {key}");
+        }
+        assert!(raw["composerDefaults"].get("variants").is_none());
+        assert!(raw["composerDefaults"].get("autonomous").is_none());
+        assert!(raw.get("quotaRouting").is_none());
+        assert_eq!(raw["agentDefaults"]["runner"], "claude");
     }
 
     #[test]

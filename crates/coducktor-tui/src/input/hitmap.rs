@@ -44,12 +44,6 @@ pub enum IdeAction {
     OpenInEditor,
 }
 
-/// A compare-variants (`screens/compare`) screen control — routed by `apply_hit`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareAction {
-    Pick(usize),
-}
-
 /// A GitHub (`screens/github`) screen control — routed by `apply_hit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GithubAction {
@@ -58,17 +52,8 @@ pub enum GithubAction {
     SwitchDetailTab(GithubDetailTab),
     CycleMergeMethod,
     Merge,
-    CycleWorkflow,
     OpenSkillPicker,
     RunAgent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkflowAction {
-    Save,
-    Import,
-    Export,
-    Delete,
 }
 
 /// A New Chat screen control (a pill, a button, or the composer).
@@ -97,7 +82,6 @@ pub enum HitAction {
     RepoGit,
     Github,
     Skills,
-    Workflows,
     Settings,
     GlobalSettings,
     ActiveTasks,
@@ -114,8 +98,6 @@ pub enum HitAction {
     TableHeader(ColumnId),
     /// A row of the active run table — click to open, right-click to menu.
     TableRow(usize),
-    /// A tasks-overview "Compare" strip — click to open the compare screen for that group.
-    OpenCompare(String),
     /// A row of the open new-task picker overlay.
     PickerRow(usize),
     /// Remove the pasted image at this index from the composer's image row.
@@ -132,18 +114,8 @@ pub enum HitAction {
     GithubScreen(GithubAction),
     /// A skills row — click to select.
     SkillsScreen(usize),
-    /// A workflows tab — click to select.
-    WorkflowTab(usize),
-    /// A workflows step row — click to move the step cursor.
-    WorkflowStep(usize),
-    /// A workflows palette row — click to select.
-    WorkflowSkill(usize),
-    /// A workflows footer control — mouse parity for product actions kept out of Normal mode.
-    WorkflowControl(WorkflowAction),
     /// A repo-git screen control — routed by the screen.
     RepoGitScreen(RepoGitAction),
-    /// A compare-variants screen control — routed by the screen.
-    CompareScreen(CompareAction),
     /// A Settings nav entry — click to switch section.
     SettingsSection(usize),
     /// A Settings row — click to select it.

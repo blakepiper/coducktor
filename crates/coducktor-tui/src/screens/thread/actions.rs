@@ -34,26 +34,12 @@ pub struct RunActionFlags {
 pub fn run_action_flags(run: &coducktor_contract::ApiRun) -> RunActionFlags {
     let active = is_run_active(run.record.status);
     RunActionFlags {
-        finish: matches!(
-            run.record.status,
-            RunStatus::Idle | RunStatus::Waiting | RunStatus::Review
-        ),
-        // A finished run can always take a follow-up: the legacy engine starts a fresh step in the
-        // same worktree even without a prior session to resume.
-        continue_run: !active,
+        finish: false,
+        continue_run: false,
         archive: !active,
         mark_unread: can_be_unread(run) && !is_unread(run),
-        cancel: active,
+        cancel: false,
         delete_run: !active,
-    }
-}
-
-/// The Finish button's tooltip — review-gate accept reads differently from closing a session.
-pub fn finish_title(status: RunStatus) -> &'static str {
-    if status == RunStatus::Review {
-        "Accept the changes without a PR"
-    } else {
-        "Close the session"
     }
 }
 
@@ -69,29 +55,6 @@ pub fn queue_position(runs: &[RunRecord], run_id: &str) -> Option<usize> {
         .iter()
         .position(|run| run.id == run_id)
         .map(|index| index + 1)
-}
-
-/// Which seam an AskUser answer (or the composer's Continue) travels on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeliveryMode {
-    /// The engine still owns a session (or the run has not started yet): a live message.
-    Live,
-    /// The session ended while unanswered — deliver as the opening prompt of `continue`.
-    Resume,
-    /// The run is closed and never recorded a session — nothing to reopen.
-    Unavailable,
-}
-
-/// The delivery route for one ask answer, as a pure function of the run record — mirrors the
-/// composer's own routing: a live/queued run sends, a closed one with a session continues.
-pub fn ask_delivery_mode(run: &coducktor_contract::ApiRun) -> DeliveryMode {
-    if is_run_active(run.record.status) {
-        DeliveryMode::Live
-    } else if run_action_flags(run).continue_run {
-        DeliveryMode::Resume
-    } else {
-        DeliveryMode::Unavailable
-    }
 }
 
 #[cfg(test)]
@@ -157,67 +120,22 @@ mod tests {
     }
 
     #[test]
-    fn finish_offered_only_at_parked_and_review() {
-        for status in [RunStatus::Idle, RunStatus::Waiting, RunStatus::Review] {
-            assert!(run_action_flags(&run(status, false, None)).finish);
-        }
-        for status in [
-            RunStatus::Queued,
-            RunStatus::Running,
-            RunStatus::Done,
-            RunStatus::Failed,
-            RunStatus::Cancelled,
-        ] {
-            assert!(!run_action_flags(&run(status, false, None)).finish);
-        }
-    }
-
-    #[test]
-    fn continue_needs_only_a_closed_run() {
-        let closed_with_session = run(RunStatus::Done, false, Some("abc123"));
-        let flags = run_action_flags(&closed_with_session);
-        assert!(flags.continue_run);
-
-        let closed_without_session = run(RunStatus::Done, false, None);
-        let flags = run_action_flags(&closed_without_session);
-        assert!(flags.continue_run);
-
-        let active_with_session = run(RunStatus::Running, false, Some("abc123"));
-        let flags = run_action_flags(&active_with_session);
-        assert!(!flags.continue_run);
-    }
-
-    #[test]
-    fn cancel_and_delete_are_exact_complements_of_active() {
+    fn legacy_mutations_are_never_offered() {
         for status in [
             RunStatus::Queued,
             RunStatus::Running,
             RunStatus::Idle,
             RunStatus::Waiting,
-        ] {
-            let flags = run_action_flags(&run(status, false, None));
-            assert!(flags.cancel);
-            assert!(!flags.delete_run);
-        }
-        for status in [
             RunStatus::Review,
             RunStatus::Done,
             RunStatus::Failed,
             RunStatus::Cancelled,
         ] {
-            let flags = run_action_flags(&run(status, false, None));
+            let flags = run_action_flags(&run(status, false, Some("abc123")));
+            assert!(!flags.finish);
+            assert!(!flags.continue_run);
             assert!(!flags.cancel);
-            assert!(flags.delete_run);
         }
-    }
-
-    #[test]
-    fn finish_title_reads_differently_for_review() {
-        assert_eq!(
-            finish_title(RunStatus::Review),
-            "Accept the changes without a PR"
-        );
-        assert_eq!(finish_title(RunStatus::Waiting), "Close the session");
     }
 
     #[test]
@@ -236,23 +154,5 @@ mod tests {
         assert_eq!(queue_position(&runs, "b"), Some(2));
         assert_eq!(queue_position(&runs, "c"), None);
         assert_eq!(queue_position(&runs, "missing"), None);
-    }
-
-    #[test]
-    fn ask_delivery_mode_follows_the_live_resume_ladder() {
-        assert_eq!(
-            ask_delivery_mode(&run(RunStatus::Running, false, None)),
-            DeliveryMode::Live
-        );
-        assert_eq!(
-            ask_delivery_mode(&run(RunStatus::Done, false, Some("abc"))),
-            DeliveryMode::Resume
-        );
-        // No prior session still resumes: the engine starts a fresh step in the same run/
-        // worktree rather than refusing to deliver the answer.
-        assert_eq!(
-            ask_delivery_mode(&run(RunStatus::Done, false, None)),
-            DeliveryMode::Resume
-        );
     }
 }

@@ -8,9 +8,8 @@
 //! when `gh` is absent or the forge is unreachable. Never an error screen.
 
 use coducktor_contract::{
-    ChangedFile, ChangedFileStatus, ChecksGlyph, CreateRunInput, GithubCommentsData, GithubData,
-    GithubItem, GithubMergeMethod, GithubPrChangesData, GithubPrMergeStateResponse, Skill,
-    WorkflowDef, WorkflowStepDef,
+    ChangedFile, ChangedFileStatus, ChecksGlyph, GithubCommentsData, GithubData, GithubItem,
+    GithubMergeMethod, GithubPrChangesData, GithubPrMergeStateResponse, Skill,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -24,9 +23,6 @@ use crate::diff::{DiffViewState, Highlighter, render_files};
 use crate::input::hitmap::{GithubAction, HitAction};
 use crate::markdown::RenderCache;
 use crate::theme::Theme;
-
-/// A skills-as-chain hand-off carries at most 8 steps.
-const MAX_CHAIN_STEPS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GithubTab {
@@ -71,10 +67,8 @@ pub struct GithubUi {
     pub merge_method: GithubMergeMethod,
     pub queued: Option<String>,
 
-    // Hand-to-agent pickers.
-    pub workflows: Vec<WorkflowDef>,
+    // New-chat skill attachments.
     pub skills: Vec<Skill>,
-    pub picked_workflow: Option<usize>,
     pub picked_skills: Vec<usize>,
     pub skill_query: String,
 
@@ -101,9 +95,7 @@ impl Default for GithubUi {
             comments_scroll: 0,
             merge_method: GithubMergeMethod::Squash,
             queued: None,
-            workflows: Vec::new(),
             skills: Vec::new(),
-            picked_workflow: None,
             picked_skills: Vec::new(),
             skill_query: String::new(),
             markdown: RenderCache::new(),
@@ -157,65 +149,6 @@ pub fn github_task_ref(item: &GithubItem) -> String {
         coducktor_contract::GithubItemKind::Issue => "Fix GitHub issue",
     };
     format!("{verb} #{}: {}\n\n{}", item.number, item.title, item.url)
-}
-
-/// Build one `{{task}}` step per skill, deduplicating ids and capping at `MAX_CHAIN_STEPS`.
-pub fn skill_chain_steps(names: &[String]) -> Vec<WorkflowStepDef> {
-    let mut steps: Vec<WorkflowStepDef> = Vec::new();
-    for name in names.iter().take(MAX_CHAIN_STEPS) {
-        let used: Vec<&str> = steps.iter().map(|step| step.id.as_str()).collect();
-        let mut id = name.clone();
-        let mut n = 2;
-        while used.contains(&id.as_str()) {
-            id = format!("{name}-{n}");
-            n += 1;
-        }
-        steps.push(WorkflowStepDef {
-            id,
-            name: Some(name.clone()),
-            prompt: Some("{{task}}".to_owned()),
-            skill: Some(name.clone()),
-            model: None,
-            runner: None,
-            allowed_tools: None,
-            bash_allowlist: None,
-            command: None,
-            on_fail: None,
-        });
-    }
-    steps
-}
-
-/// The run request for one hand-off, including the selected GitHub task context.
-fn handoff_run_body(ui: &GithubUi, item: &GithubItem) -> CreateRunInput {
-    let task = github_task_ref(item);
-    let skill_names: Vec<String> = ui
-        .picked_skills
-        .iter()
-        .filter_map(|index| ui.skills.get(*index))
-        .map(|skill| skill.name.clone())
-        .collect();
-    if let Some(index) = ui.picked_workflow
-        && let Some(workflow) = ui.workflows.get(index)
-    {
-        return CreateRunInput {
-            workflow: Some(workflow.name.clone()),
-            task,
-            ..CreateRunInput::default()
-        };
-    }
-    if !skill_names.is_empty() {
-        return CreateRunInput {
-            steps: Some(skill_chain_steps(&skill_names)),
-            task,
-            ..CreateRunInput::default()
-        };
-    }
-    CreateRunInput {
-        workflow: Some("quick-task".to_owned()),
-        task,
-        ..CreateRunInput::default()
-    }
 }
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -736,15 +669,6 @@ fn render_handoff(frame: &mut Frame<'_>, area: Rect, thread_area: Rect, app: &mu
             .fg(app.theme.palette.fg)
             .add_modifier(Modifier::BOLD),
     ));
-    let workflow_label = ui
-        .picked_workflow
-        .and_then(|index| ui.workflows.get(index))
-        .map(|workflow| workflow.name.clone())
-        .unwrap_or_else(|| "quick-task".to_owned());
-    spans.push(Span::styled(
-        format!("workflow: {workflow_label}   "),
-        Style::default().fg(app.theme.palette.accent),
-    ));
     let skills_label = if ui.picked_skills.is_empty() {
         "none".to_owned()
     } else {
@@ -760,7 +684,7 @@ fn render_handoff(frame: &mut Frame<'_>, area: Rect, thread_area: Rect, app: &mu
         Style::default().fg(app.theme.palette.accent),
     ));
     spans.push(Span::styled(
-        "Run agent on this issue",
+        "Open in New Chat",
         Style::default().fg(app.theme.palette.accent),
     ));
     if let Some(queued) = &ui.queued {
@@ -816,20 +740,12 @@ fn render_handoff(frame: &mut Frame<'_>, area: Rect, thread_area: Rect, app: &mu
         frame.render_widget(Paragraph::new(lines), inner);
     }
     let prefix = "Hand this to the agent:  ".len() as u16;
-    let workflow_width = format!("workflow: {workflow_label}   ").len() as u16;
     let skills_width = format!("skills: {skills_label}   ").len() as u16;
     for (offset, width, action) in [
-        (prefix, workflow_width, GithubAction::CycleWorkflow),
+        (prefix, skills_width, GithubAction::OpenSkillPicker),
         (
-            prefix.saturating_add(workflow_width),
-            skills_width,
-            GithubAction::OpenSkillPicker,
-        ),
-        (
-            prefix
-                .saturating_add(workflow_width)
-                .saturating_add(skills_width),
-            "Run agent on this issue".len() as u16,
+            prefix.saturating_add(skills_width),
+            "Open in New Chat".len() as u16,
             GithubAction::RunAgent,
         ),
     ] {
@@ -1055,16 +971,6 @@ pub fn apply_hit(app: &mut App, action: GithubAction) {
             };
         }
         GithubAction::Merge => handle_merge_confirm(app),
-        GithubAction::CycleWorkflow => {
-            let count = app.github_ui.workflows.len();
-            if count == 0 {
-                return;
-            }
-            app.github_ui.picked_workflow = Some(match app.github_ui.picked_workflow {
-                None => 0,
-                Some(index) => (index + 1) % count,
-            });
-        }
         GithubAction::OpenSkillPicker => {
             if !app.github_ui.skills.is_empty() {
                 app.github_ui.focus = GithubFocus::SkillPicker;
@@ -1075,10 +981,20 @@ pub fn apply_hit(app: &mut App, action: GithubAction) {
             let Some(item) = app.github_ui.detail_item.clone() else {
                 return;
             };
-            let input = handoff_run_body(&app.github_ui, &item);
             let project = app.github_ui.project.clone();
-            app.pending
-                .push(PendingAction::GithubHandToAgent { project, input });
+            let skills = app
+                .github_ui
+                .picked_skills
+                .iter()
+                .filter_map(|index| app.github_ui.skills.get(*index))
+                .map(|skill| skill.name.clone())
+                .collect();
+            app.navigate(crate::app::NavItem::NewTask);
+            let text = github_task_ref(&item);
+            app.new_task_ui.draft_project = Some(project);
+            app.new_task_ui.draft.text = text.clone();
+            app.new_task_ui.draft.skills = skills;
+            app.new_task_ui.composer.set_text(&text);
         }
     }
 }
@@ -1249,16 +1165,9 @@ mod tests {
     }
 
     #[test]
-    fn handoff_bodies_follow_the_three_way_rule() {
+    fn github_item_opens_a_new_chat_with_exact_context_and_skill_attachments() {
         let mut app = app_with_github();
         app.github_ui.detail_item = Some(sample_item(GithubItemKind::Issue, 12));
-        app.github_ui.workflows = vec![WorkflowDef {
-            name: "qa".to_owned(),
-            description: None,
-            steps: vec![],
-            source: coducktor_contract::WorkflowSource::File,
-            path: None,
-        }];
         app.github_ui.skills = vec![Skill {
             name: "om-fix".to_owned(),
             description: None,
@@ -1267,41 +1176,23 @@ mod tests {
             path: "p".to_owned(),
             source: coducktor_contract::SkillSource::Global,
         }];
-
-        // Nothing picked → quick-task.
-        let body = handoff_run_body(&app.github_ui, app.github_ui.detail_item.as_ref().unwrap());
-        assert_eq!(body.workflow.as_deref(), Some("quick-task"));
-        assert!(body.task.contains("Fix GitHub issue #12"));
-        assert!(body.task.contains("https://github.com/x/y/issues/12"));
-
-        // Workflow picked → that workflow.
-        app.github_ui.picked_workflow = Some(0);
-        let body = handoff_run_body(&app.github_ui, app.github_ui.detail_item.as_ref().unwrap());
-        assert_eq!(body.workflow.as_deref(), Some("qa"));
-        assert!(body.steps.is_none());
-
-        // Workflow dropped, skill picked → skills ARE the chain.
-        app.github_ui.picked_workflow = None;
         app.github_ui.picked_skills = vec![0];
-        let body = handoff_run_body(&app.github_ui, app.github_ui.detail_item.as_ref().unwrap());
-        assert!(body.workflow.is_none());
-        let steps = body.steps.unwrap();
-        assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].skill.as_deref(), Some("om-fix"));
-        assert_eq!(steps[0].prompt.as_deref(), Some("{{task}}"));
-        assert_eq!(steps[0].id, "om-fix");
-    }
+        apply_hit(&mut app, GithubAction::RunAgent);
 
-    #[test]
-    fn skill_chain_steps_deduplicate_ids() {
-        let steps = skill_chain_steps(&[
-            "om-fix".to_owned(),
-            "om-fix".to_owned(),
-            "om-fix".to_owned(),
-        ]);
-        let ids: Vec<&str> = steps.iter().map(|step| step.id.as_str()).collect();
-        assert_eq!(ids, vec!["om-fix", "om-fix-2", "om-fix-3"]);
-        assert!(steps.len() <= MAX_CHAIN_STEPS);
+        assert!(matches!(app.route(), Route::NewTask { project } if project == "main"));
+        assert!(app.new_task_ui.draft.text.contains("Fix GitHub issue #12"));
+        assert!(
+            app.new_task_ui
+                .draft
+                .text
+                .contains("https://github.com/x/y/issues/12")
+        );
+        assert_eq!(app.new_task_ui.draft.skills, ["om-fix"]);
+        assert!(
+            app.pending
+                .iter()
+                .all(|action| !matches!(action, PendingAction::CreateConversation { .. }))
+        );
     }
 
     #[test]

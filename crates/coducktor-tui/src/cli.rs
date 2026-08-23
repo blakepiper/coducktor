@@ -1,7 +1,7 @@
 //! The `coducktor` binary's argument surface.
 //!
-//! Bare invocation and an explicit `tui` subcommand behave identically, and three
-//! launch-time flags (`--repo`, `--workflow`, `--model`) carry real, testable meaning
+//! Bare invocation and an explicit `tui` subcommand behave identically, and two
+//! launch-time flags (`--repo`, `--model`) carry real, testable meaning
 //! into the first frame rather than being decorative. The retired `-p/--port` and
 //! `--no-open` flags are not reproduced because this binary owns the terminal UI and
 //! opens no listener or browser.
@@ -11,8 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
-use coducktor_contract::{ProjectListEntry, WorkflowDef};
+use clap::{Parser, Subcommand, ValueEnum};
+use coducktor_contract::{ConversationGitMode, ProjectListEntry, Runner};
 
 /// `coducktor` — the terminal cockpit.
 #[derive(Debug, Parser)]
@@ -26,11 +26,7 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "DIR")]
     pub repo: Option<PathBuf>,
 
-    /// Preselect a workflow on the New Task screen at launch.
-    #[arg(long, global = true, value_name = "NAME")]
-    pub workflow: Option<String>,
-
-    /// Preselect a model on the New Task screen at launch.
+    /// Preselect a model on the New Chat screen at launch.
     #[arg(long, global = true, value_name = "MODEL")]
     pub model: Option<String>,
 }
@@ -39,13 +35,31 @@ pub struct Cli {
 pub enum Command {
     /// Launch the interactive TUI — the default when no subcommand is given.
     Tui,
-    /// Run a task headless in the terminal; exits 0 on `done`/`review`, 1 otherwise.
+    /// Run one conversation turn headless in the terminal.
     Run {
-        /// The task text — extra words are joined with a space, same as the protected CLI.
+        /// The message text — extra words are joined with a space.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        task: Vec<String>,
+        message: Vec<String>,
+        /// Concrete local harness. Coducktor never routes or fails over automatically.
+        #[arg(long, value_enum, default_value_t = HarnessArg::Claude)]
+        runner: HarnessArg,
+        /// Provider-native reasoning value; omission uses the harness default.
+        #[arg(long, value_name = "VALUE")]
+        reasoning: Option<String>,
+        /// Attach a discovered local skill by id or name. Repeat to attach more than one.
+        #[arg(long, value_name = "SKILL")]
+        skill: Vec<String>,
+        /// Base branch/ref for a managed worktree.
+        #[arg(long, value_name = "REF")]
+        branch: Option<String>,
+        /// Create a managed worktree (pass `false` to run in place).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        worktree: bool,
+        /// Post-turn Git policy. `auto` requires a managed worktree.
+        #[arg(long, value_enum, default_value_t = GitModeArg::Manual)]
+        git_mode: GitModeArg,
     },
-    /// Scaffold `.ai/coducktor/` (an example workflow + skill) in the target repo.
+    /// Scaffold an example local skill under `.ai/coducktor/skills/`.
     Init,
     /// Show sanitized Claude, Codex, and supported OpenCode quota telemetry.
     Usage {
@@ -69,6 +83,40 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<ProjectsCommand>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum HarnessArg {
+    Claude,
+    Codex,
+    Opencode,
+    Pi,
+}
+
+impl From<HarnessArg> for Runner {
+    fn from(value: HarnessArg) -> Self {
+        match value {
+            HarnessArg::Claude => Self::Claude,
+            HarnessArg::Codex => Self::Codex,
+            HarnessArg::Opencode => Self::OpenCode,
+            HarnessArg::Pi => Self::Pi,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GitModeArg {
+    Manual,
+    Auto,
+}
+
+impl From<GitModeArg> for ConversationGitMode {
+    fn from(value: GitModeArg) -> Self {
+        match value {
+            GitModeArg::Manual => Self::Manual,
+            GitModeArg::Auto => Self::Auto,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -105,13 +153,6 @@ pub fn resolve_repo(registry: &[ProjectListEntry], repo: &Path) -> Option<String
         .map(|entry| entry.id.clone())
 }
 
-/// Whether `--workflow <name>` names a workflow the resolved project actually has —
-/// checked so a typo produces a notice instead of silently degrading to baseline
-/// (`new_task_form::resolve_source`'s existing fallback would otherwise hide it).
-pub fn workflow_known(workflows: &[WorkflowDef], name: &str) -> bool {
-    workflows.iter().any(|workflow| workflow.name == name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,27 +175,19 @@ mod tests {
     }
 
     #[test]
-    fn repo_workflow_model_parse_on_bare_invocation() {
-        let cli = Cli::try_parse_from([
-            "coducktor",
-            "--repo",
-            "/tmp/some-repo",
-            "--workflow",
-            "quick-task",
-            "--model",
-            "sonnet",
-        ])
-        .unwrap();
+    fn repo_and_model_parse_on_bare_invocation() {
+        let cli =
+            Cli::try_parse_from(["coducktor", "--repo", "/tmp/some-repo", "--model", "sonnet"])
+                .unwrap();
         assert_eq!(cli.repo, Some(PathBuf::from("/tmp/some-repo")));
-        assert_eq!(cli.workflow.as_deref(), Some("quick-task"));
         assert_eq!(cli.model.as_deref(), Some("sonnet"));
     }
 
     #[test]
     fn flags_are_global_and_also_parse_after_the_tui_subcommand() {
-        let cli = Cli::try_parse_from(["coducktor", "tui", "--workflow", "quick-task"]).unwrap();
+        let cli = Cli::try_parse_from(["coducktor", "tui", "--model", "sonnet"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Tui)));
-        assert_eq!(cli.workflow.as_deref(), Some("quick-task"));
+        assert_eq!(cli.model.as_deref(), Some("sonnet"));
     }
 
     #[test]
@@ -166,7 +199,7 @@ mod tests {
     fn the_protected_commands_all_parse() {
         let run = Cli::try_parse_from(["coducktor", "run", "do", "the", "thing"]).unwrap();
         match run.command {
-            Some(Command::Run { task }) => assert_eq!(task, vec!["do", "the", "thing"]),
+            Some(Command::Run { message, .. }) => assert_eq!(message, vec!["do", "the", "thing"]),
             other => panic!("expected Run, got {other:?}"),
         }
         assert!(matches!(
@@ -228,7 +261,6 @@ mod tests {
         let rendered = error.to_string();
         for needle in [
             "--repo",
-            "--workflow",
             "--model",
             "tui",
             "run",
@@ -271,21 +303,38 @@ mod tests {
         assert_eq!(resolve_repo(&registry, &dir), None);
     }
 
-    fn workflow(name: &str) -> WorkflowDef {
-        WorkflowDef {
-            name: name.to_owned(),
-            description: None,
-            steps: Vec::new(),
-            source: coducktor_contract::WorkflowSource::File,
-            path: None,
-        }
-    }
-
     #[test]
-    fn workflow_known_matches_by_name_only() {
-        let workflows = vec![workflow("quick-task")];
-        assert!(workflow_known(&workflows, "quick-task"));
-        assert!(!workflow_known(&workflows, "typo-task"));
-        assert!(!workflow_known(&[], "quick-task"));
+    fn run_accepts_conversation_affinity_and_policy_flags() {
+        let cli = Cli::try_parse_from([
+            "coducktor",
+            "run",
+            "--runner",
+            "codex",
+            "--reasoning",
+            "high",
+            "--skill",
+            "testing",
+            "--branch",
+            "main",
+            "--worktree",
+            "false",
+            "--git-mode",
+            "manual",
+            "fix",
+            "it",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                runner: HarnessArg::Codex,
+                reasoning: Some(reasoning),
+                skill,
+                branch: Some(branch),
+                worktree: false,
+                git_mode: GitModeArg::Manual,
+                message,
+            }) if reasoning == "high" && skill == ["testing"] && branch == "main" && message == ["fix", "it"]
+        ));
     }
 }

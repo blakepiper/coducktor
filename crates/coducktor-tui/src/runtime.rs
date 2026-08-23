@@ -62,12 +62,25 @@ pub async fn entry() -> io::Result<()> {
     // straight in the caller's terminal, print to real stdout/stderr, and exit. Only
     // `None`/`Tui` fall through to the interactive cockpit below.
     match &cli.command {
-        Some(Command::Run { task }) => {
+        Some(Command::Run {
+            message,
+            runner,
+            reasoning,
+            skill,
+            branch,
+            worktree,
+            git_mode,
+        }) => {
             let code = headless::run_command(
                 repo_root,
-                task.join(" "),
-                cli.workflow.clone(),
+                message.join(" "),
+                (*runner).into(),
                 cli.model.clone(),
+                reasoning.clone(),
+                skill.clone(),
+                branch.clone(),
+                *worktree,
+                (*git_mode).into(),
             )
             .await;
             std::process::exit(code);
@@ -214,7 +227,6 @@ struct PrimeSnapshot {
 struct PrimeNewTaskSnapshot {
     config: Option<coducktor_contract::ConfigResponse>,
     skills: Option<Vec<coducktor_contract::Skill>>,
-    workflows: Option<coducktor_contract::WorkflowsResponse>,
     workspace_config: Option<coducktor_contract::WorkspaceConfigResponse>,
     provider_status: Option<coducktor_contract::ProviderStatusResponse>,
     ui_state: Option<coducktor_contract::UiState>,
@@ -238,10 +250,6 @@ enum BackgroundResult {
     /// A completion that only touches UI state. The engine operation has already finished on a
     /// bounded native worker; applying this closure is deliberately tiny and frame-local.
     AppUpdate(Box<dyn FnOnce(&mut App) + Send>),
-    StartRun {
-        project: String,
-        result: Result<coducktor_contract::CreateRunResponse, coducktor_client::EngineError>,
-    },
     CreateConversation {
         project: String,
         result:
@@ -270,9 +278,6 @@ enum BackgroundResult {
         generation: u64,
         result:
             Result<Vec<coducktor_contract::ConversationIndexEntry>, coducktor_client::EngineError>,
-    },
-    ActivateRuns {
-        result: Result<(), coducktor_client::EngineError>,
     },
     CreatePr {
         project: String,
@@ -403,45 +408,16 @@ enum BackgroundResult {
         generation: u64,
         result: Result<coducktor_contract::Scratchpad, coducktor_client::EngineError>,
     },
-    LoadCompare {
-        project: String,
-        group_id: String,
-        generation: u64,
-        result: Result<coducktor_contract::GroupResponse, coducktor_client::EngineError>,
-    },
-    LoadCompareVariantDiff {
-        project: String,
-        group_id: String,
-        run_id: String,
-        result: Result<coducktor_contract::ChangesPayload, coducktor_client::EngineError>,
-    },
-    PickVariant {
-        project: String,
-        result: Result<(), coducktor_client::EngineError>,
-    },
     LoadRepoGitCommit {
         project: String,
         generation: u64,
         result: Result<coducktor_contract::RepoCommitPayload, coducktor_client::EngineError>,
     },
-    GithubHandToAgent {
-        project: String,
-        result: Result<coducktor_contract::CreateRunResponse, coducktor_client::EngineError>,
-    },
     GithubPickers {
         project: String,
-        workflows: Result<coducktor_contract::WorkflowsResponse, coducktor_client::EngineError>,
         skills: Result<Vec<coducktor_contract::Skill>, coducktor_client::EngineError>,
     },
     LoadSkills {
-        project: String,
-        result: Result<Vec<coducktor_contract::Skill>, coducktor_client::EngineError>,
-    },
-    LoadWorkflows {
-        project: String,
-        result: Result<coducktor_contract::WorkflowsResponse, coducktor_client::EngineError>,
-    },
-    LoadWorkflowSkills {
         project: String,
         result: Result<Vec<coducktor_contract::Skill>, coducktor_client::EngineError>,
     },
@@ -450,20 +426,6 @@ enum BackgroundResult {
         id: String,
         result: Result<coducktor_contract::AgentConfigFileContent, coducktor_client::EngineError>,
     },
-    SessionMutation {
-        action: SessionMutation,
-        project: String,
-        id: String,
-        result: Result<(), coducktor_client::EngineError>,
-    },
-}
-
-#[derive(Clone, Copy)]
-enum SessionMutation {
-    Send,
-    Cancel,
-    Continue,
-    Finish,
 }
 
 type BackgroundJob = Box<dyn FnOnce(tokio::runtime::Handle) + Send>;
@@ -603,7 +565,6 @@ fn spawn_prime(engine: Arc<dyn Engine>) -> (JoinHandle<()>, UnboundedReceiver<Pr
             workspace_ui_state,
             config,
             skills,
-            workflows,
             workspace_config,
             provider_status,
             ui_state,
@@ -615,7 +576,6 @@ fn spawn_prime(engine: Arc<dyn Engine>) -> (JoinHandle<()>, UnboundedReceiver<Pr
             engine.workspace_ui_state(),
             engine.config(&scope),
             engine.skills(&scope),
-            engine.workflows(&scope),
             engine.workspace_config(),
             engine.provider_status(),
             engine.ui_state(&scope),
@@ -625,7 +585,6 @@ fn spawn_prime(engine: Arc<dyn Engine>) -> (JoinHandle<()>, UnboundedReceiver<Pr
         let new_task = PrimeNewTaskSnapshot {
             config: config.ok(),
             skills: skills.ok(),
-            workflows: workflows.ok(),
             workspace_config: workspace_config.ok(),
             provider_status: provider_status.ok(),
             ui_state: ui_state.ok(),
@@ -743,9 +702,6 @@ fn apply_new_task_snapshot(app: &mut App, snapshot: PrimeNewTaskSnapshot) {
     if let Some(skills) = snapshot.skills {
         app.new_task_ui.data.skills = skills;
     }
-    if let Some(workflows) = snapshot.workflows {
-        app.new_task_ui.data.workflows = workflows.workflows;
-    }
     if let Some(workspace_config) = snapshot.workspace_config {
         app.new_task_ui.data.workspace_config = Some(workspace_config);
     }
@@ -768,11 +724,11 @@ fn repo_snapshot(
     }
 }
 
-/// Apply `--repo`/`--workflow`/`--model` once the background bootstrap has loaded
+/// Apply `--repo`/`--model` once the background bootstrap has loaded
 /// the project registry. `--repo` switches the active project — re-fetching its
 /// tasks and New Task data if it differs from the one `prime_app` already loaded —
 /// or leaves a clear notice if the directory isn't a registered project rather than silently
-/// staying put. `--workflow`/`--model` preselect the New Task screen.
+/// staying put. `--model` preselects the New Chat screen.
 fn apply_launch_args(app: &mut App, cli: &Cli) {
     if let Some(repo) = &cli.repo {
         match cli::resolve_repo(&app.project_registry, repo) {
@@ -799,11 +755,7 @@ fn apply_launch_args(app: &mut App, cli: &Cli) {
             }
         }
     }
-    if cli.workflow.is_some() || cli.model.is_some() {
-        if cli.workflow.is_some() {
-            app.notice =
-                Some("--workflow is no longer supported — start a chat instead".to_owned());
-        }
+    if cli.model.is_some() {
         if let Some(model) = &cli.model {
             app.new_task_ui.draft.model = Some(model.clone());
         }
@@ -1142,16 +1094,6 @@ fn execute_pending(
                     background_handle,
                 );
             }
-            PendingAction::StartRun { project, input } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.start_run(&scope, input).await },
-                    move |result| BackgroundResult::StartRun { project, result },
-                );
-            }
             PendingAction::CreateConversation { project, input } => {
                 let scope = Scope::Project(project.clone());
                 let engine_for_task = engine.clone();
@@ -1170,16 +1112,6 @@ fn execute_pending(
                     background_sender,
                     async move { engine_for_task.activate_conversations(&scope).await },
                     |result| BackgroundResult::ActivateConversations { result },
-                );
-            }
-            PendingAction::ActivateRuns { project } => {
-                let scope = Scope::Project(project);
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.activate_runs(&scope).await },
-                    |result| BackgroundResult::ActivateRuns { result },
                 );
             }
             PendingAction::RefreshNewTask { project } => {
@@ -1374,110 +1306,6 @@ fn execute_pending(
                     },
                 );
             }
-            PendingAction::SendMessage { project, id, input } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                let result_project = project.clone();
-                let result_id = id.clone();
-                let queued = spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .send_message(&scope, &id_for_task, input)
-                            .await
-                            .map(|_| ())
-                    },
-                    move |result| BackgroundResult::SessionMutation {
-                        action: SessionMutation::Send,
-                        project: result_project,
-                        id: result_id,
-                        result,
-                    },
-                );
-                if !queued {
-                    app.thread_ui.restore_pending_prompt(&project, &id);
-                }
-            }
-            PendingAction::CancelRun { project, id } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .cancel_run(&scope, &id_for_task)
-                            .await
-                            .map(|_| ())
-                    },
-                    move |result| BackgroundResult::SessionMutation {
-                        action: SessionMutation::Cancel,
-                        project,
-                        id,
-                        result,
-                    },
-                );
-            }
-            PendingAction::ContinueRun {
-                project,
-                id,
-                text,
-                images,
-            } => {
-                let scope = Scope::Project(project.clone());
-                let input = coducktor_contract::ContinueInput {
-                    text,
-                    images,
-                    ..coducktor_contract::ContinueInput::default()
-                };
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                let result_project = project.clone();
-                let result_id = id.clone();
-                let queued = spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .continue_run(&scope, &id_for_task, input)
-                            .await
-                            .map(|_| ())
-                    },
-                    move |result| BackgroundResult::SessionMutation {
-                        action: SessionMutation::Continue,
-                        project: result_project,
-                        id: result_id,
-                        result,
-                    },
-                );
-                if !queued {
-                    app.thread_ui.restore_pending_prompt(&project, &id);
-                }
-            }
-            PendingAction::FinishRun { project, id } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .finish_run(&scope, &id_for_task)
-                            .await
-                            .map(|_| ())
-                    },
-                    move |result| BackgroundResult::SessionMutation {
-                        action: SessionMutation::Finish,
-                        project,
-                        id,
-                        result,
-                    },
-                );
-            }
             PendingAction::CreatePr { project, id } => {
                 let scope = Scope::Project(project.clone());
                 let engine_for_task = engine.clone();
@@ -1490,54 +1318,6 @@ fn execute_pending(
                         project,
                         id,
                         result,
-                    },
-                );
-            }
-            PendingAction::RemoveQueuedMessage {
-                project,
-                id,
-                message_id,
-            } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .remove_queued_message(&scope, &id_for_task, &message_id)
-                            .await
-                    },
-                    move |result| {
-                        BackgroundResult::AppUpdate(Box::new(move |app| {
-                            if let Err(error) = result {
-                                app.notice = Some(format!("remove message failed: {error}"));
-                            }
-                            app.pending.push(PendingAction::LoadThread { project, id });
-                        }))
-                    },
-                );
-            }
-            PendingAction::CancelAutoResume { project, id } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let id_for_task = id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .cancel_auto_resume(&scope, &id_for_task)
-                            .await
-                    },
-                    move |result| {
-                        BackgroundResult::AppUpdate(Box::new(move |app| {
-                            if let Err(error) = result {
-                                app.notice = Some(format!("cancel auto-resume failed: {error}"));
-                            }
-                            app.pending.push(PendingAction::LoadThread { project, id });
-                        }))
                     },
                 );
             }
@@ -1767,63 +1547,6 @@ fn execute_pending(
                     },
                 );
             }
-            PendingAction::LoadCompare { project, group_id } => {
-                let generation = app.begin_compare_request();
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let group_id_for_task = group_id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.group(&scope, &group_id_for_task).await },
-                    move |result| BackgroundResult::LoadCompare {
-                        project,
-                        group_id,
-                        generation,
-                        result,
-                    },
-                );
-            }
-            PendingAction::LoadCompareVariantDiff {
-                project,
-                group_id,
-                run_id,
-            } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let run_id_for_task = run_id.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.run_changes(&scope, &run_id_for_task).await },
-                    move |result| BackgroundResult::LoadCompareVariantDiff {
-                        project,
-                        group_id,
-                        run_id,
-                        result,
-                    },
-                );
-            }
-            PendingAction::PickVariant {
-                project,
-                group_id,
-                run_id,
-            } => {
-                let scope = Scope::Project(project.clone());
-                let input = coducktor_contract::PickVariantRequest { run_id };
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .pick_variant(&scope, &group_id, &input)
-                            .await
-                            .map(|_| ())
-                    },
-                    move |result| BackgroundResult::PickVariant { project, result },
-                );
-            }
             PendingAction::LoadIdeDirectory { project, path } => {
                 let scope = Scope::Project(project.clone());
                 // The listed directory IS the screen's current directory — the sidebar entry
@@ -1948,17 +1671,8 @@ fn execute_pending(
                 spawn_background(
                     background_handle,
                     background_sender,
-                    async move {
-                        tokio::join!(
-                            engine_for_task.workflows(&scope),
-                            engine_for_task.skills(&scope),
-                        )
-                    },
-                    move |(workflows, skills)| BackgroundResult::GithubPickers {
-                        project,
-                        workflows,
-                        skills,
-                    },
+                    async move { engine_for_task.skills(&scope).await },
+                    move |skills| BackgroundResult::GithubPickers { project, skills },
                 );
             }
             PendingAction::LoadGithubComments {
@@ -2036,16 +1750,6 @@ fn execute_pending(
                     },
                 );
             }
-            PendingAction::GithubHandToAgent { project, input } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.start_run(&scope, input).await },
-                    move |result| BackgroundResult::GithubHandToAgent { project, result },
-                );
-            }
             PendingAction::LoadSkills { project } => {
                 let scope = Scope::Project(project.clone());
                 let engine_for_task = engine.clone();
@@ -2054,89 +1758,6 @@ fn execute_pending(
                     background_sender,
                     async move { engine_for_task.skills(&scope).await },
                     move |result| BackgroundResult::LoadSkills { project, result },
-                );
-            }
-            PendingAction::LoadWorkflows { project } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.workflows(&scope).await },
-                    move |result| BackgroundResult::LoadWorkflows { project, result },
-                );
-            }
-            PendingAction::LoadWorkflowSkills { project } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.skills(&scope).await },
-                    move |result| BackgroundResult::LoadWorkflowSkills { project, result },
-                );
-            }
-            PendingAction::SaveWorkflow { project } => {
-                queue_save_or_export_workflow(
-                    engine.clone(),
-                    app,
-                    project,
-                    false,
-                    background_sender,
-                    background_handle,
-                );
-            }
-            PendingAction::ExportWorkflow { project } => {
-                queue_save_or_export_workflow(
-                    engine.clone(),
-                    app,
-                    project,
-                    true,
-                    background_sender,
-                    background_handle,
-                );
-            }
-            PendingAction::DeleteWorkflow { project, name } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                let name_for_task = name.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move {
-                        engine_for_task
-                            .delete_workflow(&scope, &name_for_task)
-                            .await
-                    },
-                    move |result| {
-                        BackgroundResult::AppUpdate(Box::new(move |app| match result {
-                            Ok(_) => {
-                                app.notice = Some(format!("deleted workflow {name}"));
-                                app.pending.push(PendingAction::LoadWorkflows { project });
-                            }
-                            Err(error) => app.notice = Some(format!("delete failed: {error}")),
-                        }))
-                    },
-                );
-            }
-            PendingAction::ImportWorkflow { project, yaml } => {
-                let scope = Scope::Project(project.clone());
-                let engine_for_task = engine.clone();
-                spawn_background(
-                    background_handle,
-                    background_sender,
-                    async move { engine_for_task.parse_workflow(&scope, &yaml).await },
-                    move |result| {
-                        BackgroundResult::AppUpdate(Box::new(move |app| match result {
-                            Ok(parsed) => {
-                                app.workflows_ui.selected_tab = app.workflows_ui.workflows.len();
-                                app.workflows_ui.draft_name = parsed.name;
-                                app.workflows_ui.draft_steps = parsed.steps;
-                                app.notice = Some("imported — review and save".to_owned());
-                            }
-                            Err(error) => app.notice = Some(format!("import failed: {error}")),
-                        }))
-                    },
                 );
             }
             PendingAction::LoadSettings { project } => {
@@ -2491,8 +2112,6 @@ fn background_lane(action: &PendingAction) -> BackgroundLane {
         | PendingAction::LoadRepoGit { .. }
         | PendingAction::LoadRepoGitCommits { .. }
         | PendingAction::LoadRepoGitCommitDiff { .. }
-        | PendingAction::LoadCompare { .. }
-        | PendingAction::LoadCompareVariantDiff { .. }
         | PendingAction::LoadIdeDirectory { .. }
         | PendingAction::LoadIdeFile { .. }
         | PendingAction::LoadGithub { .. }
@@ -2501,8 +2120,6 @@ fn background_lane(action: &PendingAction) -> BackgroundLane {
         | PendingAction::LoadGithubMergeState { .. }
         | PendingAction::LoadGithubPrChanges { .. }
         | PendingAction::LoadSkills { .. }
-        | PendingAction::LoadWorkflows { .. }
-        | PendingAction::LoadWorkflowSkills { .. }
         | PendingAction::LoadSettings { .. }
         | PendingAction::SettingsLoadConfigFile { .. } => BackgroundLane::Read,
         _ => BackgroundLane::Mutate,
@@ -2511,10 +2128,9 @@ fn background_lane(action: &PendingAction) -> BackgroundLane {
 
 async fn load_new_task_snapshot(engine: Arc<dyn Engine>, project: &str) -> PrimeNewTaskSnapshot {
     let scope = Scope::Project(project.to_owned());
-    let (config, skills, workflows, workspace_config, provider_status, ui_state, repo) = tokio::join!(
+    let (config, skills, workspace_config, provider_status, ui_state, repo) = tokio::join!(
         engine.config(&scope),
         engine.skills(&scope),
-        engine.workflows(&scope),
         engine.workspace_config(),
         engine.provider_status(),
         engine.ui_state(&scope),
@@ -2524,50 +2140,11 @@ async fn load_new_task_snapshot(engine: Arc<dyn Engine>, project: &str) -> Prime
     PrimeNewTaskSnapshot {
         config: config.ok(),
         skills: skills.ok(),
-        workflows: workflows.ok(),
         workspace_config: workspace_config.ok(),
         provider_status: provider_status.ok(),
         ui_state: ui_state.ok(),
         repo,
         branches,
-    }
-}
-
-fn apply_started_run(
-    app: &mut App,
-    project: String,
-    result: Result<coducktor_contract::CreateRunResponse, coducktor_client::EngineError>,
-    starts_in_flight: &mut HashSet<String>,
-) {
-    match result {
-        Ok(response) => {
-            starts_in_flight.remove(&project);
-            app.pending_start_drafts.remove(&project);
-            app.pending_start_composers.remove(&project);
-            let started = match &response {
-                coducktor_contract::CreateRunResponse::Single(run) => Some((**run).clone()),
-                coducktor_contract::CreateRunResponse::Group { runs } => runs.first().cloned(),
-            };
-            if let Some(run) = started {
-                screens::thread::open_started(app, &project, run);
-            }
-            app.pending.push(PendingAction::ActivateRuns {
-                project: project.clone(),
-            });
-            screens::new_task::clear_draft(app);
-            app.queue_pending(PendingAction::RefreshTasks {
-                project: project.clone(),
-            });
-            if matches!(app.route(), app::Route::GlobalTasks) {
-                app.queue_pending(PendingAction::RefreshIndex);
-                app.queue_pending(PendingAction::RefreshChatsIndex);
-            }
-        }
-        Err(error) => {
-            starts_in_flight.remove(&project);
-            screens::new_task::restore_start_draft(app, &project);
-            app.notice = Some(format!("start failed: {error}"));
-        }
     }
 }
 
@@ -2621,18 +2198,10 @@ fn drain_background_results(
         };
         match result {
             BackgroundResult::AppUpdate(update) => update(app),
-            BackgroundResult::StartRun { project, result } => {
-                apply_started_run(app, project, result, starts_in_flight);
-            }
             BackgroundResult::CreateConversation { project, result } => {
                 apply_created_conversation(app, project, result, starts_in_flight);
             }
             BackgroundResult::ActivateConversations { result } => {
-                if let Err(error) = result {
-                    app.notice = Some(format!("start failed: {error}"));
-                }
-            }
-            BackgroundResult::ActivateRuns { result } => {
                 if let Err(error) = result {
                     app.notice = Some(format!("start failed: {error}"));
                 }
@@ -3005,62 +2574,6 @@ fn drain_background_results(
                     }
                 }
             }
-            BackgroundResult::LoadCompare {
-                project,
-                group_id,
-                generation,
-                result,
-            } => {
-                if !matches!(
-                    app.route(),
-                    app::Route::Compare { project: route_project, group_id: route_group_id }
-                        if route_project == &project && route_group_id == &group_id
-                ) || app.compare_request_generation != generation
-                {
-                    continue;
-                }
-                match result {
-                    Ok(group) => {
-                        let first = group.runs.first().map(|variant| variant.id.clone());
-                        app.compare_ui.group = Some(group);
-                        if let Some(run_id) = first {
-                            app.pending.push(PendingAction::LoadCompareVariantDiff {
-                                project,
-                                group_id,
-                                run_id,
-                            });
-                        }
-                    }
-                    Err(error) => app.notice = Some(format!("load compare failed: {error}")),
-                }
-            }
-            BackgroundResult::LoadCompareVariantDiff {
-                project,
-                group_id,
-                run_id,
-                result,
-            } => {
-                if !matches!(
-                    app.route(),
-                    app::Route::Compare { project: route_project, group_id: route_group_id }
-                        if route_project == &project && route_group_id == &group_id
-                ) {
-                    continue;
-                }
-                match result {
-                    Ok(changes) => {
-                        app.compare_ui.variant_diffs.insert(run_id, changes);
-                    }
-                    Err(error) => app.notice = Some(format!("load diff failed: {error}")),
-                }
-            }
-            BackgroundResult::PickVariant { project, result } => match result {
-                Ok(()) => {
-                    app.notice = Some("variant picked".to_owned());
-                    app.queue_pending(PendingAction::RefreshTasks { project });
-                }
-                Err(error) => app.notice = Some(format!("pick failed: {error}")),
-            },
             BackgroundResult::LoadRepoGit {
                 project,
                 generation,
@@ -3229,43 +2742,11 @@ fn drain_background_results(
                     Err(error) => app.notice = Some(format!("load commit failed: {error}")),
                 }
             }
-            BackgroundResult::GithubHandToAgent { project, result } => {
-                if app.github_ui.project != project {
-                    continue;
-                }
-                match result {
-                    Ok(response) => {
-                        let started = match &response {
-                            coducktor_contract::CreateRunResponse::Single(run) => {
-                                Some(run.id.clone())
-                            }
-                            coducktor_contract::CreateRunResponse::Group { runs } => {
-                                runs.first().map(|run| run.id.clone())
-                            }
-                        };
-                        if let Some(id) = started {
-                            app.github_ui.queued = Some(id);
-                        }
-                        app.pending.push(PendingAction::ActivateRuns {
-                            project: project.clone(),
-                        });
-                        app.queue_pending(PendingAction::RefreshTasks { project });
-                    }
-                    Err(error) => app.notice = Some(format!("start failed: {error}")),
-                }
-            }
-            BackgroundResult::GithubPickers {
-                project,
-                workflows,
-                skills,
-            } => {
+            BackgroundResult::GithubPickers { project, skills } => {
                 if !matches!(app.route(), app::Route::Github { project: route_project } if route_project == &project)
                     || app.github_ui.project != project
                 {
                     continue;
-                }
-                if let Ok(workflows) = workflows {
-                    app.github_ui.workflows = workflows.workflows;
                 }
                 if let Ok(skills) = skills {
                     app.github_ui.skills = skills;
@@ -3279,36 +2760,6 @@ fn drain_background_results(
                 }
                 match result {
                     Ok(skills) => app.skills_ui.skills = skills,
-                    Err(error) => app.notice = Some(format!("load skills failed: {error}")),
-                }
-            }
-            BackgroundResult::LoadWorkflows { project, result } => {
-                if !matches!(app.route(), app::Route::Workflows { project: route_project } if route_project == &project)
-                    || app.workflows_ui.project != project
-                {
-                    continue;
-                }
-                match result {
-                    Ok(workflows) => {
-                        app.workflows_ui.workflows = workflows.workflows;
-                        if let Some(issue) = workflows.issues.first() {
-                            app.notice = Some(format!(
-                                "workflow issue: {} — {}",
-                                issue.path, issue.message
-                            ));
-                        }
-                    }
-                    Err(error) => app.notice = Some(format!("load workflows failed: {error}")),
-                }
-            }
-            BackgroundResult::LoadWorkflowSkills { project, result } => {
-                if !matches!(app.route(), app::Route::Workflows { project: route_project } if route_project == &project)
-                    || app.workflows_ui.project != project
-                {
-                    continue;
-                }
-                match result {
-                    Ok(skills) => app.workflows_ui.palette_skills = skills,
                     Err(error) => app.notice = Some(format!("load skills failed: {error}")),
                 }
             }
@@ -3334,32 +2785,6 @@ fn drain_background_results(
                     }
                     Err(error) => app.notice = Some(format!("agent config: {error}")),
                 }
-            }
-            BackgroundResult::SessionMutation {
-                action,
-                project,
-                id,
-                result,
-            } => {
-                let label = match action {
-                    SessionMutation::Send => "send",
-                    SessionMutation::Cancel => "cancel",
-                    SessionMutation::Continue => "continue",
-                    SessionMutation::Finish => "finish",
-                };
-                if let Err(error) = result {
-                    if matches!(action, SessionMutation::Cancel)
-                        && app.thread_ui.data.project == project
-                        && app.thread_ui.data.run_id == id
-                    {
-                        app.thread_ui.cancel_pending = false;
-                    }
-                    if matches!(action, SessionMutation::Send | SessionMutation::Continue) {
-                        app.thread_ui.restore_pending_prompt(&project, &id);
-                    }
-                    app.notice = Some(format!("{label} failed: {error}"));
-                }
-                app.pending.push(PendingAction::LoadThread { project, id });
             }
         }
     }
@@ -3594,8 +3019,7 @@ async fn run(
     let mut starts_in_flight = HashSet::new();
     let mut last_needs_you = usize::MAX;
     let mut bootstrap_applied = false;
-    let mut launch_args_applied =
-        cli.repo.is_none() && cli.workflow.is_none() && cli.model.is_none();
+    let mut launch_args_applied = cli.repo.is_none() && cli.model.is_none();
     while !app.should_quit() {
         let frame_started = Instant::now();
         let projection_before = app.thread_ui.projection_metrics();
@@ -3633,11 +3057,6 @@ async fn run(
         }
         if let Some(mouse) = pending_mouse {
             app.handle_event(mouse);
-        }
-        for action in &app.pending {
-            if let PendingAction::StartRun { project, .. } = action {
-                starts_in_flight.insert(project.clone());
-            }
         }
         let mut receiver_backlog = false;
         if let Some(events) = workspace_events.as_deref_mut() {
@@ -3822,74 +3241,6 @@ async fn run(
     }
 
     Ok(())
-}
-
-/// Save or export the workflows draft. The export path returns the file path it wrote. The body
-/// uses the compact `skills:` form when every step is a plain skill step and `steps:` otherwise.
-fn queue_save_or_export_workflow(
-    engine: Arc<dyn Engine>,
-    app: &mut App,
-    project: String,
-    export: bool,
-    sender: &BackgroundSender<BackgroundResult>,
-    workers: &mut BackgroundWorkers,
-) {
-    let name = if app.workflows_ui.draft_name.trim().is_empty() {
-        app.workflows_ui
-            .workflows
-            .get(app.workflows_ui.selected_tab)
-            .map(|workflow| workflow.name.clone())
-            .unwrap_or_else(|| "my-chain".to_owned())
-    } else {
-        app.workflows_ui.draft_name.trim().to_owned()
-    };
-    let steps = if app.workflows_ui.selected_tab >= app.workflows_ui.workflows.len() {
-        app.workflows_ui.draft_steps.clone()
-    } else {
-        app.workflows_ui.workflows[app.workflows_ui.selected_tab]
-            .steps
-            .clone()
-    };
-    if steps.is_empty() {
-        app.notice = Some("nothing to save — add steps first".to_owned());
-        return;
-    }
-    // The compact form is exclusive with the full form: provide either steps or skills, not both.
-    let input = match screens::workflows::skill_stack_of(&steps) {
-        Some(skills) => coducktor_contract::SaveWorkflowInput {
-            name,
-            description: None,
-            steps: None,
-            skills: Some(skills),
-            overwrite: Some(true),
-        },
-        None => coducktor_contract::SaveWorkflowInput {
-            name,
-            description: None,
-            steps: Some(steps),
-            skills: None,
-            overwrite: Some(true),
-        },
-    };
-    let scope = Scope::Project(project.clone());
-    spawn_background(
-        workers,
-        sender,
-        async move { engine.save_workflow(&scope, &input).await },
-        move |result| {
-            BackgroundResult::AppUpdate(Box::new(move |app| match result {
-                Ok(response) => {
-                    app.notice = Some(if export {
-                        format!("exported {} → {}", response.name, response.path)
-                    } else {
-                        format!("saved {} → {}", response.name, response.path)
-                    });
-                    app.pending.push(PendingAction::LoadWorkflows { project });
-                }
-                Err(error) => app.notice = Some(format!("save failed: {error}")),
-            }))
-        },
-    );
 }
 
 fn current_epoch_seconds() -> i64 {
@@ -4235,32 +3586,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_compare_refresh_failures_are_rejected() {
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        screens::compare::open(&mut app, "main", "group");
-        let stale_generation = app.begin_compare_request();
-        let current_generation = app.begin_compare_request();
-        let (sender, receiver) = channel();
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::LoadCompare {
-                project: "main".to_owned(),
-                group_id: "group".to_owned(),
-                generation: stale_generation,
-                result: Err(coducktor_client::EngineError::Unavailable {
-                    reason: "stale request".to_owned(),
-                }),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert_eq!(app.compare_request_generation, current_generation);
-        assert!(app.notice.is_none());
-    }
-
-    #[test]
     fn stale_repo_git_refresh_failures_are_rejected() {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         screens::repo_git::open(&mut app, "main", app::RepoGitTab::Changes);
@@ -4358,7 +3683,6 @@ mod tests {
         let cli = Cli {
             command: None,
             repo: Some(repo.path().to_owned()),
-            workflow: None,
             model: None,
         };
 
@@ -4540,71 +3864,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_compare_loads_do_not_replace_the_active_variant_group() {
-        let (sender, receiver) = channel();
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        screens::compare::open(&mut app, "main", "current-group");
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::LoadCompare {
-                project: "main".to_owned(),
-                group_id: "old-group".to_owned(),
-                generation: 0,
-                result: Ok(coducktor_contract::GroupResponse {
-                    group_id: "old-group".to_owned(),
-                    runs: Vec::new(),
-                }),
-            })
-            .unwrap();
-        sender
-            .send(BackgroundResult::LoadCompareVariantDiff {
-                project: "main".to_owned(),
-                group_id: "old-group".to_owned(),
-                run_id: "old-run".to_owned(),
-                result: Ok(coducktor_contract::ChangesPayload {
-                    files: Vec::new(),
-                    stat: coducktor_contract::RepoDiffStat {
-                        adds: 0.0,
-                        dels: 0.0,
-                        files: 0.0,
-                    },
-                    repointed_head: None,
-                }),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert!(app.compare_ui.group.is_none());
-        assert!(app.compare_ui.variant_diffs.is_empty());
-    }
-
-    #[test]
-    fn picked_variant_queues_a_background_task_refresh() {
-        let (sender, receiver) = channel();
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::PickVariant {
-                project: "main".to_owned(),
-                result: Ok(()),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert_eq!(app.notice.as_deref(), Some("variant picked"));
-        assert_eq!(
-            app.pending,
-            vec![PendingAction::RefreshTasks {
-                project: "main".to_owned()
-            }]
-        );
-    }
-
-    #[test]
     fn created_pr_queues_a_thread_refresh_after_completion() {
         let (sender, receiver) = channel();
         let mut app = App::new("main", Theme::detect(), Keymap::default());
@@ -4633,28 +3892,6 @@ mod tests {
                 project: "main".to_owned(),
                 id: "run-1".to_owned(),
             }]
-        );
-    }
-
-    #[test]
-    fn failed_run_activation_reports_after_background_completion() {
-        let (sender, receiver) = channel();
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::ActivateRuns {
-                result: Err(coducktor_client::EngineError::Unavailable {
-                    reason: "runner worker unavailable".to_owned(),
-                }),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert_eq!(
-            app.notice.as_deref(),
-            Some("start failed: service unavailable: runner worker unavailable")
         );
     }
 
@@ -4697,47 +3934,14 @@ mod tests {
         sender
             .send(BackgroundResult::GithubPickers {
                 project: "other".to_owned(),
-                workflows: Ok(coducktor_contract::WorkflowsResponse {
-                    workflows: Vec::new(),
-                    issues: Vec::new(),
-                }),
                 skills: Ok(Vec::new()),
             })
             .unwrap();
 
         drain_background_results(&receiver, &mut app, &mut starts_in_flight);
 
-        assert!(app.github_ui.workflows.is_empty());
         assert!(app.github_ui.skills.is_empty());
-    }
-
-    #[test]
-    fn stale_workflow_loads_do_not_update_the_active_project() {
-        let (sender, receiver) = channel();
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        screens::workflows::open(&mut app, "main");
-        let mut starts_in_flight = HashSet::new();
-
-        sender
-            .send(BackgroundResult::LoadWorkflows {
-                project: "other".to_owned(),
-                result: Ok(coducktor_contract::WorkflowsResponse {
-                    workflows: Vec::new(),
-                    issues: Vec::new(),
-                }),
-            })
-            .unwrap();
-        sender
-            .send(BackgroundResult::LoadWorkflowSkills {
-                project: "other".to_owned(),
-                result: Ok(Vec::new()),
-            })
-            .unwrap();
-
-        drain_background_results(&receiver, &mut app, &mut starts_in_flight);
-
-        assert!(app.workflows_ui.workflows.is_empty());
-        assert!(app.workflows_ui.palette_skills.is_empty());
+        assert!(app.github_ui.skills.is_empty());
     }
 
     #[test]
@@ -4862,7 +4066,7 @@ mod tests {
 
         workers.select(BackgroundLane::Mutate);
         spawn_background(&mut workers, &sender, async {}, |()| {
-            BackgroundResult::ActivateRuns { result: Ok(()) }
+            BackgroundResult::AppUpdate(Box::new(|_| {}))
         });
         let result = tokio::time::timeout(Duration::from_millis(100), async {
             loop {
@@ -4874,7 +4078,7 @@ mod tests {
         })
         .await
         .expect("mutation should have an independent worker");
-        assert!(matches!(result, BackgroundResult::ActivateRuns { .. }));
+        assert!(matches!(result, BackgroundResult::AppUpdate(_)));
         gate.notify_waiters();
     }
 
@@ -4937,7 +4141,7 @@ mod tests {
         let (sender, receiver) = channel();
         for _ in 0..BURST {
             sender
-                .send(BackgroundResult::ActivateRuns { result: Ok(()) })
+                .send(BackgroundResult::AppUpdate(Box::new(|_| {})))
                 .unwrap();
         }
         let mut app = App::new("main", Theme::detect(), Keymap::default());
@@ -4985,7 +4189,7 @@ mod tests {
             async {
                 tokio::time::sleep(Duration::from_secs(5)).await;
             },
-            |()| BackgroundResult::ActivateRuns { result: Ok(()) },
+            |()| BackgroundResult::AppUpdate(Box::new(|_| {})),
         );
         assert!(
             started.elapsed() < Duration::from_millis(100),
@@ -5069,7 +4273,6 @@ mod tests {
                 new_task: PrimeNewTaskSnapshot {
                     config: None,
                     skills: None,
-                    workflows: None,
                     workspace_config: None,
                     provider_status: None,
                     ui_state: None,
@@ -5081,51 +4284,6 @@ mod tests {
 
         assert_eq!(app.projects[0].id, "blarchy");
         assert_eq!(app.project_registry[0].root, "/home/przvl/blarchy");
-    }
-
-    #[test]
-    fn accepted_run_opens_the_live_thread_before_execution_is_activated() {
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        let mut starts_in_flight = HashSet::from(["main".to_owned()]);
-        let run = coducktor_contract::RunRecord {
-            id: "run-live".to_owned(),
-            title: "Show live activity".to_owned(),
-            workflow: "quick-task".to_owned(),
-            task: "Show my prompt and what the agent is doing".to_owned(),
-            status: coducktor_contract::RunStatus::Queued,
-            created_at: "2026-08-18T00:00:00Z".to_owned(),
-            ..coducktor_contract::RunRecord::default()
-        };
-
-        apply_started_run(
-            &mut app,
-            "main".to_owned(),
-            Ok(coducktor_contract::CreateRunResponse::Single(Box::new(run))),
-            &mut starts_in_flight,
-        );
-
-        assert!(matches!(
-            app.route(),
-            app::Route::Thread { project, id }
-                if project == "main" && id == "run-live"
-        ));
-        assert_eq!(
-            app.thread_ui
-                .data
-                .run()
-                .as_ref()
-                .map(|run| run.record.task.as_str()),
-            Some("Show my prompt and what the agent is doing")
-        );
-        assert!(matches!(
-            app.pending.first(),
-            Some(PendingAction::ActivateRuns { project }) if project == "main"
-        ));
-        assert!(
-            !app.pending
-                .iter()
-                .any(|action| matches!(action, PendingAction::LoadThread { .. }))
-        );
     }
 
     #[test]

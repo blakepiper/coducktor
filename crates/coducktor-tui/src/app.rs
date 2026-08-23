@@ -34,7 +34,6 @@ pub enum NavItem {
     RepoGit,
     Github,
     Skills,
-    Workflows,
     Settings,
 }
 
@@ -60,7 +59,6 @@ impl NavItem {
             Self::RepoGit => "Git",
             Self::Github => "GitHub",
             Self::Skills => "Skills",
-            Self::Workflows => "Workflows",
             Self::Settings => "Settings",
         }
     }
@@ -75,7 +73,6 @@ impl NavItem {
             Self::RepoGit => "repo-git",
             Self::Github => "github",
             Self::Skills => "skills",
-            Self::Workflows => "workflows",
             Self::Settings => "settings",
         }
     }
@@ -90,7 +87,6 @@ impl NavItem {
             "git" | "repo-git" => Some(Self::RepoGit),
             "github" => Some(Self::Github),
             "skills" => Some(Self::Skills),
-            "workflows" => Some(Self::Workflows),
             "settings" => Some(Self::Settings),
             _ => None,
         }
@@ -198,16 +194,9 @@ pub enum Route {
     Skills {
         project: String,
     },
-    Workflows {
-        project: String,
-    },
     RepoGit {
         project: String,
         tab: RepoGitTab,
-    },
-    Compare {
-        project: String,
-        group_id: String,
     },
     Settings {
         project: String,
@@ -256,15 +245,10 @@ impl Route {
                     id: (*parts.get(3)?).to_owned(),
                 }),
                 Some("tasks") => Some(Self::Tasks { project }),
-                Some("compare") if parts.len() >= 4 => Some(Self::Compare {
-                    project,
-                    group_id: (*parts.get(3)?).to_owned(),
-                }),
                 Some("ide") => Some(Self::Ide { project }),
                 Some("terminal") => Some(Self::Terminal { project }),
                 Some("github") => Some(Self::Github { project }),
                 Some("skills") => Some(Self::Skills { project }),
-                Some("workflows") => Some(Self::Workflows { project }),
                 Some("git" | "repo-git") => {
                     let tab = parts
                         .get(3)
@@ -302,11 +286,9 @@ impl Route {
             Self::Terminal { project } => format!("/p/{project}/terminal"),
             Self::Github { project } => format!("/p/{project}/github"),
             Self::Skills { project } => format!("/p/{project}/skills"),
-            Self::Workflows { project } => format!("/p/{project}/workflows"),
             Self::RepoGit { project, tab } => {
                 format!("/p/{project}/repo-git/{}", tab.path_segment())
             }
-            Self::Compare { project, group_id } => format!("/p/{project}/compare/{group_id}"),
             Self::Settings { project } => format!("/p/{project}/settings"),
             Self::Placeholder { project, nav } => {
                 format!("/p/{project}/{}", nav.path_segment())
@@ -327,9 +309,7 @@ impl Route {
             Self::Terminal { .. } => "TERMINAL",
             Self::Github { .. } => "GITHUB",
             Self::Skills { .. } => "SKILLS",
-            Self::Workflows { .. } => "WORKFLOWS",
             Self::RepoGit { .. } => "REPO GIT",
-            Self::Compare { .. } => "COMPARE",
             Self::Settings { .. } => "SETTINGS",
             Self::Placeholder { nav, .. } => nav.uppercase_title(),
         }
@@ -346,9 +326,7 @@ impl Route {
             | Self::Terminal { project }
             | Self::Github { project }
             | Self::Skills { project }
-            | Self::Workflows { project }
             | Self::RepoGit { project, .. }
-            | Self::Compare { project, .. }
             | Self::Settings { project }
             | Self::Placeholder { project, .. } => Some(project),
             Self::GlobalTasks | Self::GlobalSettings => None,
@@ -744,12 +722,7 @@ pub enum PendingAction {
     RefreshChatsIndex,
     /// Refresh the registered-project list after a registry mutation completes.
     RefreshProjectRegistry,
-    /// Start a new task with an already-assembled create-run body.
-    StartRun {
-        project: String,
-        input: coducktor_contract::CreateRunInput,
-    },
-    /// Create a conversation from an already-assembled New Chat body. Like `StartRun`, this
+    /// Create a conversation from an already-assembled New Chat body. This
     /// only durably queues the first turn; `ActivateConversations` opens the provider.
     CreateConversation {
         project: String,
@@ -759,11 +732,7 @@ pub enum PendingAction {
     ActivateConversations {
         project: String,
     },
-    /// Release accepted queued work only after the thread route has installed its live listener.
-    ActivateRuns {
-        project: String,
-    },
-    /// Load the new-task screen's per-project data (skills, workflows, config, …).
+    /// Load the New Chat screen's per-project data.
     RefreshNewTask {
         project: String,
     },
@@ -802,38 +771,7 @@ pub enum PendingAction {
         id: String,
         cursor: String,
     },
-    /// Deliver a message into the run's open session (or fold it into a queued prompt).
-    SendMessage {
-        project: String,
-        id: String,
-        input: coducktor_contract::MessageInput,
-    },
-    CancelRun {
-        project: String,
-        id: String,
-    },
-    /// Reopen a finished run's session — Continue, the review panel's Send back (prefixed by
-    /// the caller), and an ask-answer resume all ride this one action.
-    ContinueRun {
-        project: String,
-        id: String,
-        text: Option<String>,
-        images: Option<Vec<coducktor_contract::ImageInput>>,
-    },
-    FinishRun {
-        project: String,
-        id: String,
-    },
     CreatePr {
-        project: String,
-        id: String,
-    },
-    RemoveQueuedMessage {
-        project: String,
-        id: String,
-        message_id: String,
-    },
-    CancelAutoResume {
         project: String,
         id: String,
     },
@@ -886,23 +824,6 @@ pub enum PendingAction {
         name: String,
         from: Option<String>,
     },
-    /// Load the compare-variants screen.
-    LoadCompare {
-        project: String,
-        group_id: String,
-    },
-    /// Pick a winning run from the compare view.
-    PickVariant {
-        project: String,
-        group_id: String,
-        run_id: String,
-    },
-    /// Load one compare variant's full structured diff on demand.
-    LoadCompareVariantDiff {
-        project: String,
-        group_id: String,
-        run_id: String,
-    },
     /// Load the IDE's explorer at a project-relative directory (`None` = root).
     LoadIdeDirectory {
         project: String,
@@ -935,7 +856,7 @@ pub enum PendingAction {
     LoadGithub {
         project: String,
     },
-    /// Load the hand-to-agent workflow and skill pickers.
+    /// Load skills that can be attached when a GitHub item is opened in New Chat.
     LoadGithubPickers {
         project: String,
     },
@@ -960,36 +881,8 @@ pub enum PendingAction {
         head_sha: String,
         override_rules: bool,
     },
-    /// The hand-to-agent's run start — like `StartRun` but stays on the GitHub screen and
-    /// reports the queued run id in the hand-off card instead of navigating away.
-    GithubHandToAgent {
-        project: String,
-        input: coducktor_contract::CreateRunInput,
-    },
     LoadSkills {
         project: String,
-    },
-    LoadWorkflows {
-        project: String,
-    },
-    LoadWorkflowSkills {
-        project: String,
-    },
-    /// Save the draft in `skills:` form when portable and `steps:` otherwise.
-    SaveWorkflow {
-        project: String,
-    },
-    /// The export path: the same write, answered with the file path it landed in.
-    ExportWorkflow {
-        project: String,
-    },
-    DeleteWorkflow {
-        project: String,
-        name: String,
-    },
-    ImportWorkflow {
-        project: String,
-        yaml: String,
     },
     /// Load every Settings data source for the current project and workspace.
     LoadSettings {
@@ -1184,16 +1077,12 @@ pub struct App {
     pub repo_git_ui: crate::screens::repo_git::RepoGitUi,
     /// Rejects an older repository Git refresh after revisiting the same project.
     pub repo_git_request_generation: u64,
-    pub compare_ui: crate::screens::compare::CompareUi,
-    /// Rejects a stale aggregate compare load after returning to a group.
-    pub compare_request_generation: u64,
     pub ide_ui: crate::screens::ide::IdeUi,
     pub github_ui: crate::screens::github::GithubUi,
     /// Rejects an older GitHub aggregate refresh after the screen is reopened.
     pub github_request_generation: u64,
     pub terminal_ui: crate::screens::terminal::TerminalUi,
     pub skills_ui: crate::screens::skills::SkillsUi,
-    pub workflows_ui: crate::screens::workflows::WorkflowsUi,
     pub settings_ui: crate::screens::settings::SettingsUi,
     pub settings_request_generation: u64,
     pub palette: crate::overlay::Palette,
@@ -1295,14 +1184,11 @@ impl App {
             task_git_request_generation: 0,
             repo_git_ui: crate::screens::repo_git::RepoGitUi::default(),
             repo_git_request_generation: 0,
-            compare_ui: crate::screens::compare::CompareUi::default(),
-            compare_request_generation: 0,
             ide_ui: crate::screens::ide::IdeUi::default(),
             github_ui: crate::screens::github::GithubUi::default(),
             github_request_generation: 0,
             terminal_ui: crate::screens::terminal::TerminalUi::default(),
             skills_ui: crate::screens::skills::SkillsUi::default(),
-            workflows_ui: crate::screens::workflows::WorkflowsUi::default(),
             settings_ui: crate::screens::settings::SettingsUi::default(),
             settings_request_generation: 0,
             palette: crate::overlay::Palette::default(),
@@ -1454,7 +1340,6 @@ impl App {
             HitAction::RepoGit => Some(SidebarRow::Nav(NavItem::RepoGit)),
             HitAction::Github => Some(SidebarRow::Nav(NavItem::Github)),
             HitAction::Skills => Some(SidebarRow::Nav(NavItem::Skills)),
-            HitAction::Workflows => Some(SidebarRow::Nav(NavItem::Workflows)),
             HitAction::Settings => Some(SidebarRow::Nav(NavItem::Settings)),
             HitAction::GlobalTasks => Some(SidebarRow::GlobalTasks),
             HitAction::GlobalSettings => Some(SidebarRow::GlobalSettings),
@@ -1576,11 +1461,6 @@ impl App {
     pub fn begin_scratchpad_request(&mut self) -> u64 {
         self.scratchpad_request_generation = self.scratchpad_request_generation.wrapping_add(1);
         self.scratchpad_request_generation
-    }
-
-    pub fn begin_compare_request(&mut self) -> u64 {
-        self.compare_request_generation = self.compare_request_generation.wrapping_add(1);
-        self.compare_request_generation
     }
 
     pub fn begin_repo_git_request(&mut self) -> u64 {
@@ -1876,7 +1756,7 @@ impl App {
     }
 
     /// Snap the sidebar selector to the current route's sidebar row after a
-    /// navigation. Routes without a sidebar row (task Git tabs, compare) leave
+    /// navigation. Routes without a sidebar row (task Git tabs) leave
     /// the selector where it is.
     fn anchor_sidebar_selection(&mut self) {
         let row = match self.route() {
@@ -1888,12 +1768,11 @@ impl App {
             Route::Terminal { .. } => SidebarRow::Nav(NavItem::Terminal),
             Route::Github { .. } => SidebarRow::Nav(NavItem::Github),
             Route::Skills { .. } => SidebarRow::Nav(NavItem::Skills),
-            Route::Workflows { .. } => SidebarRow::Nav(NavItem::Workflows),
             Route::RepoGit { .. } => SidebarRow::Nav(NavItem::RepoGit),
             Route::Settings { .. } => SidebarRow::Nav(NavItem::Settings),
             Route::GlobalTasks => SidebarRow::GlobalTasks,
             Route::GlobalSettings => SidebarRow::GlobalSettings,
-            Route::TaskGit { .. } | Route::Compare { .. } => return,
+            Route::TaskGit { .. } => return,
         };
         if let Some(index) = self.sidebar_position(row) {
             self.sidebar_selected = index;
@@ -2501,16 +2380,8 @@ impl App {
                 crate::screens::skills::render(frame, area, self);
                 return;
             }
-            Route::Workflows { .. } => {
-                crate::screens::workflows::render(frame, area, self);
-                return;
-            }
             Route::RepoGit { .. } => {
                 crate::screens::repo_git::render(frame, area, self);
-                return;
-            }
-            Route::Compare { .. } => {
-                crate::screens::compare::render(frame, area, self);
                 return;
             }
             Route::Settings { .. } => {
@@ -2802,13 +2673,6 @@ impl App {
                         self.sidebar_selected = index;
                         self.sidebar_focus = true;
                     }
-                    // Press on a workflow step arms the drag-reorder; the click itself is
-                    // still applied (it moves the step cursor), the release does the move.
-                    if let HitAction::WorkflowStep(index) = action
-                        && matches!(self.route(), Route::Workflows { .. })
-                    {
-                        self.workflows_ui.drag_source = Some(index);
-                    }
                     if action == HitAction::SidebarEdge {
                         self.sidebar_dragging = true;
                     } else {
@@ -2841,13 +2705,6 @@ impl App {
                     .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let Some(source) = self.workflows_ui.drag_source.take()
-                    && let Some(HitAction::WorkflowStep(target)) =
-                        self.hitmap.hit(mouse.column, mouse.row)
-                    && matches!(self.route(), Route::Workflows { .. })
-                {
-                    crate::screens::workflows::drop_step(self, source, target);
-                }
                 self.sidebar_dragging = false;
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -2960,9 +2817,7 @@ impl App {
             Route::Terminal { .. } => crate::screens::terminal::handle_key(self, key),
             Route::Github { .. } => crate::screens::github::handle_key(self, key),
             Route::Skills { .. } => crate::screens::skills::handle_key(self, key),
-            Route::Workflows { .. } => crate::screens::workflows::handle_key(self, key),
             Route::RepoGit { .. } => crate::screens::repo_git::handle_key(self, key),
-            Route::Compare { .. } => crate::screens::compare::handle_key(self, key),
             Route::Settings { .. } => crate::screens::settings::handle_key(self, key),
             Route::Placeholder { .. } => false,
         }
@@ -2989,7 +2844,6 @@ impl App {
             Route::Github { .. } => {
                 self.github_ui.focus == crate::screens::github::GithubFocus::SkillPicker
             }
-            Route::Workflows { .. } => self.workflows_ui.import_open || self.workflows_ui.name_open,
             Route::RepoGit { .. } => self.repo_git_ui.new_branch_open,
             Route::TaskGit { .. } => self.task_git_ui.commit_dialog_open,
             Route::Settings { .. } | Route::GlobalSettings => {
@@ -3084,11 +2938,6 @@ impl App {
                 self.skills_ui.query = query;
                 self.skills_ui.selected = 0;
             }
-            Route::Workflows { .. } => {
-                self.workflows_ui.focus = crate::screens::workflows::WorkflowFocus::Palette;
-                self.workflows_ui.palette_query = query;
-                self.workflows_ui.palette_selected = 0;
-            }
             Route::Thread { .. } => {}
             _ => {
                 self.notice = Some("search is not available in this view".to_owned());
@@ -3113,12 +2962,6 @@ impl App {
             }
             Route::Skills { .. } => {
                 crate::screens::skills::move_search_match(self, forward);
-            }
-            Route::Workflows { .. } => {
-                crate::screens::workflows::move_palette_selection(
-                    self,
-                    if forward { 1 } else { -1 },
-                );
             }
             Route::Thread { .. } => {
                 let area = self.thread_ui.transcript_area.unwrap_or_default();
@@ -3172,42 +3015,6 @@ impl App {
                     0
                 };
             }
-            Route::Workflows { .. } => match self.workflows_ui.focus {
-                crate::screens::workflows::WorkflowFocus::Palette => {
-                    let query = self.workflows_ui.palette_query.to_lowercase();
-                    self.workflows_ui.palette_selected = if end {
-                        self.workflows_ui
-                            .palette_skills
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find_map(|(index, skill)| {
-                                (query.is_empty()
-                                    || skill.name.to_lowercase().contains(&query)
-                                    || skill
-                                        .description
-                                        .as_deref()
-                                        .is_some_and(|value| value.to_lowercase().contains(&query)))
-                                .then_some(index)
-                            })
-                            .unwrap_or(0)
-                    } else {
-                        0
-                    };
-                }
-                _ => {
-                    let count =
-                        if self.workflows_ui.selected_tab < self.workflows_ui.workflows.len() {
-                            self.workflows_ui.workflows[self.workflows_ui.selected_tab]
-                                .steps
-                                .len()
-                        } else {
-                            self.workflows_ui.draft_steps.len()
-                        };
-                    self.workflows_ui.steps_selected =
-                        if end { count.saturating_sub(1) } else { 0 };
-                }
-            },
             Route::Github { .. } => {
                 if self.github_ui.focus == crate::screens::github::GithubFocus::Detail {
                     if end {
@@ -3238,7 +3045,6 @@ impl App {
             Route::RepoGit { .. } => crate::screens::repo_git::jump_selection(self, end),
             Route::TaskGit { .. } => crate::screens::task_git::jump_selection(self, end),
             Route::Ide { .. } => crate::screens::ide::jump_tree(self, end),
-            Route::Compare { .. } => crate::screens::compare::jump_selection(self, end),
             Route::Settings { .. } | Route::GlobalSettings => {
                 crate::screens::settings::jump_selection(self, end)
             }
@@ -3302,20 +3108,6 @@ impl App {
                     crate::screens::github::apply_hit(self, GithubAction::SwitchTab(next));
                 }
             }
-            Route::Workflows { .. } => {
-                let count = self.workflows_ui.workflows.len() + 1;
-                let next = (self.workflows_ui.selected_tab as i32 + delta).rem_euclid(count as i32)
-                    as usize;
-                crate::screens::workflows::apply_tab_hit(self, next);
-            }
-            Route::Compare { .. } => {
-                let code = if forward {
-                    KeyCode::Right
-                } else {
-                    KeyCode::Left
-                };
-                self.handle_route_key(KeyEvent::new(code, crossterm::event::KeyModifiers::NONE));
-            }
             _ => self.notice = Some("this view has no tabs".to_owned()),
         }
     }
@@ -3325,12 +3117,6 @@ impl App {
             KeyCode::Char('y') | KeyCode::Enter => {
                 let action = confirm.action.clone();
                 self.confirm = None;
-                if let PendingAction::CancelRun { project, id } = &action
-                    && self.thread_ui.data.project == *project
-                    && self.thread_ui.data.run_id == *id
-                {
-                    self.thread_ui.cancel_pending = true;
-                }
                 match action {
                     // Quit, scratchpad clearing, and IDE-discard resolutions are app-local state changes,
                     // resolved here; everything else waits for main's engine.
@@ -3511,7 +3297,6 @@ impl App {
             ActionId::RepoGit => self.navigate(NavItem::RepoGit),
             ActionId::Github => self.navigate(NavItem::Github),
             ActionId::Skills => self.navigate(NavItem::Skills),
-            ActionId::Workflows => self.navigate(NavItem::Workflows),
             ActionId::Settings => self.navigate(NavItem::Settings),
             ActionId::ToggleSidebar => self.toggle_sidebar(),
             ActionId::FocusSidebar => self.focus_sidebar(),
@@ -3547,7 +3332,6 @@ impl App {
             HitAction::RepoGit => self.navigate(NavItem::RepoGit),
             HitAction::Github => self.navigate(NavItem::Github),
             HitAction::Skills => self.navigate(NavItem::Skills),
-            HitAction::Workflows => self.navigate(NavItem::Workflows),
             HitAction::Settings => self.navigate(NavItem::Settings),
             HitAction::ActiveTasks => self.set_task_filter(TaskFilter::Active),
             HitAction::ArchivedTasks => self.set_task_filter(TaskFilter::Archived),
@@ -3635,34 +3419,9 @@ impl App {
                     self.skills_ui.selected = index;
                 }
             }
-            HitAction::WorkflowTab(index) => {
-                if matches!(self.route(), Route::Workflows { .. }) {
-                    crate::screens::workflows::apply_tab_hit(self, index);
-                }
-            }
-            HitAction::WorkflowStep(index) => {
-                if matches!(self.route(), Route::Workflows { .. }) {
-                    crate::screens::workflows::apply_step_hit(self, index);
-                }
-            }
-            HitAction::WorkflowSkill(index) => {
-                if matches!(self.route(), Route::Workflows { .. }) {
-                    crate::screens::workflows::apply_palette_hit(self, index);
-                }
-            }
-            HitAction::WorkflowControl(action) => {
-                if matches!(self.route(), Route::Workflows { .. }) {
-                    crate::screens::workflows::apply_control(self, action);
-                }
-            }
             HitAction::RepoGitScreen(action) => {
                 if matches!(self.route(), Route::RepoGit { .. }) {
                     crate::screens::repo_git::apply_hit(self, action);
-                }
-            }
-            HitAction::CompareScreen(action) => {
-                if matches!(self.route(), Route::Compare { .. }) {
-                    crate::screens::compare::apply_hit(self, action);
                 }
             }
             HitAction::SettingsSection(index) => {
@@ -3682,10 +3441,6 @@ impl App {
                     self.settings_ui.row = index;
                     crate::screens::settings::delete_selected(self);
                 }
-            }
-            HitAction::OpenCompare(group_id) => {
-                let project = self.current_project().to_owned();
-                crate::screens::compare::open(self, &project, &group_id);
             }
         }
     }
@@ -3716,7 +3471,6 @@ impl App {
             NavItem::Terminal => crate::screens::terminal::open(self, &project),
             NavItem::Github => crate::screens::github::open(self, &project),
             NavItem::Skills => crate::screens::skills::open(self, &project),
-            NavItem::Workflows => crate::screens::workflows::open(self, &project),
             NavItem::RepoGit => crate::screens::repo_git::open(self, &project, RepoGitTab::Commits),
             NavItem::Settings => crate::screens::settings::open(self, &project),
         }
@@ -3786,7 +3540,6 @@ impl App {
             || (nav == NavItem::Terminal && matches!(self.route(), Route::Terminal { .. }))
             || (nav == NavItem::Github && matches!(self.route(), Route::Github { .. }))
             || (nav == NavItem::Skills && matches!(self.route(), Route::Skills { .. }))
-            || (nav == NavItem::Workflows && matches!(self.route(), Route::Workflows { .. }))
             || (nav == NavItem::RepoGit && matches!(self.route(), Route::RepoGit { .. }))
             || (nav == NavItem::Settings && matches!(self.route(), Route::Settings { .. }))
     }
@@ -3811,10 +3564,7 @@ impl App {
 
     fn screen_pane_count(&self) -> usize {
         match self.route() {
-            Route::Ide { .. }
-            | Route::Workflows { .. }
-            | Route::Github { .. }
-            | Route::Skills { .. } => 2,
+            Route::Ide { .. } | Route::Github { .. } | Route::Skills { .. } => 2,
             Route::Settings { .. } | Route::GlobalSettings => {
                 if self.settings_ui.file_editing {
                     1
@@ -3841,11 +3591,6 @@ impl App {
                 crate::screens::ide::IdeFocus::Tree => 0,
                 crate::screens::ide::IdeFocus::Editor => 1,
             },
-            Route::Workflows { .. } => match self.workflows_ui.focus {
-                crate::screens::workflows::WorkflowFocus::Palette => 0,
-                crate::screens::workflows::WorkflowFocus::Steps
-                | crate::screens::workflows::WorkflowFocus::Tabs => 1,
-            },
             Route::TaskGit { tab, .. } => match tab {
                 TaskGitTab::Changes | TaskGitTab::Commits => match self.task_git_ui.focus {
                     crate::screens::task_git::TaskGitFocus::Tree => 0,
@@ -3871,13 +3616,6 @@ impl App {
                     crate::screens::ide::IdeFocus::Tree
                 } else {
                     crate::screens::ide::IdeFocus::Editor
-                };
-            }
-            Route::Workflows { .. } => {
-                self.workflows_ui.focus = if pane == 0 {
-                    crate::screens::workflows::WorkflowFocus::Palette
-                } else {
-                    crate::screens::workflows::WorkflowFocus::Steps
                 };
             }
             Route::TaskGit { tab, .. } => {
@@ -3908,12 +3646,6 @@ impl App {
             self.route(),
             Route::Settings { .. } | Route::GlobalSettings
                 if self.settings_ui.file_editing || self.settings_ui.edit.is_some()
-        ) || matches!(
-            self.route(),
-            Route::Workflows { .. }
-                if self.workflows_ui.import_open
-                    || self.workflows_ui.name_open
-                    || self.workflows_ui.delete_confirm.is_some()
         ) || matches!(
             self.route(),
             Route::RepoGit { .. } if self.repo_git_ui.new_branch_open
@@ -4117,10 +3849,6 @@ impl App {
                 ("TASK FILES", "↑↓ browse · Enter open")
             }
             Route::TaskGit { .. } => ("TASK DIFF", "j/k scroll · Ctrl-W h files · gt tabs"),
-            Route::Workflows { .. } if self.current_screen_pane() == 0 => {
-                ("SKILL PALETTE", "↑↓ choose skill · Enter add")
-            }
-            Route::Workflows { .. } => ("WORKFLOW STEPS", "↑↓ choose step"),
             Route::Github { .. } if self.current_screen_pane() == 0 => {
                 ("GITHUB LIST", "↑↓ choose item · Enter open")
             }
@@ -4169,7 +3897,6 @@ fn nav_hit_action(nav: NavItem) -> HitAction {
         NavItem::RepoGit => HitAction::RepoGit,
         NavItem::Github => HitAction::Github,
         NavItem::Skills => HitAction::Skills,
-        NavItem::Workflows => HitAction::Workflows,
         NavItem::Settings => HitAction::Settings,
     }
 }
@@ -4423,7 +4150,6 @@ impl UppercaseTitle for NavItem {
             Self::RepoGit => "GIT",
             Self::Github => "GITHUB",
             Self::Skills => "SKILLS",
-            Self::Workflows => "WORKFLOWS",
             Self::Settings => "SETTINGS",
         }
     }
@@ -5218,65 +4944,6 @@ mod tests {
     }
 
     #[test]
-    fn confirming_cancel_closes_the_dialog_and_shows_immediate_feedback() {
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        app.thread_ui.data.project = "main".to_owned();
-        app.thread_ui.data.run_id = "run-1".to_owned();
-        app.confirm = Some(ConfirmRequest {
-            text: "Stop this run?".to_owned(),
-            action: PendingAction::CancelRun {
-                project: "main".to_owned(),
-                id: "run-1".to_owned(),
-            },
-        });
-
-        app.handle_event(Event::Key(KeyEvent::new(
-            KeyCode::Char('y'),
-            KeyModifiers::NONE,
-        )));
-
-        assert!(app.confirm.is_none());
-        assert!(app.thread_ui.cancel_pending);
-        assert!(matches!(
-            app.pending.as_slice(),
-            [PendingAction::CancelRun { project, id }]
-                if project == "main" && id == "run-1"
-        ));
-    }
-
-    #[test]
-    fn task_ex_commands_reuse_action_availability_and_confirmations() {
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        app.set_tasks(vec![run_record(1, RunStatus::Waiting, None)]);
-        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
-        terminal.draw(|frame| app.render(frame)).unwrap();
-        ctrl_w(&mut app, 'l');
-        app.handle_event(Event::Key(KeyEvent::new(
-            KeyCode::Char('j'),
-            KeyModifiers::NONE,
-        )));
-        app.handle_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-
-        app.execute_command("stop");
-        assert!(matches!(
-            app.confirm.as_ref().map(|confirm| &confirm.action),
-            Some(PendingAction::CancelRun { project, id })
-                if project == "main" && id == "run-1"
-        ));
-        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        assert!(app.confirm.is_none());
-
-        app.execute_command("delete");
-        assert_eq!(
-            app.notice.as_deref(),
-            Some(":delete is not available for this task")
-        );
-    }
-
-    #[test]
     fn startup_ctrl_w_l_enters_the_tasks_screen() {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         assert!(matches!(app.route(), Route::Tasks { .. }));
@@ -5286,31 +4953,6 @@ mod tests {
 
         assert!(!app.sidebar_focus);
         assert!(matches!(app.route(), Route::Tasks { .. }));
-    }
-
-    #[test]
-    fn ctrl_focus_reaches_workflow_palette_then_steps() {
-        let mut app = App::new("main", Theme::detect(), Keymap::default());
-        app.navigate(NavItem::Workflows);
-        app.focus_sidebar();
-
-        ctrl_w(&mut app, 'l');
-        assert_eq!(
-            app.workflows_ui.focus,
-            crate::screens::workflows::WorkflowFocus::Palette
-        );
-        ctrl_w(&mut app, 'l');
-        assert_eq!(
-            app.workflows_ui.focus,
-            crate::screens::workflows::WorkflowFocus::Steps
-        );
-        ctrl_w(&mut app, 'h');
-        assert_eq!(
-            app.workflows_ui.focus,
-            crate::screens::workflows::WorkflowFocus::Palette
-        );
-        ctrl_w(&mut app, 'h');
-        assert!(app.sidebar_focus);
     }
 
     #[test]

@@ -330,6 +330,25 @@ fn update_repo_config(
     if let Some(composer_patch) = &input.composer_defaults {
         apply_project_composer_defaults(&mut raw, composer_patch);
     }
+    for key in [
+        "plannerModel",
+        "namerModel",
+        "liveTitleUpdates",
+        "reviewGate",
+        "systemPrompt",
+    ] {
+        raw.remove(key);
+    }
+    if raw.get("defaultRunner").and_then(Value::as_str) == Some("auto") {
+        raw.insert("defaultRunner".to_owned(), Value::String("claude".to_owned()));
+    }
+    if let Some(defaults) = raw.get_mut("composerDefaults").and_then(Value::as_object_mut) {
+        defaults.remove("variants");
+        defaults.remove("autonomous");
+        if defaults.is_empty() {
+            raw.remove("composerDefaults");
+        }
+    }
     coducktor_core::workspace::config::atomic_write_json_sync(
         &repo_config_path_at(repo_root, state_home),
         &Value::Object(raw),
@@ -342,6 +361,7 @@ fn update_repo_config(
 // same name (see `save_workflow`'s own doc comment for why duplication, not sharing, is right
 // here) ------------------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn workflow_slug(value: &str) -> String {
     let mut slug = String::new();
     let mut pending_dash = false;
@@ -363,6 +383,7 @@ fn workflow_slug(value: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn workflow_step_issue(steps: &[WorkflowStepDef]) -> Option<String> {
     for step in steps {
         if step.id.is_empty() {
@@ -386,6 +407,7 @@ fn workflow_step_issue(steps: &[WorkflowStepDef]) -> Option<String> {
     steps_issue(steps)
 }
 
+#[allow(dead_code)]
 fn workflow_input(
     input: &SaveWorkflowInput,
 ) -> Result<(String, Option<String>, Vec<WorkflowStepDef>, bool), String> {
@@ -447,6 +469,7 @@ fn workflow_input(
     ))
 }
 
+#[allow(dead_code)]
 fn workflow_yaml(
     name: &str,
     description: Option<&str>,
@@ -808,6 +831,7 @@ fn provider_status_response() -> ProviderStatusResponse {
 
 /// Build the stable connected-provider fallback order while degrading past missing CLIs and
 /// disabled providers.
+#[allow(dead_code)]
 fn effective_requested_runner(
     authored: Option<RunnerSelection>,
     configured: RunnerSelection,
@@ -817,6 +841,7 @@ fn effective_requested_runner(
 
 /// One candidate's raw evaluation before ranking. `score` is only meaningful when `eligible`;
 /// [`finalize_routing_decision`] never reads it otherwise.
+#[allow(dead_code)]
 struct CandidateEval {
     runner: Runner,
     eligible: bool,
@@ -826,6 +851,7 @@ struct CandidateEval {
 
 /// A route key stable across a process's lifetime — not the executable path, which an
 /// environment override can change without changing what route this candidate represents.
+#[allow(dead_code)]
 fn auto_route_key(runner: Runner) -> String {
     let name = match runner {
         Runner::Claude => "claude",
@@ -841,6 +867,7 @@ fn auto_route_key(runner: Runner) -> String {
 /// ineligible candidates keep their evaluated reason. Shared by both the connectivity-only and
 /// quota-aware candidate builders so a decision's shape never drifts from the `Vec<Runner>` an
 /// older caller derives from it.
+#[allow(dead_code)]
 fn finalize_routing_decision(evals: Vec<CandidateEval>) -> coducktor_contract::RoutingDecision {
     use coducktor_contract::{ConsideredCandidate, RouteSelection, RoutingReasonCode};
 
@@ -893,6 +920,7 @@ fn finalize_routing_decision(evals: Vec<CandidateEval>) -> coducktor_contract::R
     }
 }
 
+#[allow(dead_code)]
 fn connection_eval(status: &ProviderStatusResponse, runner: Runner) -> CandidateEval {
     use coducktor_contract::RoutingReasonCode;
 
@@ -918,6 +946,7 @@ fn connection_eval(status: &ProviderStatusResponse, runner: Runner) -> Candidate
 
 /// Connectivity-only Auto candidates — every enabled, connected runner is eligible with no
 /// preference among them. Used when no usage snapshot is available at all.
+#[allow(dead_code)]
 fn connectivity_routing_decision(
     status: &ProviderStatusResponse,
 ) -> coducktor_contract::RoutingDecision {
@@ -930,6 +959,7 @@ fn connectivity_routing_decision(
 
 /// The candidates a decision judged eligible, best-ranked first — the order the `Vec<Runner>`
 /// call sites (candidate list, `Auto`'s own resolved-runner pick) have always needed.
+#[allow(dead_code)]
 fn routing_decision_runners(decision: &coducktor_contract::RoutingDecision) -> Vec<Runner> {
     decision
         .considered
@@ -942,6 +972,7 @@ fn routing_decision_runners(decision: &coducktor_contract::RoutingDecision) -> V
 /// Quota-aware provider selection deliberately ranks trustworthy available capacity above an
 /// unknown account. This is the missing behavior that otherwise made the legacy Claude-first
 /// fallback win even while Codex had a fresh, unused weekly window.
+#[allow(dead_code)]
 fn quota_aware_routing_decision(
     status: &ProviderStatusResponse,
     usage: &WorkspaceUsageResponse,
@@ -1768,4 +1799,3 @@ fn first_line(bytes: &[u8]) -> Option<String> {
         .filter(|line| !line.is_empty())
         .map(str::to_owned)
 }
-
