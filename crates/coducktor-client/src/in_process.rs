@@ -2521,6 +2521,9 @@ impl InProcessEngine {
             if input.notifications.is_some() {
                 state.notifications = input.notifications.clone();
             }
+            if input.terminal.is_some() {
+                state.terminal = input.terminal.clone();
+            }
             if input.task_table.is_some() {
                 state.task_table = input.task_table.clone();
             }
@@ -3349,6 +3352,15 @@ fn workspace_config_response(
         agent_defaults: coducktor_contract::AgentDefaults {
             runner: config.agent_defaults.runner,
             models,
+        },
+        available_terminals: if cfg!(target_os = "linux") {
+            detected_linux_terminals(
+                std::env::var_os("PATH").as_deref(),
+                std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+                std::env::var("DESKTOP_SESSION").ok().as_deref(),
+            )
+        } else {
+            Vec::new()
         },
     }
 }
@@ -6510,10 +6522,106 @@ mod tests {
             .unwrap_or_else(|_| bin.clone().into_os_string());
         // xterm is only the last-resort candidate, so the probe must pick alacritty and
         // pass it the repo root.
-        let (program, args) = linux_terminal_command_in(dir.path(), Some(&probe_path))
-            .expect("a terminal command should resolve");
+        let (program, args) =
+            linux_terminal_command_in(dir.path(), Some(&probe_path), None, None, None)
+                .expect("a terminal command should resolve");
         assert_eq!(program, "alacritty");
         assert!(args.iter().any(|arg| arg == &dir.path().to_string_lossy()));
+    }
+
+    #[test]
+    fn linux_terminal_command_prefers_the_desktop_sessions_own_terminal() {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for name in ["xfce4-terminal", "alacritty"] {
+            let path = bin.join(name);
+            std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let previous = std::env::var_os("PATH").unwrap_or_default();
+        let probe_path = std::env::join_paths([&bin, &std::path::PathBuf::from(&previous)])
+            .unwrap_or_else(|_| bin.clone().into_os_string());
+        // alacritty is earlier in the static fallback order, but an XFCE session should still
+        // win the probe over it when both are installed.
+        let (program, _args) =
+            linux_terminal_command_in(dir.path(), Some(&probe_path), None, Some("XFCE"), None)
+                .expect("a terminal command should resolve");
+        assert_eq!(program, "xfce4-terminal");
+    }
+
+    #[test]
+    fn linux_terminal_command_honors_an_explicit_preference_over_the_desktop_hint() {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for name in ["xfce4-terminal", "kitty"] {
+            let path = bin.join(name);
+            std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let previous = std::env::var_os("PATH").unwrap_or_default();
+        let probe_path = std::env::join_paths([&bin, &std::path::PathBuf::from(&previous)])
+            .unwrap_or_else(|_| bin.clone().into_os_string());
+        let (program, _args) = linux_terminal_command_in(
+            dir.path(),
+            Some(&probe_path),
+            Some("kitty"),
+            Some("XFCE"),
+            None,
+        )
+        .expect("a terminal command should resolve");
+        assert_eq!(program, "kitty");
+    }
+
+    #[test]
+    fn linux_terminal_command_falls_back_when_the_preference_is_no_longer_installed() {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let path = bin.join("xfce4-terminal");
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let previous = std::env::var_os("PATH").unwrap_or_default();
+        let probe_path = std::env::join_paths([&bin, &std::path::PathBuf::from(&previous)])
+            .unwrap_or_else(|_| bin.clone().into_os_string());
+        let (program, _args) =
+            linux_terminal_command_in(dir.path(), Some(&probe_path), Some("kitty"), None, None)
+                .expect("a terminal command should resolve");
+        assert_eq!(program, "xfce4-terminal");
+    }
+
+    #[test]
+    fn detected_linux_terminals_lists_only_whats_installed_desktop_first() {
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for name in ["alacritty", "xfce4-terminal", "kitty"] {
+            let path = bin.join(name);
+            std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let previous = std::env::var_os("PATH").unwrap_or_default();
+        let probe_path = std::env::join_paths([&bin, &std::path::PathBuf::from(&previous)])
+            .unwrap_or_else(|_| bin.clone().into_os_string());
+        let detected = detected_linux_terminals(Some(&probe_path), Some("XFCE"), None);
+        assert_eq!(detected, vec!["xfce4-terminal", "alacritty", "kitty"]);
     }
 
     // ---- variant groups -------------------------------------------------------------------

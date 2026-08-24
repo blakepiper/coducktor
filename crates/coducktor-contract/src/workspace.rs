@@ -18,6 +18,12 @@ pub struct WorkspaceConfigResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota_routing: Option<QuotaRouting>,
     pub agent_defaults: AgentDefaults,
+    /// Terminal emulators actually installed on this machine, in the same desktop-aware
+    /// priority order auto-detection would probe. Empty on platforms (macOS, Windows) that
+    /// have only one "open a terminal" target and no ambiguity to resolve. Not itself the
+    /// stored preference — see [`TerminalUiState`].
+    #[serde(default)]
+    pub available_terminals: Vec<String>,
 }
 
 /// The composer defaults nested in the workspace configuration.
@@ -552,6 +558,20 @@ pub struct NotificationsUiState {
     pub extra: ExtraFields,
 }
 
+/// The user's terminal-launcher preference for "Open in Terminal" actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TerminalUiState {
+    /// The exact emulator binary to launch, e.g. `xfce4-terminal`. Absent, or a value no
+    /// longer installed on this machine, means auto-detect: prefer the current desktop
+    /// session's own terminal, then fall back through the other installed emulators in
+    /// priority order. Only meaningful on Linux, where more than one emulator can be
+    /// installed at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    #[serde(flatten, default)]
+    pub extra: ExtraFields,
+}
+
 /// `WorkspaceUiState` contract shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -564,6 +584,8 @@ pub struct WorkspaceUiState {
     pub appearance: Option<Appearance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notifications: Option<NotificationsUiState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalUiState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_table: Option<TaskTableUiState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

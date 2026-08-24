@@ -649,7 +649,7 @@ fn rows_appearance(app: &App) -> Vec<Row> {
         .as_ref()
         .and_then(|state| state.appearance.clone())
         .unwrap_or_default();
-    vec![
+    let mut rows = vec![
         row("Theme", app.theme.name.label().to_owned()),
         row(
             "Density",
@@ -665,7 +665,54 @@ fn rows_appearance(app: &App) -> Vec<Row> {
                 .map(|width| format!("{width:?}").to_lowercase())
                 .unwrap_or_else(|| "narrow".to_owned()),
         ),
-    ]
+    ];
+    // Only Linux can have more than one terminal emulator installed at once; macOS and
+    // Windows each target one fixed terminal, so there's nothing to pick between.
+    if cfg!(target_os = "linux") {
+        rows.push(row("Default terminal", terminal_row_value(app)));
+    }
+    rows
+}
+
+/// The current explicit choice, or `Auto · <what auto-detect would pick>` when unset.
+fn terminal_row_value(app: &App) -> String {
+    match current_terminal_program(app) {
+        Some(program) => program,
+        None => match terminal_options(app).get(1) {
+            Some(Some(first_detected)) => format!("Auto · {first_detected}"),
+            _ => "Auto · none detected".to_owned(),
+        },
+    }
+}
+
+fn current_terminal_program(app: &App) -> Option<String> {
+    app.settings_ui
+        .workspace_ui_state
+        .as_ref()
+        .and_then(|state| state.terminal.as_ref())
+        .and_then(|terminal| terminal.program.clone())
+}
+
+/// `Auto` (`None`) followed by every terminal emulator detected on this machine, in the same
+/// order [`terminal_row_value`]'s auto-detect fallback would pick from.
+fn terminal_options(app: &App) -> Vec<Option<String>> {
+    let mut options = vec![None];
+    if let Some(config) = &app.settings_ui.workspace_config {
+        options.extend(config.available_terminals.iter().cloned().map(Some));
+    }
+    options
+}
+
+fn put_terminal_program(app: &mut App, program: Option<String>) {
+    let input = WorkspaceUiState {
+        terminal: Some(coducktor_contract::TerminalUiState {
+            program,
+            extra: Default::default(),
+        }),
+        ..Default::default()
+    };
+    app.pending
+        .push(PendingAction::SettingsPutWorkspaceUiState { input });
 }
 
 fn rows_notifications(app: &App) -> Vec<Row> {
@@ -1351,6 +1398,21 @@ fn cycle_appearance(app: &mut App, row: usize, backward: bool) {
             };
             appearance.width = Some(next);
             put_appearance(app, appearance);
+        }
+        3 => {
+            let options = terminal_options(app);
+            let current = current_terminal_program(app);
+            let position = options
+                .iter()
+                .position(|option| *option == current)
+                .unwrap_or(0);
+            let len = options.len();
+            let next = if backward {
+                (position + len - 1) % len
+            } else {
+                (position + 1) % len
+            };
+            put_terminal_program(app, options[next].clone());
         }
         _ => {}
     }
@@ -2049,6 +2111,11 @@ mod tests {
             },
             quota_routing: None,
             agent_defaults: AgentDefaults::default(),
+            available_terminals: vec![
+                "xfce4-terminal".to_owned(),
+                "alacritty".to_owned(),
+                "kitty".to_owned(),
+            ],
         }
     }
 
@@ -2376,6 +2443,53 @@ mod tests {
             PendingAction::SettingsPutWorkspaceUiState { input }
                 if input.appearance.as_ref().and_then(|appearance| appearance.theme)
                     == Some(coducktor_contract::ThemePreference::Lakes)
+        )));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn default_terminal_row_cycles_auto_then_each_detected_emulator_and_persists() {
+        let mut app = app_with_global_settings();
+        app.set_screen_focus(0);
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(current_section(&app), SettingsSection::Appearance);
+        app.set_screen_focus(1);
+        // Rows: Theme, Density, Reading width, Default terminal.
+        for _ in 0..3 {
+            handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        let content = render_text(&mut app, 120, 40);
+        assert!(content.contains("Auto · xfce4-terminal"));
+
+        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::SettingsPutWorkspaceUiState { input }
+                if input.terminal.as_ref().and_then(|terminal| terminal.program.clone())
+                    == Some("xfce4-terminal".to_owned())
+        )));
+        app.settings_ui.workspace_ui_state = Some(WorkspaceUiState {
+            terminal: Some(coducktor_contract::TerminalUiState {
+                program: Some("xfce4-terminal".to_owned()),
+                extra: Default::default(),
+            }),
+            ..Default::default()
+        });
+        app.pending.clear();
+
+        handle_key(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::SettingsPutWorkspaceUiState { input }
+                if input.terminal.as_ref().and_then(|terminal| terminal.program.clone())
+                    == Some("alacritty".to_owned())
         )));
     }
 

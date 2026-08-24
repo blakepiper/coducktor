@@ -20,6 +20,9 @@
   load as `idle` unless their durable event log contains an unanswered structured ask.
 - Live events use independent per-topic channels. Receiver lag and sequence holes are visible in
   the debug HUD and trigger a durable thread/workspace refresh instead of silently losing output.
+- "Open in Terminal" on Linux now prefers the current desktop session's own terminal (e.g.
+  `xfce4-terminal` on an XFCE session) over the static fallback order, and Settings → Appearance
+  gained a "Default terminal" row to pin an exact installed emulator instead of auto-detecting.
 
 Any future compatibility change belongs in this section with its migration or
 degradation path. Retired release notes and one-time implementation plans are

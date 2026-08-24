@@ -224,51 +224,152 @@ fn open_target_command(target: &str, root: &Path) -> Option<(String, Vec<String>
         .then(|| (binary.to_owned(), vec![root.to_string_lossy().into_owned()]))
 }
 
-/// The first Linux terminal emulator present on this machine, with the argument spelling
-/// that opens it at `root`. `x-terminal-emulator` comes first (Debian's alternatives slot);
-/// everything after it is a direct probe so machines without it still get a terminal.
+/// Every Linux terminal emulator this app knows how to drive, in the fallback probe order
+/// used when neither an explicit preference nor the desktop session's own terminal is
+/// available. `x-terminal-emulator` comes first (Debian's alternatives slot); everything
+/// after it is a direct probe so machines without it still get a terminal.
+const LINUX_TERMINAL_CANDIDATES: &[&str] = &[
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "alacritty",
+    "kitty",
+    "foot",
+    "wezterm",
+    "xterm",
+];
+
+/// The argument spelling that opens `binary` at `root_str`, or `None` for a binary outside
+/// [`LINUX_TERMINAL_CANDIDATES`] — guards a stale explicit preference read back from disk
+/// (the emulator was uninstalled, or the value was hand-edited) against being launched with
+/// guessed-wrong arguments.
+fn linux_terminal_args(binary: &str, root_str: &str) -> Option<Vec<String>> {
+    Some(match binary {
+        "x-terminal-emulator" | "xfce4-terminal" | "alacritty" | "foot" => {
+            vec!["--working-directory".to_owned(), root_str.to_owned()]
+        }
+        "gnome-terminal" => vec![format!("--working-directory={root_str}")],
+        "konsole" => vec!["--workdir".to_owned(), root_str.to_owned()],
+        "kitty" => vec!["--directory".to_owned(), root_str.to_owned()],
+        "wezterm" => vec!["start".to_owned(), "--cwd".to_owned(), root_str.to_owned()],
+        "xterm" => vec![
+            "-e".to_owned(),
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!("cd {root_str} && exec $SHELL"),
+        ],
+        _ => return None,
+    })
+}
+
+/// The desktop session's own terminal, when it's one this app recognizes — read from
+/// `XDG_CURRENT_DESKTOP` (colon/comma-separated per the spec, e.g. `XFCE`), falling back to
+/// `DESKTOP_SESSION`. This is what makes auto-detection "intelligent" rather than a fixed
+/// list: a user who never sets an explicit preference still lands on the terminal that
+/// matches the desktop they're actually running, instead of whichever binary happens to be
+/// registered as `x-terminal-emulator` or comes first alphabetically.
+fn desktop_environment_terminal_hint(
+    xdg_current_desktop: Option<&str>,
+    desktop_session: Option<&str>,
+) -> Option<&'static str> {
+    let combined = [xdg_current_desktop, desktop_session]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(":")
+        .to_lowercase();
+    if combined.is_empty() {
+        None
+    } else if combined.contains("xfce") {
+        Some("xfce4-terminal")
+    } else if combined.contains("kde") || combined.contains("plasma") {
+        Some("konsole")
+    } else if combined.contains("gnome") || combined.contains("cinnamon") || combined.contains("unity")
+    {
+        Some("gnome-terminal")
+    } else {
+        None
+    }
+}
+
+/// [`LINUX_TERMINAL_CANDIDATES`] with the desktop session's own terminal (when recognized)
+/// moved to the front.
+fn ordered_linux_terminal_candidates(
+    xdg_current_desktop: Option<&str>,
+    desktop_session: Option<&str>,
+) -> Vec<&'static str> {
+    let mut ordered = LINUX_TERMINAL_CANDIDATES.to_vec();
+    if let Some(hint) = desktop_environment_terminal_hint(xdg_current_desktop, desktop_session)
+        && let Some(position) = ordered.iter().position(|candidate| *candidate == hint)
+    {
+        ordered.remove(position);
+        ordered.insert(0, hint);
+    }
+    ordered
+}
+
+/// The user's explicit terminal choice from Settings (`~/.coducktor/ui-state.json`), if one
+/// is set. `None` means auto-detect.
+fn preferred_terminal_program() -> Option<String> {
+    let path = coducktor_core::paths::workspace_ui_state_path(&ProcessEnv);
+    read_workspace_ui_state(&path)
+        .terminal
+        .and_then(|terminal| terminal.program)
+        .filter(|program| !program.is_empty())
+}
+
+/// The terminal emulator to launch at `root`: the user's explicit preference when it's still
+/// installed, else the desktop-aware auto-detect probe.
 fn linux_terminal_command(root: &Path) -> Option<(String, Vec<String>)> {
-    linux_terminal_command_in(root, std::env::var_os("PATH").as_deref())
+    linux_terminal_command_in(
+        root,
+        std::env::var_os("PATH").as_deref(),
+        preferred_terminal_program().as_deref(),
+        std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        std::env::var("DESKTOP_SESSION").ok().as_deref(),
+    )
 }
 
 fn linux_terminal_command_in(
     root: &Path,
     path: Option<&std::ffi::OsStr>,
+    preferred: Option<&str>,
+    xdg_current_desktop: Option<&str>,
+    desktop_session: Option<&str>,
 ) -> Option<(String, Vec<String>)> {
     let root_str = root.to_string_lossy().into_owned();
-    for binary in [
-        "x-terminal-emulator",
-        "gnome-terminal",
-        "konsole",
-        "xfce4-terminal",
-        "alacritty",
-        "kitty",
-        "foot",
-        "wezterm",
-        "xterm",
-    ] {
+    if let Some(preferred) = preferred
+        && executable_in_path(preferred, path)
+        && let Some(args) = linux_terminal_args(preferred, &root_str)
+    {
+        return Some((preferred.to_owned(), args));
+    }
+    for binary in ordered_linux_terminal_candidates(xdg_current_desktop, desktop_session) {
         if !executable_in_path(binary, path) {
             continue;
         }
-        let args = match binary {
-            "x-terminal-emulator" | "xfce4-terminal" | "alacritty" | "foot" => {
-                vec!["--working-directory".to_owned(), root_str.clone()]
-            }
-            "gnome-terminal" => vec![format!("--working-directory={root_str}")],
-            "konsole" => vec!["--workdir".to_owned(), root_str.clone()],
-            "kitty" => vec!["--directory".to_owned(), root_str.clone()],
-            "wezterm" => vec!["start".to_owned(), "--cwd".to_owned(), root_str.clone()],
-            "xterm" => vec![
-                "-e".to_owned(),
-                "sh".to_owned(),
-                "-c".to_owned(),
-                format!("cd {root_str} && exec $SHELL"),
-            ],
-            _ => continue,
+        let Some(args) = linux_terminal_args(binary, &root_str) else {
+            continue;
         };
         return Some((binary.to_owned(), args));
     }
     None
+}
+
+/// Every known Linux terminal emulator actually present on `PATH`, in the same desktop-aware
+/// priority order [`linux_terminal_command`] would probe — the choices Settings offers for
+/// the explicit terminal preference.
+fn detected_linux_terminals(
+    path: Option<&std::ffi::OsStr>,
+    xdg_current_desktop: Option<&str>,
+    desktop_session: Option<&str>,
+) -> Vec<String> {
+    ordered_linux_terminal_candidates(xdg_current_desktop, desktop_session)
+        .into_iter()
+        .filter(|binary| executable_in_path(binary, path))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn open_target(root: &Path, target: &str) -> bool {

@@ -1569,6 +1569,7 @@ mod tests {
             },
             quota_routing: None,
             agent_defaults: AgentDefaults::default(),
+            available_terminals: Vec::new(),
         });
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
         assert_eq!(effective.reasoning_effort, ReasoningEffort::XHigh);
@@ -1610,6 +1611,7 @@ mod tests {
             },
             quota_routing: None,
             agent_defaults: AgentDefaults::default(),
+            available_terminals: Vec::new(),
         });
 
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
