@@ -116,17 +116,6 @@ type ConversationEventObservers =
 type ConversationRecordObservers =
     BTreeMap<ConversationObserverId, Box<dyn Fn(&ConversationRecord) + Send + Sync>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConversationManagerOptions {
-    pub max_parallel: usize,
-}
-
-impl Default for ConversationManagerOptions {
-    fn default() -> Self {
-        Self { max_parallel: 2 }
-    }
-}
-
 /// Durable conversation lifecycle with split-phase provider calls and FIFO admission.
 pub struct ConversationManager {
     data_dir: PathBuf,
@@ -137,7 +126,6 @@ pub struct ConversationManager {
     in_flight: HashMap<String, TurnCancellation>,
     seqs: HashMap<String, f64>,
     appenders: HashMap<String, ConversationEventAppender>,
-    options: ConversationManagerOptions,
     write_quarantined: bool,
     warnings: Vec<String>,
     event_observers: ConversationEventObservers,
@@ -147,14 +135,6 @@ pub struct ConversationManager {
 
 impl ConversationManager {
     pub fn open(data_dir: impl Into<PathBuf>) -> Self {
-        Self::open_with_options(data_dir, ConversationManagerOptions::default())
-    }
-
-    pub fn open_with_options(
-        data_dir: impl Into<PathBuf>,
-        mut options: ConversationManagerOptions,
-    ) -> Self {
-        options.max_parallel = options.max_parallel.max(1);
         let data_dir = data_dir.into();
         let load = persistence::load_mixed_index(&store::index_path(&data_dir), true);
         let write_quarantined = load.write_quarantined();
@@ -186,7 +166,6 @@ impl ConversationManager {
             in_flight: HashMap::new(),
             seqs: HashMap::new(),
             appenders: HashMap::new(),
-            options,
             write_quarantined,
             warnings: Vec::new(),
             event_observers: BTreeMap::new(),
@@ -385,9 +364,6 @@ impl ConversationManager {
     /// Mark the oldest queued turn admitted before returning it to a provider worker.
     pub fn admit_next(&mut self) -> io::Result<Option<AdmittedConversationTurn>> {
         self.ensure_writable()?;
-        if self.in_flight.len() >= self.options.max_parallel {
-            return Ok(None);
-        }
         while let Some(request) = self.queue.pop_front() {
             let Some(previous) = self.conversations.get(&request.conversation_id).cloned() else {
                 continue;
@@ -1697,26 +1673,24 @@ mod tests {
     }
 
     #[test]
-    fn fifo_admission_respects_the_bounded_provider_pool() {
+    fn fifo_admission_allows_every_chat_to_run_concurrently() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manager = ConversationManager::open_with_options(
-            dir.path(),
-            ConversationManagerOptions { max_parallel: 1 },
-        );
+        let mut manager = ConversationManager::open(dir.path());
         let first = manager.create(new_conversation("first queued")).unwrap();
         let second = manager.create(new_conversation("second queued")).unwrap();
 
         let admitted_first = manager.admit_next().unwrap().unwrap();
+        let admitted_second = manager.admit_next().unwrap().unwrap();
 
         assert_eq!(admitted_first.request.conversation_id, first.id);
-        assert_eq!(manager.active_provider_calls(), 1);
-        assert!(manager.admit_next().unwrap().is_none());
+        assert_eq!(admitted_second.request.conversation_id, second.id);
+        assert_eq!(manager.active_provider_calls(), 2);
         manager
             .apply_turn_result(admitted_first, Ok(ended(false)))
             .unwrap();
-
-        let admitted_second = manager.admit_next().unwrap().unwrap();
-        assert_eq!(admitted_second.request.conversation_id, second.id);
+        manager
+            .apply_turn_result(admitted_second, Ok(ended(false)))
+            .unwrap();
     }
 
     #[test]

@@ -39,8 +39,9 @@ default; unknown events degrade to a bounded generic activity row. The view foll
 only while the user remains at the bottom.
 
 An idle composer sends one ordinary user message as one native provider turn. While queued or
-running, the user may edit and retain a draft but cannot submit it. `Esc` cancels the active turn
-without discarding the draft. After ended, failed, or cancelled, the composer is available again.
+running, the user may edit and retain a draft but cannot submit it. `Esc` leaves Insert mode;
+`Ctrl-C`, the Cancel header action, or `:stop` stops the active turn without discarding the draft.
+After ended, failed, or cancelled, the composer is available again.
 
 Only a provider-native structured question creates Needs you controls. Answering it continues the
 same pending turn. A question in ordinary assistant prose ends normally and the user's reply is a

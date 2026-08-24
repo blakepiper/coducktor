@@ -230,9 +230,9 @@ augmentation must never alter the displayed or durable user message.
 
 While a turn is queued or running, the user may type and retain a draft, but Send is disabled.
 There is no in-flight message queue. This enforces the primary sequence—response, then next
-prompt—and removes ambiguous steering and boundary delivery. `Esc` cancels the current live turn
-using the existing immediate-cancel behavior; it does not discard the draft or archive the
-conversation.
+prompt—and removes ambiguous steering and boundary delivery. `Esc` leaves Insert mode without
+touching the live turn. `Ctrl-C`, the Cancel header action, or `:stop` stops the current turn; none
+of them discards the draft or archives the conversation.
 
 While `needs_input`, show the native question controls directly above the composer. Submitting an
 answer addresses the pending request. A separate ordinary follow-up is unavailable until that

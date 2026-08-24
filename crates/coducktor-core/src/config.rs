@@ -4,8 +4,8 @@
 //! blocks startup).
 //!
 //! Unlike `workspace::config` (every field `.catch`'d, so one bad key never evicts its
-//! siblings), six fields here have a `.default()` with NO `.catch()` — `maxParallel`,
-//! `defaultRunner`, `plannerModel`, `namerModel`, `liveTitleUpdates`,
+//! siblings), five fields here have a `.default()` with NO `.catch()` — `defaultRunner`,
+//! `plannerModel`, `namerModel`, `liveTitleUpdates`,
 //! `baseBranch`. Zod's `.default(x)` only fires when the key is `undefined`; a PRESENT but
 //! invalid value on any of these fails the whole-object parse, and `loadConfig` then
 //! discards the entire raw file rather than salvaging the other keys — "malformed
@@ -28,7 +28,6 @@ pub const DEFAULT_WORKTREE_RETENTION: u64 = 10;
 /// Parsed shape of a project's local settings file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RepoConfig {
-    pub max_parallel: u64,
     pub worktree_retention: u64,
     pub memory_limit_mb: Option<u64>,
     pub default_runner: RunnerSelection,
@@ -56,7 +55,6 @@ pub struct ProjectComposerDefaults {
 impl Default for RepoConfig {
     fn default() -> Self {
         Self {
-            max_parallel: 2,
             worktree_retention: DEFAULT_WORKTREE_RETENTION,
             memory_limit_mb: None,
             default_runner: RunnerSelection::Claude,
@@ -153,7 +151,6 @@ fn runner_models_to_map(models: &AgentDefaultModels) -> serde_json::Map<String, 
 fn try_parse(raw: &Value) -> Option<RepoConfig> {
     let object = raw.as_object()?;
 
-    let max_parallel = strict_bounded_u64(object.get("maxParallel"), 1, 16, 2)?;
     let default_runner =
         strict_runner_selection(object.get("defaultRunner"), RunnerSelection::Claude)?;
     let planner_model = strict_min_len_str(object.get("plannerModel"), 1, "sonnet")?;
@@ -187,7 +184,6 @@ fn try_parse(raw: &Value) -> Option<RepoConfig> {
     let composer_defaults = parse_project_composer_defaults(object.get("composerDefaults"));
 
     Some(RepoConfig {
-        max_parallel,
         worktree_retention,
         memory_limit_mb,
         default_runner,
@@ -214,18 +210,6 @@ fn parse_project_composer_defaults(value: Option<&Value>) -> ProjectComposerDefa
         autonomous: zod::bool_opt(zod::field(object, "autonomous")),
         worktree: zod::bool_opt(zod::field(object, "worktree")),
         git_auto: zod::bool_opt(zod::field(object, "gitAuto")),
-    }
-}
-
-fn strict_bounded_u64(value: Option<&Value>, lo: i64, hi: i64, default: i64) -> Option<u64> {
-    match value {
-        None => Some(default as u64),
-        Some(v) => {
-            let n = v
-                .as_i64()
-                .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))?;
-            (n >= lo && n <= hi).then_some(n as u64)
-        }
     }
 }
 
@@ -340,7 +324,6 @@ mod tests {
     fn additive_keys_round_trip() {
         let raw = serde_json::json!({ "maxParallel": 4, "worktreeRetention": 0 });
         let parsed = try_parse(&with_machine_defaults(&raw, &machine(None))).unwrap();
-        assert_eq!(parsed.max_parallel, 4);
         assert_eq!(
             parsed.worktree_retention, 0,
             "0 is meaningful (unlimited), not falsy-treated"
@@ -357,7 +340,6 @@ mod tests {
     fn an_invalid_catch_field_degrades_alone() {
         let raw = serde_json::json!({ "maxParallel": 4, "worktreeRetention": 99999 });
         let parsed = try_parse(&raw).unwrap();
-        assert_eq!(parsed.max_parallel, 4);
         assert_eq!(parsed.worktree_retention, DEFAULT_WORKTREE_RETENTION);
     }
 

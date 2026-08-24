@@ -2189,6 +2189,9 @@ impl App {
                 Route::Thread { .. } => {
                     crate::screens::thread::handle_paste(self, &text);
                 }
+                Route::Scratchpad { .. } => {
+                    crate::screens::scratchpad::handle_paste(self, &text);
+                }
                 _ => {}
             },
             _ => {}
@@ -2466,6 +2469,9 @@ impl App {
 
     fn render_status(&mut self, frame: &mut Frame<'_>, area: Rect) {
         let mode = match self.mode {
+            InputMode::Normal if matches!(self.route(), Route::Scratchpad { .. }) => {
+                crate::screens::scratchpad::mode_label(self)
+            }
             InputMode::Normal if self.uses_literal_input() => "INSERT",
             InputMode::Normal => "NORMAL",
             InputMode::Command => "COMMAND",
@@ -2714,6 +2720,11 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         self.hover = Some((mouse.column, mouse.row));
+        if matches!(self.route(), Route::Scratchpad { .. })
+            && crate::screens::scratchpad::handle_mouse(self, mouse)
+        {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(action) = self.hitmap.hit(mouse.column, mouse.row) {
@@ -2882,7 +2893,8 @@ impl App {
             Route::NewTask { .. } => {
                 self.new_task_ui.composer_focused || self.new_task_ui.picker.is_some()
             }
-            Route::Scratchpad { .. } | Route::Terminal { .. } => true,
+            Route::Scratchpad { .. } => crate::screens::scratchpad::captures_text_keys(self),
+            Route::Terminal { .. } => true,
             Route::Thread { .. } => {
                 self.thread_ui.subagent_sheet.is_some()
                     || matches!(
@@ -3044,6 +3056,17 @@ impl App {
             }
             Route::Thread { .. } if end => self.thread_ui.transcript.jump_to_bottom(),
             Route::Thread { .. } => self.thread_ui.transcript.jump_to_top(),
+            Route::Scratchpad { .. } => {
+                self.scratchpad_ui.editor.clear_selection();
+                if end {
+                    self.scratchpad_ui.editor.row =
+                        self.scratchpad_ui.editor.line_count().saturating_sub(1);
+                    self.scratchpad_ui.editor.move_end();
+                } else {
+                    self.scratchpad_ui.editor.row = 0;
+                    self.scratchpad_ui.editor.move_home();
+                }
+            }
             Route::Skills { .. } => {
                 let query = self.skills_ui.query.to_lowercase();
                 self.skills_ui.selected = if end {

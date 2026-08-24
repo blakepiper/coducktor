@@ -16,8 +16,8 @@ use coducktor_contract::{
     Appearance, ComposerDefaultsPatch, ConfigResponse, NotificationsUiState,
     ProjectComposerDefaults, PromptTemplate, Runner, RunnerModelCatalogResponse, RunnerModelsPatch,
     SelectAgentProfileInput, SetConfigInput, SetWorkspaceConfigInput, UiState,
-    UpdateAgentProfileInput, UpdateProjectInput, WorkspaceConfigResponse, WorkspaceUiState,
-    WorkspaceUsageResponse, WorktreesResponse, runner_discovers_models,
+    UpdateAgentProfileInput, WorkspaceConfigResponse, WorkspaceUiState, WorkspaceUsageResponse,
+    WorktreesResponse, runner_discovers_models,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -132,14 +132,12 @@ pub enum EditTarget {
     Model(Runner),
     GlobalModel(Runner),
     WorktreeRetention,
-    MaxParallel,
     MemoryLimitMb,
     WorktreeRetentionDefault,
     ChecksoutRoot,
     AccountNewDir(Runner),
     AccountRename(String),
     ProjectRoot,
-    ProjectMaxParallel(String),
     /// Prompt-template edit: `index` is `None` for a new entry; `stage` 0 edits the label,
     /// 1 edits the body (the label typed at stage 0 travels in `label`).
     TemplateLabel {
@@ -754,7 +752,6 @@ fn rows_resources(app: &App) -> Vec<Row> {
     };
     let resources = &config.resources;
     let mut rows = vec![
-        row("Max parallel chats", resources.max_parallel.to_string()),
         row(
             "Memory limit (MB) · unavailable",
             format!(
@@ -844,12 +841,8 @@ fn rows_projects(app: &App) -> Vec<Row> {
         rows.push(row(
             format!("{}  [{:?}]", project.name, project.status),
             format!(
-                "{}  max-parallel={}  tags={}",
+                "{}  tags={}",
                 project.root,
-                project
-                    .max_parallel
-                    .map(|n| (n as u64).to_string())
-                    .unwrap_or_else(|| "inherit".to_owned()),
                 project.tags.clone().unwrap_or_default().join(",")
             ),
         ));
@@ -1903,19 +1896,8 @@ fn activate_projects(app: &mut App, row: usize) {
             .map(|c| c.projects_dir.clone())
             .unwrap_or_default();
         start_edit(app, EditTarget::ChecksoutRoot, current);
-        return;
     }
-    let Some(project) = app.project_registry.get(row - 2) else {
-        return;
-    };
-    start_edit(
-        app,
-        EditTarget::ProjectMaxParallel(project.id.clone()),
-        project
-            .max_parallel
-            .map(|n| (n as u64).to_string())
-            .unwrap_or_default(),
-    );
+    // Project rows are informational; repository removal remains an explicit delete action.
 }
 
 fn submit_edit(app: &mut App, edit: SettingsEdit) {
@@ -1975,9 +1957,7 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
                     .push(PendingAction::SettingsPutConfig { project, input });
             }
         }
-        EditTarget::MaxParallel
-        | EditTarget::MemoryLimitMb
-        | EditTarget::WorktreeRetentionDefault => {
+        EditTarget::MemoryLimitMb | EditTarget::WorktreeRetentionDefault => {
             // Reserved for a future numeric-resource picker; Resources' number fields are
             // currently read-only in this cut (toggles and quota routing are the writable
             // knobs — see the module doc's scope-cut list).
@@ -2014,20 +1994,6 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
                 app.pending
                     .push(PendingAction::SettingsRegisterProject { root: text });
             }
-        }
-        EditTarget::ProjectMaxParallel(id) => {
-            let value = if text.is_empty() {
-                None
-            } else {
-                text.parse::<u64>().ok()
-            };
-            app.pending.push(PendingAction::SettingsUpdateProject {
-                id,
-                input: UpdateProjectInput {
-                    max_parallel: Some(value),
-                    tags: None,
-                },
-            });
         }
         EditTarget::TemplateLabel { index } => {
             if text.is_empty() {
@@ -2081,7 +2047,6 @@ mod tests {
             default_models: RunnerModels::default(),
             composer_defaults: None,
             models_locked: false,
-            max_parallel: 2,
             memory_limit_mb: None,
             worktree_retention: 5,
             live_title_updates: Some(true),
@@ -2101,7 +2066,6 @@ mod tests {
                 git_auto: None,
             },
             resources: WorkspaceResources {
-                max_parallel: 4,
                 max_monitoring_sessions: 2,
                 monitoring_wake_interval_minutes: None,
                 auto_resume_on_usage_limit: false,
@@ -2263,7 +2227,6 @@ mod tests {
         assert!(content.contains("Codex · default"));
         assert!(content.contains("Weekly window"));
         assert!(content.contains("0% used"));
-        assert!(content.contains("Max parallel chats"));
         assert!(content.contains("Memory limit (MB) · unavailable"));
         assert!(!content.contains("100% available"));
     }
@@ -2410,7 +2373,6 @@ mod tests {
         let content = render_text(&mut app, 120, 40);
 
         for (label, unavailable) in [
-            ("Max parallel chats", false),
             ("Default worktree retention", false),
             ("Memory limit (MB) · unavailable", true),
         ] {

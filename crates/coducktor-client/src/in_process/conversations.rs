@@ -275,12 +275,7 @@ impl InProcessEngine {
         {
             return Ok(open.clone());
         }
-        let manager = ConversationManager::open_with_options(
-            self.project_data_dir(&entry.root),
-            ConversationManagerOptions {
-                max_parallel: self.loaded_workspace_config().resources.max_parallel.max(1) as usize,
-            },
-        );
+        let manager = ConversationManager::open(self.project_data_dir(&entry.root));
         let manager = Arc::new(RunManagerMutex::new(manager));
         self.wire_conversations(&project_id, &manager);
         let open = ProjectConversations {

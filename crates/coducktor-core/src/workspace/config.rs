@@ -112,7 +112,6 @@ pub struct WorkspaceProject {
     pub added_at: String,
     pub last_opened_at: String,
     pub source: ProjectSource,
-    pub max_parallel: Option<u64>,
     pub tags: Option<Vec<String>>,
     pub extra: Map<String, Value>,
 }
@@ -178,8 +177,6 @@ impl WorkspaceProject {
             added_at: zod::capped_str_or(object.get("addedAt"), 64, ""),
             last_opened_at: zod::capped_str_or(object.get("lastOpenedAt"), 64, ""),
             source,
-            max_parallel: zod::bounded_i64_nullable(object.get("maxParallel"), 1, 16, None)
-                .map(|v| v as u64),
             tags,
             extra: zod::extra_fields(object, PROJECT_KEYS),
         })
@@ -202,10 +199,6 @@ impl WorkspaceProject {
                     }),
                 ),
                 (
-                    "maxParallel",
-                    self.max_parallel.map(Value::from).unwrap_or(Value::Null),
-                ),
-                (
                     "tags",
                     match &self.tags {
                         Some(tags) => Value::from(tags.clone()),
@@ -224,7 +217,6 @@ pub const DEFAULT_MONITORING_WAKE_MINUTES: u64 = 5;
 /// Workspace resource limits and defaults.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resources {
-    pub max_parallel: u64,
     pub max_monitoring_sessions: u64,
     /// `None` is an explicit "park until resumed" choice (the schema's nullable), and is
     /// preserved distinct from the default — never replaced by it.
@@ -256,7 +248,6 @@ impl Resources {
     fn parse(value: Option<&Value>) -> Self {
         let object = zod::as_map(value);
         Self {
-            max_parallel: zod::bounded_i64(zod::field(object, "maxParallel"), 1, 16, 2) as u64,
             max_monitoring_sessions: zod::bounded_i64(
                 zod::field(object, "maxMonitoringSessions"),
                 0,
@@ -301,7 +292,6 @@ impl Resources {
         zod::merge_extra(
             &self.extra,
             vec![
-                ("maxParallel", Value::from(self.max_parallel)),
                 (
                     "memoryLimitMb",
                     self.memory_limit_mb.map(Value::from).unwrap_or(Value::Null),
@@ -1050,7 +1040,6 @@ mod tests {
         let config = WorkspaceConfig::default_for(&env());
         assert_eq!(config.schema_version, 0);
         assert_eq!(config.projects_dir, "~/coducktor/projects");
-        assert_eq!(config.resources.max_parallel, 2);
         assert_eq!(config.resources.monitoring_wake_interval_minutes, Some(5));
         assert_eq!(config.resources.memory_limit_mb, None);
         assert_eq!(
@@ -1086,10 +1075,8 @@ mod tests {
 
     #[test]
     fn a_bad_value_degrades_only_that_key() {
-        let raw =
-            serde_json::json!({ "resources": { "maxParallel": 4, "maxMonitoringSessions": 999 } });
+        let raw = serde_json::json!({ "resources": { "maxMonitoringSessions": 999 } });
         let config = WorkspaceConfig::parse(&raw, &env());
-        assert_eq!(config.resources.max_parallel, 4, "the sibling key survives");
         assert_eq!(
             config.resources.max_monitoring_sessions, 2,
             "the bad key degrades to its default"
@@ -1122,20 +1109,19 @@ mod tests {
     fn unknown_top_level_and_nested_keys_round_trip() {
         let raw = serde_json::json!({
             "fromTheFuture": "keep me",
-            "resources": { "alsoFromTheFuture": 42, "maxParallel": 3 },
+            "resources": { "alsoFromTheFuture": 42 },
         });
         let config = WorkspaceConfig::parse(&raw, &env());
         let written = config.to_value();
         assert_eq!(written["fromTheFuture"], "keep me");
         assert_eq!(written["resources"]["alsoFromTheFuture"], 42);
-        assert_eq!(written["resources"]["maxParallel"], 3);
     }
 
     #[test]
     fn round_trip_through_parse_and_serialize_is_stable() {
         let raw = serde_json::json!({
             "schemaVersion": 2,
-            "resources": { "maxParallel": 5 },
+            "resources": { "memoryLimitMb": 512 },
             "agentDefaults": { "runner": "codex", "models": { "codex": "gpt" } },
             "projects": [{ "id": "shop", "root": "/repo/shop", "tags": ["storefront"] }],
         });
@@ -1256,6 +1242,7 @@ mod tests {
         assert_eq!(raw["composerDefaults"]["reasoning"], "high");
         assert_eq!(raw["composerDefaults"]["worktree"], false);
         for key in [
+            "maxParallel",
             "maxMonitoringSessions",
             "monitoringWakeIntervalMinutes",
             "autoResumeOnUsageLimit",
@@ -1274,11 +1261,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         merge_write_workspace_config(&path, &env(), |config| {
-            config.resources.max_parallel = 7;
+            config.resources.memory_limit_mb = Some(512);
         })
         .unwrap();
         let reloaded = load_workspace_config(&path, &env());
-        assert_eq!(reloaded.resources.max_parallel, 7);
+        assert_eq!(reloaded.resources.memory_limit_mb, Some(512));
         assert!(workspace_config_backup_path(&path).exists());
     }
 
@@ -1294,7 +1281,6 @@ mod tests {
                 added_at: String::new(),
                 last_opened_at: String::new(),
                 source: ProjectSource::Local,
-                max_parallel: None,
                 tags: None,
                 extra: Map::new(),
             });
@@ -1317,7 +1303,6 @@ mod tests {
                 added_at: String::new(),
                 last_opened_at: String::new(),
                 source: ProjectSource::Local,
-                max_parallel: None,
                 tags: None,
                 extra: Map::new(),
             });

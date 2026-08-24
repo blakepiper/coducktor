@@ -1,6 +1,6 @@
 //! A per-project quick-note editor persisted under the user's Coducktor home, outside Git.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -17,7 +17,19 @@ pub struct ScratchpadUi {
     pub loaded: bool,
     pub saving: bool,
     pub viewport: usize,
+    pub area: Rect,
+    pub mode: ScratchpadMode,
+    mouse_dragging: bool,
+    pending_delete: bool,
     highlighter: Highlighter,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScratchpadMode {
+    #[default]
+    Normal,
+    Insert,
+    Visual,
 }
 
 impl Default for ScratchpadUi {
@@ -28,6 +40,10 @@ impl Default for ScratchpadUi {
             loaded: false,
             saving: false,
             viewport: 0,
+            area: Rect::default(),
+            mode: ScratchpadMode::Normal,
+            mouse_dragging: false,
+            pending_delete: false,
             highlighter: Highlighter::new(),
         }
     }
@@ -75,19 +91,21 @@ pub(crate) fn clear_after_confirmation(app: &mut App, project: &str) {
 }
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
-    let title = if !app.scratchpad_ui.loaded {
-        "Scratchpad — loading…"
+    let state = if !app.scratchpad_ui.loaded {
+        "loading…"
     } else if app.scratchpad_ui.saving {
-        "Scratchpad — saving…"
+        "saving…"
     } else {
-        "Scratchpad — saved locally"
+        "saved locally"
     };
+    let title = format!("Scratchpad — {} — {state}", mode_label(app));
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
         .border_style(Style::default().fg(app.theme.palette.accent));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    app.scratchpad_ui.area = inner;
     app.scratchpad_ui.viewport = inner.height as usize;
     app.scratchpad_ui
         .editor
@@ -104,6 +122,16 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    match app.scratchpad_ui.mode {
+        ScratchpadMode::Normal => return handle_normal_key(app, key),
+        ScratchpadMode::Visual => return handle_visual_key(app, key),
+        ScratchpadMode::Insert => {}
+    }
+    if key.code == KeyCode::Esc {
+        app.scratchpad_ui.mode = ScratchpadMode::Normal;
+        app.scratchpad_ui.editor.clear_selection();
+        return true;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('s') => {
@@ -198,6 +226,176 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     true
 }
 
+pub fn handle_paste(app: &mut App, text: &str) -> bool {
+    if app.scratchpad_ui.mode != ScratchpadMode::Insert {
+        return false;
+    }
+    app.scratchpad_ui.editor.insert_text(text);
+    queue_save(app);
+    true
+}
+
+pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let area = app.scratchpad_ui.area;
+    let inside = area.contains((mouse.column, mouse.row).into());
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if inside => {
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+            place_mouse_caret(app, mouse, false);
+            app.scratchpad_ui.editor.begin_selection();
+            app.scratchpad_ui.mouse_dragging = true;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.scratchpad_ui.mouse_dragging => {
+            place_mouse_caret(app, mouse, true);
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.scratchpad_ui.mouse_dragging => {
+            if inside {
+                place_mouse_caret(app, mouse, true);
+            }
+            app.scratchpad_ui.mouse_dragging = false;
+            if !app.scratchpad_ui.editor.has_selection() {
+                app.scratchpad_ui.editor.clear_selection();
+            }
+            true
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if inside => {
+            app.scratchpad_ui.mode = ScratchpadMode::Normal;
+            app.scratchpad_ui.editor.clear_selection();
+            for _ in 0..3 {
+                if mouse.kind == MouseEventKind::ScrollUp {
+                    app.scratchpad_ui.editor.move_up();
+                } else {
+                    app.scratchpad_ui.editor.move_down();
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn captures_text_keys(app: &App) -> bool {
+    app.scratchpad_ui.mode != ScratchpadMode::Normal
+}
+
+pub fn mode_label(app: &App) -> &'static str {
+    match app.scratchpad_ui.mode {
+        ScratchpadMode::Normal => "NORMAL",
+        ScratchpadMode::Insert => "INSERT",
+        ScratchpadMode::Visual => "VISUAL",
+    }
+}
+
+fn place_mouse_caret(app: &mut App, mouse: MouseEvent, extend_selection: bool) {
+    let area = app.scratchpad_ui.area;
+    let row = usize::from(
+        mouse
+            .row
+            .saturating_sub(area.y)
+            .min(area.height.saturating_sub(1)),
+    );
+    let column = usize::from(
+        mouse
+            .column
+            .saturating_sub(area.x)
+            .min(area.width.saturating_sub(1)),
+    );
+    app.scratchpad_ui.editor.place_caret_wrapped(
+        area.width,
+        app.scratchpad_ui.viewport,
+        row,
+        column,
+        extend_selection,
+    );
+}
+
+fn handle_normal_key(app: &mut App, key: KeyEvent) -> bool {
+    if key.code == KeyCode::Char('d') {
+        if app.scratchpad_ui.pending_delete {
+            app.scratchpad_ui.editor.delete_line();
+            app.scratchpad_ui.pending_delete = false;
+            queue_save(app);
+        } else {
+            app.scratchpad_ui.pending_delete = true;
+        }
+        return true;
+    }
+    app.scratchpad_ui.pending_delete = false;
+    let editor = &mut app.scratchpad_ui.editor;
+    match key.code {
+        KeyCode::Char('i') => app.scratchpad_ui.mode = ScratchpadMode::Insert,
+        KeyCode::Char('a') => {
+            editor.move_right();
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+        }
+        KeyCode::Char('I') => {
+            editor.move_home();
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+        }
+        KeyCode::Char('A') => {
+            editor.move_end();
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+        }
+        KeyCode::Char('o') => {
+            editor.move_end();
+            editor.insert_newline();
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+            queue_save(app);
+        }
+        KeyCode::Char('O') => {
+            editor.open_line_above();
+            app.scratchpad_ui.mode = ScratchpadMode::Insert;
+            queue_save(app);
+        }
+        KeyCode::Char('v') => {
+            editor.begin_selection();
+            app.scratchpad_ui.mode = ScratchpadMode::Visual;
+        }
+        KeyCode::Char('x') | KeyCode::Delete => {
+            editor.delete_forward();
+            queue_save(app);
+        }
+        KeyCode::Char('0') | KeyCode::Home => editor.move_home(),
+        KeyCode::Char('$') | KeyCode::End => editor.move_end(),
+        KeyCode::Char('h') | KeyCode::Left => editor.move_left(),
+        KeyCode::Char('j') | KeyCode::Down => editor.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => editor.move_up(),
+        KeyCode::Char('l') | KeyCode::Right => editor.move_right(),
+        _ => return false,
+    }
+    true
+}
+
+fn handle_visual_key(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => {
+            app.scratchpad_ui.editor.clear_selection();
+            app.scratchpad_ui.mode = ScratchpadMode::Normal;
+        }
+        KeyCode::Char('h') | KeyCode::Left => app.scratchpad_ui.editor.move_left(),
+        KeyCode::Char('j') | KeyCode::Down => app.scratchpad_ui.editor.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.scratchpad_ui.editor.move_up(),
+        KeyCode::Char('l') | KeyCode::Right => app.scratchpad_ui.editor.move_right(),
+        KeyCode::Char('0') | KeyCode::Home => app.scratchpad_ui.editor.move_home(),
+        KeyCode::Char('$') | KeyCode::End => app.scratchpad_ui.editor.move_end(),
+        KeyCode::Char('y') => {
+            copy_selection(app);
+            app.scratchpad_ui.editor.clear_selection();
+            app.scratchpad_ui.mode = ScratchpadMode::Normal;
+        }
+        KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete => {
+            if app.scratchpad_ui.editor.delete_selection() {
+                queue_save(app);
+            }
+            app.scratchpad_ui.mode = ScratchpadMode::Normal;
+        }
+        _ => return false,
+    }
+    true
+}
+
 fn prepare_cursor_move(editor: &mut Editor, selecting: bool) {
     if selecting {
         editor.begin_selection();
@@ -263,6 +461,7 @@ mod tests {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         open(&mut app, "main");
         app.pending.clear();
+        app.scratchpad_ui.mode = ScratchpadMode::Insert;
         handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
@@ -279,6 +478,7 @@ mod tests {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         open(&mut app, "main");
         app.pending.clear();
+        app.scratchpad_ui.mode = ScratchpadMode::Insert;
         app.scratchpad_ui.editor.set_text("scratchpad");
         app.scratchpad_ui.editor.move_end();
 
@@ -303,6 +503,7 @@ mod tests {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         open(&mut app, "main");
         app.pending.clear();
+        app.scratchpad_ui.mode = ScratchpadMode::Insert;
         app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
             KeyCode::Right,
             KeyModifiers::CONTROL,
@@ -347,5 +548,56 @@ mod tests {
             PendingAction::SaveScratchpad { project, content }
                 if project == "main" && content.is_empty()
         )));
+    }
+
+    #[test]
+    fn escape_leaves_insert_mode_and_normal_commands_edit_the_note() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        open(&mut app, "main");
+        app.pending.clear();
+
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::NONE,
+        )));
+
+        assert_eq!(app.scratchpad_ui.mode, ScratchpadMode::Insert);
+        assert_eq!(app.scratchpad_ui.editor.text, "n\n");
+        assert_eq!(app.scratchpad_ui.editor.row, 1);
+    }
+
+    #[test]
+    fn mouse_click_places_the_caret_and_enters_insert_mode() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        open(&mut app, "main");
+        app.scratchpad_ui.editor.set_text("alpha\nbeta");
+        app.scratchpad_ui.area = Rect::new(10, 5, 30, 4);
+        app.scratchpad_ui.viewport = 4;
+
+        assert!(handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 14,
+                row: 6,
+                modifiers: KeyModifiers::NONE,
+            }
+        ));
+
+        assert_eq!(app.scratchpad_ui.mode, ScratchpadMode::Insert);
+        assert_eq!(app.scratchpad_ui.editor.row, 1);
+        assert_eq!(app.scratchpad_ui.editor.col, 2);
     }
 }

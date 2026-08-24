@@ -82,6 +82,15 @@ the headless command and a Ctrl-C during one go through the same engine shutdown
 `Ctrl-C` during a live Codex turn now prints `interrupted — stopping the harness`, exits 130, and
 leaves no `codex app-server` behind.
 
+## Scratchpad modal smoke test (2026-08-24)
+
+The locally rebuilt `target/debug/duck` was exercised in a real 80×24 PTY with disposable
+workspace state. Scratchpad opened in `NORMAL`; `i` changed both the panel title and status line
+to `INSERT`, typed text appeared at the caret, and `Esc` returned both indicators to `NORMAL`.
+From Normal mode, `v` entered `VISUAL`, and `Esc` returned to Normal again. This verifies the
+shipped terminal's mode transitions; caret placement, drag selection, and wheel behavior remain
+covered by the focused mouse tests because this PTY driver does not emit physical pointer input.
+
 ## Reproduction shape
 
 The real sessions followed this sequence:

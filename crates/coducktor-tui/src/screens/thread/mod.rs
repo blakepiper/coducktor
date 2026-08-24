@@ -558,6 +558,19 @@ impl ThreadUi {
             }
             None => None,
         };
+        // A conversation's initial message is normally present as its first durable
+        // `user-message`; rendering the record's copy beside it would show the prompt twice. The
+        // record remains a fallback for legacy runs and salvaged/partial history with no visible
+        // user message at all.
+        let task_opens_the_transcript = matches!(
+            self.data.subject.as_ref(),
+            Some(ThreadSubject::LegacyRun(_))
+        ) || self
+            .data
+            .state
+            .turns
+            .first()
+            .is_none_or(|turn| turn.user_message.is_none());
         if let Some(run) = projection_run {
             let run = &run;
             self.data.view_model = projection::project_thread_with_root(
@@ -570,10 +583,11 @@ impl ThreadUi {
                     run,
                     &self.data.state,
                     &self.data.view_model,
-                    EarlierHistory {
+                    TranscriptBuild {
                         available: self.data.older_cursor.is_some(),
                         loading: self.data.older_loading,
                         error: self.data.older_error.as_deref(),
+                        task_fallback: task_opens_the_transcript,
                     },
                     self.pending_prompt.as_deref(),
                     self.pending_prompt_queued,
@@ -634,42 +648,43 @@ fn map_tone(tone: NoteTone) -> TranscriptNoteTone {
     }
 }
 
-struct EarlierHistory<'a> {
+struct TranscriptBuild<'a> {
     available: bool,
     loading: bool,
     error: Option<&'a str>,
+    task_fallback: bool,
 }
 
 fn build_transcript_items(
     run: &ApiRun,
     state: &ThreadState,
     view_model: &ThreadViewModel,
-    earlier: EarlierHistory<'_>,
+    options: TranscriptBuild<'_>,
     pending_prompt: Option<&str>,
     pending_prompt_queued: bool,
     existing: &mut std::collections::HashMap<String, TranscriptItem>,
 ) -> Vec<TranscriptItem> {
     let mut items = Vec::new();
-    if earlier.loading {
+    if options.loading {
         items.push(TranscriptItem::Note(NoteItem::new(
             "history-loading",
             "Loading earlier history…",
             TranscriptNoteTone::Dim,
         )));
-    } else if let Some(error) = earlier.error {
+    } else if let Some(error) = options.error {
         items.push(TranscriptItem::Note(NoteItem::new(
             "history-error",
             format!("Earlier history failed: {error} — press R to retry"),
             TranscriptNoteTone::Danger,
         )));
-    } else if earlier.available {
+    } else if options.available {
         items.push(TranscriptItem::Note(NoteItem::new(
             "history-earlier",
             "Earlier history available — scroll to the top or press R to load",
             TranscriptNoteTone::Dim,
         )));
     }
-    if !run.record.task.trim().is_empty() {
+    if options.task_fallback && !run.record.task.trim().is_empty() {
         items.push(reuse_message(
             existing,
             "task".to_owned(),
@@ -1302,6 +1317,11 @@ fn find_subagent(state: &ThreadState, id: &str) -> Option<coducktor_protocol::Ui
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    // Ctrl-C stops the live turn from anywhere on this screen. Esc is the Neovim mode change
+    // and nothing else, so leaving the composer never touches the harness.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return request_stop(app);
+    }
     if app.thread_ui.subagent_sheet.is_some() {
         if key.code == KeyCode::Esc {
             app.thread_ui.subagent_sheet = None;
@@ -1332,13 +1352,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
                 return false;
             }
         }
-        return true;
-    }
-    if key.code == KeyCode::Esc
-        && let Some(record) = app.thread_ui.data.conversation().cloned()
-        && record.state.is_active()
-    {
-        apply_conversation_action(app, &record, ThreadAction::Cancel);
         return true;
     }
     if key.code == KeyCode::Esc && app.thread_ui.focus == ThreadFocus::Composer {
@@ -1385,9 +1398,21 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             app.thread_ui.transcript.toggle_selected();
             true
         }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => false,
         _ => false,
     }
+}
+
+/// Stop the live turn. A legacy run record is read-only history with nothing to stop, so this
+/// returns false there and the key keeps falling through to the shell instead of being swallowed.
+fn request_stop(app: &mut App) -> bool {
+    let Some(record) = app.thread_ui.data.conversation().cloned() else {
+        return false;
+    };
+    if !record.state.is_active() {
+        return false;
+    }
+    apply_conversation_action(app, &record, ThreadAction::Cancel);
+    true
 }
 
 fn cycle_header_action(app: &mut App, forward: bool) -> bool {
@@ -1765,8 +1790,10 @@ pub fn followup_blocked_reason(app: &App) -> Option<&'static str> {
         {
             Some("unarchive this chat to send a message")
         }
-        Some(ConversationState::Queued) => Some("waiting for the harness to start — Esc cancels"),
-        Some(ConversationState::Running) => Some("the harness is working — Esc cancels"),
+        Some(ConversationState::Queued) => {
+            Some("waiting for the harness to start — Ctrl-C stops it")
+        }
+        Some(ConversationState::Running) => Some("the harness is working — Ctrl-C stops it"),
         Some(ConversationState::NeedsInput) => Some("answer the question above to continue"),
         Some(_) => None,
     }
@@ -2905,13 +2932,13 @@ mod tests {
     }
 
     #[test]
-    fn escape_cancels_a_live_conversation_without_dropping_its_draft() {
+    fn control_c_stops_a_live_conversation_without_dropping_its_draft() {
         let mut app = app_with_conversation(coducktor_contract::ConversationState::Running);
         app.thread_ui.composer.set_text("keep this draft");
 
         assert!(handle_key(
             &mut app,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
         ));
 
         assert!(app.thread_ui.cancel_pending);
@@ -3056,7 +3083,7 @@ mod tests {
         let screen = conversation_screen(coducktor_contract::ConversationState::Running, 120, 40);
         assert!(screen.contains("Cancel"), "a live turn can be stopped");
         assert!(
-            screen.contains("Esc cancels"),
+            screen.contains("Ctrl-C stops it"),
             "the composer explains the block instead of silently ignoring Enter"
         );
         assert!(
@@ -3257,6 +3284,47 @@ mod tests {
         assert_eq!(app.thread_ui.composer.text, "keep going");
         assert!(app.thread_ui.delivery_error);
         assert!(app.thread_ui.pending_prompt.is_none());
+    }
+
+    #[test]
+    fn a_conversation_shows_its_initial_prompt_once() {
+        use coducktor_contract::ConversationState;
+
+        let mut app = app_with_conversation(ConversationState::Running);
+        // The core writes the initial message to history as the conversation's first
+        // `user-message`, exactly as it writes every follow-up.
+        app.thread_ui.push_event(
+            1.0,
+            event(1.0, "user-message", json!({"text": "ship the shell"})),
+        );
+
+        let content = render_to_string(&mut app);
+        assert_eq!(
+            content.matches("ship the shell").count(),
+            1,
+            "the record's copy of the initial message must not render beside the durable one"
+        );
+    }
+
+    #[test]
+    fn a_legacy_run_still_opens_its_transcript_with_the_task() {
+        // A run record's task was never written to history, so dropping it would lose the prompt.
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.thread_ui.load(
+            "main".to_owned(),
+            "run-1".to_owned(),
+            ThreadSubject::LegacyRun(Box::new(run(RunStatus::Running, "rotate the keys"))),
+            vec![event(1.0, "text", json!({"text": "working"}))],
+            1.0,
+            None,
+        );
+        app.navigate_route(crate::app::Route::Thread {
+            project: "main".to_owned(),
+            id: "run-1".to_owned(),
+        });
+
+        let content = render_to_string(&mut app);
+        assert_eq!(content.matches("rotate the keys").count(), 1);
     }
 
     #[test]

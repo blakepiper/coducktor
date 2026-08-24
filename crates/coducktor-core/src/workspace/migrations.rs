@@ -246,7 +246,7 @@ mod tests {
 
         run_migrations(Some(repo.path()), &env);
         let config = load_workspace_config(&dir.path().join("config.json"), &env);
-        assert_eq!(config.resources.max_parallel, 2);
+        assert!(config.projects.is_empty());
         assert!(repo.path().join(".ai/coducktor/config.json").exists());
     }
 
@@ -271,7 +271,7 @@ mod tests {
         .unwrap();
         run_migrations(Some(repo.path()), &env);
         let config = load_workspace_config(&dir.path().join("config.json"), &env);
-        assert_eq!(config.resources.max_parallel, 2);
+        assert!(config.projects.is_empty());
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
         assert!(!old_dir.exists(), "the old dir is renamed, not copied");
         let config = load_workspace_config(&real_home.path().join(".coducktor/config.json"), &env);
         assert_eq!(
-            config.resources.max_parallel, 11,
+            config.schema_version, 3,
             "the migrated config is the one read"
         );
     }

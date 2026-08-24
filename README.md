@@ -56,9 +56,10 @@ starts. Skills are per-message attachments and clear after a successful send. Gi
 change while the chat is idle.
 
 Coducktor keeps an editable draft while a turn runs, but Send stays disabled until the turn ends.
-`Esc` cancels a live turn without discarding that draft. Ordinary questions in assistant prose end
-the turn normally; only a provider-native structured question opens **Needs you** and continues
-the same pending turn once you answer it.
+`Esc` leaves composer input mode without touching the live turn; use `Ctrl-C`, the **Cancel**
+header action, or `:stop` to stop the agent. Ordinary questions in assistant prose end the turn
+normally; only a provider-native structured question opens **Needs you** and continues the same
+pending turn once you answer it.
 
 The **Chats** and **All chats** views group conversations into Needs you, Working, and Recent. A
 conversation closes only when you archive it. Task records from older versions of Coducktor stay

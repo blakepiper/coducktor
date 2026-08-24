@@ -104,7 +104,6 @@ impl<'de> Deserialize<'de> for InheritedAutonomous {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceResources {
-    pub max_parallel: u64,
     pub max_monitoring_sessions: u64,
     pub monitoring_wake_interval_minutes: Option<u64>,
     pub auto_resume_on_usage_limit: bool,
@@ -248,8 +247,6 @@ pub struct QuotaRoutingPatch {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceResourcesPatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_monitoring_sessions: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -621,7 +618,6 @@ pub struct ConfigResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composer_defaults: Option<ProjectComposerDefaults>,
     pub models_locked: bool,
-    pub max_parallel: u64,
     pub memory_limit_mb: Option<u64>,
     pub worktree_retention: u64,
     pub live_title_updates: Option<bool>,
@@ -661,8 +657,6 @@ pub struct SetConfigInput {
     pub default_models: Option<RunnerModelsPatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composer_defaults: Option<ComposerDefaultsPatch>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit_mb: Option<Option<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

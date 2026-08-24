@@ -63,7 +63,6 @@ fn config_response(repo_root: &Path, state_home: &Path) -> ConfigResponse {
         },
         composer_defaults,
         models_locked,
-        max_parallel: config.max_parallel,
         memory_limit_mb: config.memory_limit_mb,
         worktree_retention: config.worktree_retention,
         live_title_updates: config.live_title_updates,
@@ -92,14 +91,6 @@ fn validate_set_config_input(input: &SetConfigInput) -> Result<(), EngineError> 
     {
         return Err(EngineError::Conflict {
             reason: "systemPrompt must be at most 20000 characters".to_owned(),
-        });
-    }
-    if input
-        .max_parallel
-        .is_some_and(|value| !(1..=16).contains(&value))
-    {
-        return Err(EngineError::Conflict {
-            reason: "maxParallel must be an integer from 1 to 16".to_owned(),
         });
     }
     if input
@@ -254,9 +245,6 @@ fn update_repo_config(
             }
         }
     }
-    if let Some(max_parallel) = input.max_parallel {
-        raw.insert("maxParallel".to_owned(), Value::from(max_parallel));
-    }
     if let Some(retention) = input.worktree_retention {
         match retention {
             None | Some(0) => {
@@ -320,6 +308,7 @@ fn update_repo_config(
         apply_project_composer_defaults(&mut raw, composer_patch);
     }
     for key in [
+        "maxParallel",
         "plannerModel",
         "namerModel",
         "liveTitleUpdates",
@@ -1489,7 +1478,6 @@ fn project_entry(
         branch,
         forge: None,
         repo_url: None,
-        max_parallel: project.max_parallel.map(|value| value as f64),
         tags: project.tags.clone(),
     }
 }

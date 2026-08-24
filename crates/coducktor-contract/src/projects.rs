@@ -20,8 +20,6 @@ pub struct ProjectListEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
 }
 
@@ -94,8 +92,6 @@ pub const PROJECT_TAGS_MAX: usize = 20;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProjectInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<Option<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Option<Vec<String>>>,
 }

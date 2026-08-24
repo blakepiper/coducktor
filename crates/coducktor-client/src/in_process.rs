@@ -59,8 +59,7 @@ use coducktor_core::agent_session::EventInput;
 use coducktor_core::config::load_config;
 use coducktor_core::conversations::{
     AdmittedConversationTurn, ConversationEventInput, ConversationManager,
-    ConversationManagerOptions, ConversationSessionFactory, NewConversation,
-    PendingConversationAnswer,
+    ConversationSessionFactory, NewConversation, PendingConversationAnswer,
 };
 use coducktor_core::handoff::{handoff_progress_excerpt, read_handoff};
 use coducktor_core::legacy_runs::RunManager;
@@ -2583,7 +2582,6 @@ impl InProcessEngine {
         if !config.projects.iter().any(|project| project.id == id) {
             return Err(EngineError::NotFound);
         }
-        let max_parallel = input.max_parallel;
         let tags = input.tags.clone();
         let target_id = id.clone();
         let mut updated = None;
@@ -2593,9 +2591,6 @@ impl InProcessEngine {
                 .iter_mut()
                 .find(|project| project.id == target_id)
             {
-                if let Some(value) = max_parallel {
-                    project.max_parallel = value;
-                }
                 if let Some(value) = tags.clone() {
                     project.tags = normalize_project_tags(value);
                 }
@@ -3333,7 +3328,6 @@ fn workspace_config_response(
             git_auto: config.composer_defaults.git_auto,
         },
         resources: coducktor_contract::WorkspaceResources {
-            max_parallel: config.resources.max_parallel,
             max_monitoring_sessions: config.resources.max_monitoring_sessions,
             monitoring_wake_interval_minutes: config.resources.monitoring_wake_interval_minutes,
             auto_resume_on_usage_limit: config.resources.auto_resume_on_usage_limit,
@@ -3386,11 +3380,6 @@ fn validate_workspace_config_input(input: &SetWorkspaceConfigInput) -> Result<()
         return Err("composer variants must be an integer from 1 to 3".to_owned());
     }
     if let Some(resources) = &input.resources {
-        if let Some(value) = resources.max_parallel
-            && !(1..=16).contains(&value)
-        {
-            return Err("maxParallel must be an integer from 1 to 16".to_owned());
-        }
         if let Some(value) = resources.max_monitoring_sessions
             && value > 16
         {
@@ -3479,9 +3468,6 @@ fn apply_workspace_config_input(
         }
     }
     if let Some(resources) = &input.resources {
-        if let Some(value) = resources.max_parallel {
-            config.resources.max_parallel = value;
-        }
         if let Some(value) = resources.max_monitoring_sessions {
             config.resources.max_monitoring_sessions = value;
         }
@@ -3591,13 +3577,8 @@ fn normalize_project_tags(tags: Option<Vec<String>>) -> Option<Vec<String>> {
 }
 
 fn validate_project_update(input: &UpdateProjectInput) -> Result<(), String> {
-    if input.max_parallel.is_none() && input.tags.is_none() {
-        return Err("specify maxParallel or tags".to_owned());
-    }
-    if let Some(Some(max_parallel)) = input.max_parallel
-        && !(1..=16).contains(&max_parallel)
-    {
-        return Err("maxParallel must be an integer from 1 to 16".to_owned());
+    if input.tags.is_none() {
+        return Err("specify tags".to_owned());
     }
     if let Some(Some(tags)) = &input.tags {
         if tags.len() > coducktor_contract::PROJECT_TAGS_MAX {
@@ -4962,7 +4943,6 @@ mod tests {
             added_at: String::new(),
             last_opened_at: String::new(),
             source: coducktor_core::workspace::config::ProjectSource::Local,
-            max_parallel: None,
             tags: None,
             extra: Map::new(),
         };
@@ -4986,7 +4966,6 @@ mod tests {
             added_at: String::new(),
             last_opened_at: String::new(),
             source: coducktor_core::workspace::config::ProjectSource::Local,
-            max_parallel: None,
             tags: None,
             extra: Map::new(),
         };
@@ -5705,7 +5684,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
         let config = engine.config().await.unwrap();
-        assert_eq!(config.max_parallel, 2);
         assert!(!config.models_locked);
         assert!(config.base_branch.is_none());
     }
@@ -5716,16 +5694,13 @@ mod tests {
         let engine = engine(&dir);
         let input = SetConfigInput {
             base_branch: Some(Some("develop".to_owned())),
-            max_parallel: Some(5),
             ..Default::default()
         };
         let updated = engine.put_config(&input).await.unwrap();
         assert_eq!(updated.base_branch.as_deref(), Some("develop"));
-        assert_eq!(updated.max_parallel, 5);
 
         let reread = engine.config().await.unwrap();
         assert_eq!(reread.base_branch.as_deref(), Some("develop"));
-        assert_eq!(reread.max_parallel, 5);
     }
 
     #[tokio::test]
@@ -5802,6 +5777,7 @@ mod tests {
             &path,
             serde_json::to_vec(&json!({
                 "defaultRunner": "auto",
+                "maxParallel": 4,
                 "plannerModel": "opus",
                 "namerModel": "haiku",
                 "liveTitleUpdates": true,
@@ -5836,6 +5812,7 @@ mod tests {
         assert_eq!(raw["composerDefaults"]["worktree"], true);
         assert_eq!(raw["defaultRunner"], "claude");
         for key in [
+            "maxParallel",
             "plannerModel",
             "namerModel",
             "liveTitleUpdates",
@@ -5846,20 +5823,6 @@ mod tests {
         }
         assert!(raw["composerDefaults"].get("variants").is_none());
         assert!(raw["composerDefaults"].get("autonomous").is_none());
-    }
-
-    #[tokio::test]
-    async fn put_config_rejects_max_parallel_outside_one_to_sixteen() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let error = engine
-            .put_config(&SetConfigInput {
-                max_parallel: Some(17),
-                ..Default::default()
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(error, EngineError::Conflict { .. }));
     }
 
     #[tokio::test]
@@ -7080,26 +7043,6 @@ mod tests {
         assert!(matches!(error, EngineError::Conflict { .. }));
     }
 
-    #[tokio::test]
-    async fn put_workspace_config_rejects_an_out_of_range_max_parallel() {
-        let dir = TempDir::new().unwrap();
-        let engine = engine(&dir);
-        let input = SetWorkspaceConfigInput {
-            resources: Some(coducktor_contract::WorkspaceResourcesPatch {
-                max_parallel: Some(0),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let error = engine.put_workspace_config(&input).await.unwrap_err();
-        assert_eq!(
-            error,
-            EngineError::Conflict {
-                reason: "maxParallel must be an integer from 1 to 16".to_owned()
-            }
-        );
-    }
-
     #[test]
     fn quota_routing_patches_update_per_run_policy() {
         let mut config = coducktor_core::workspace::config::WorkspaceConfig::default_for(
@@ -7153,15 +7096,12 @@ mod tests {
     async fn update_project_rejects_an_input_with_neither_field_set() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
-        let input = UpdateProjectInput {
-            max_parallel: None,
-            tags: None,
-        };
+        let input = UpdateProjectInput { tags: None };
         let error = engine.update_project("anything", &input).await.unwrap_err();
         assert_eq!(
             error,
             EngineError::Conflict {
-                reason: "specify maxParallel or tags".to_owned()
+                reason: "specify tags".to_owned()
             }
         );
     }
@@ -7171,8 +7111,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
         let input = UpdateProjectInput {
-            max_parallel: Some(Some(4)),
-            tags: None,
+            tags: Some(Some(vec!["backend".to_owned()])),
         };
         let error = engine
             .update_project("definitely-not-a-registered-project-id", &input)

@@ -36,10 +36,13 @@ Model, Reasoning, Skills, Base branch, Worktree, and Git mode; `Shift-Tab` moves
 opens a focused picker or submits from the composer. While a turn is active, typing retains a
 draft but submission is disabled.
 
-`Esc` from an active chat cancels the provider turn; it never archives the chat or discards the
-draft. In other text surfaces it returns to Normal mode or closes the local overlay as shown.
-Terminal, Scratchpad, config editors, dialogs, and other literal text controls retain their normal
-editing keys.
+`Esc` leaves a chat composer without touching the provider turn. `Ctrl-C`, the Cancel header
+action, and `:stop` stop a live turn without archiving the chat or discarding its draft.
+
+Scratchpad is modal: `i`/`a`/`I`/`A`/`o`/`O` enter Insert mode, `Esc` returns to Normal mode,
+`h`/`j`/`k`/`l`, `gg`/`G`, `0`/`$`, and `Ctrl-U`/`Ctrl-D` move, `x` and `dd` delete, and `v`
+starts a selection for `y` or `d`. Arrow keys, Shift-selection, clipboard shortcuts, bracketed
+paste, and mouse click/drag remain available for conventional editing.
 
 ## Ex commands
 

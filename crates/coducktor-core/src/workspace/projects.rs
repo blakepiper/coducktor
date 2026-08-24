@@ -142,7 +142,6 @@ pub fn register_project(
             added_at: now.clone(),
             last_opened_at: now.clone(),
             source,
-            max_parallel: None,
             tags: None,
             extra: serde_json::Map::new(),
         };

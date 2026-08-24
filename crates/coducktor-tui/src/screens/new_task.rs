@@ -978,7 +978,15 @@ fn apply_pick(app: &mut App, pill: PillId, value: &str) {
         }
         PillId::GitMode => {
             if let Some(git_auto) = value.strip_prefix("git-auto:") {
-                app.new_task_ui.draft.git_auto = Some(git_auto == "true");
+                let git_auto = git_auto == "true";
+                app.new_task_ui.draft.git_auto = Some(git_auto);
+                if git_auto
+                    && !effective_values(&app.new_task_ui.draft, &app.new_task_ui.data).worktree_on
+                {
+                    app.new_task_ui.draft.worktree = Some(true);
+                    app.notice =
+                        Some("worktree enabled — git auto requires a managed worktree".to_owned());
+                }
             }
         }
     }
@@ -1559,7 +1567,6 @@ mod tests {
                 git_auto: None,
             },
             resources: WorkspaceResources {
-                max_parallel: 1,
                 max_monitoring_sessions: 1,
                 monitoring_wake_interval_minutes: None,
                 auto_resume_on_usage_limit: false,
@@ -1601,7 +1608,6 @@ mod tests {
                 git_auto: None,
             },
             resources: WorkspaceResources {
-                max_parallel: 1,
                 max_monitoring_sessions: 1,
                 monitoring_wake_interval_minutes: None,
                 auto_resume_on_usage_limit: false,
@@ -1986,6 +1992,21 @@ mod tests {
         pick_index(&mut app, 1);
         assert_eq!(app.new_task_ui.draft.worktree, Some(false));
         assert!(!effective_values(&app.new_task_ui.draft, &app.new_task_ui.data).worktree_on);
+    }
+
+    #[test]
+    fn git_picker_can_enable_automatic_mode_from_an_unmanaged_checkout() {
+        let mut app = app_with_new_task("t-git-auto");
+        app.new_task_ui.draft.worktree = Some(false);
+        open_pill(&mut app, PillId::GitMode);
+
+        pick_index(&mut app, 0);
+
+        let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
+        assert!(effective.worktree_on);
+        assert!(effective.git_auto_on);
+        assert_eq!(app.new_task_ui.draft.worktree, Some(true));
+        assert_eq!(app.new_task_ui.draft.git_auto, Some(true));
     }
 
     #[test]

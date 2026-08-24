@@ -310,6 +310,90 @@ impl Editor {
         self.col = self.line(self.row).chars().count();
     }
 
+    /// Open an empty logical line above the caret, matching Vim's `O` command.
+    pub fn open_line_above(&mut self) {
+        self.move_home();
+        self.insert_newline();
+        self.row = self.row.saturating_sub(1);
+        self.col = 0;
+    }
+
+    /// Delete the caret's whole logical line and keep the caret on the nearest surviving line.
+    pub fn delete_line(&mut self) {
+        let mut lines: Vec<String> = self.text.split('\n').map(ToOwned::to_owned).collect();
+        if lines.len() == 1 {
+            self.text.clear();
+            self.row = 0;
+            self.col = 0;
+        } else {
+            lines.remove(self.row.min(lines.len().saturating_sub(1)));
+            self.text = lines.join("\n");
+            self.row = self.row.min(lines.len().saturating_sub(1));
+            self.col = self.col.min(self.line(self.row).chars().count());
+        }
+        self.preferred_col = None;
+        self.selection_anchor = None;
+    }
+
+    /// Place the caret from a click inside the soft-wrapped notes viewport. `column` and `row`
+    /// are relative to the editor's inner area, including its line-number gutter.
+    pub fn place_caret_wrapped(
+        &mut self,
+        width: u16,
+        viewport: usize,
+        row: usize,
+        column: usize,
+        extend_selection: bool,
+    ) {
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        let gutter_width = lines
+            .len()
+            .min(10usize.pow(MAX_GUTTER_DIGITS as u32))
+            .to_string()
+            .len()
+            .max(1);
+        let content_width = usize::from(width).saturating_sub(gutter_width + 1).max(1);
+        let mut rows = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let length = line.chars().count();
+            let mut start = 0;
+            loop {
+                let end = (start + content_width).min(length);
+                rows.push((index, start, end));
+                if end == length {
+                    if length > 0 && length % content_width == 0 {
+                        rows.push((index, length, length));
+                    }
+                    break;
+                }
+                start = end;
+            }
+        }
+        let caret_line = self.row.min(lines.len().saturating_sub(1));
+        let caret_col = self.col.min(lines[caret_line].chars().count());
+        let caret_row = rows
+            .iter()
+            .position(|(index, start, end)| {
+                *index == caret_line
+                    && caret_col >= *start
+                    && (caret_col < *end
+                        || (caret_col == *end && *end == lines[*index].chars().count()))
+            })
+            .unwrap_or(0);
+        let first = caret_row.saturating_sub(viewport.saturating_sub(1));
+        let Some((target_row, start, end)) = rows.get(first.saturating_add(row)).copied() else {
+            return;
+        };
+        if extend_selection {
+            self.begin_selection();
+        } else {
+            self.clear_selection();
+        }
+        self.row = target_row;
+        self.col = (start + column.saturating_sub(gutter_width + 1)).min(end);
+        self.preferred_col = None;
+    }
+
     /// `delta` lines up (negative) or down (positive), clamping to the document.
     pub fn move_pages(&mut self, delta: i64, viewport: usize) {
         let page = viewport.max(1) as i64;
