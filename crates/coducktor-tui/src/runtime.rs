@@ -112,6 +112,7 @@ pub async fn entry() -> io::Result<()> {
     let mut app = App::new("main", Theme::detect(), keymap);
     app.set_debug_hud(env::var("DUCK_DEBUG_HUD").as_deref() == Ok("1"));
     app.set_boot_root(repo_root.clone());
+    app.start_boot_animation();
     let in_process = Arc::new(InProcessEngine::new(repo_root, env!("CARGO_PKG_VERSION")));
     let engine: Arc<dyn Engine> = in_process.clone();
     let mut workspace_listener =

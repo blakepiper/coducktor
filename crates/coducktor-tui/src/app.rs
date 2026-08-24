@@ -1052,6 +1052,9 @@ pub struct App {
     pub live_usage: BTreeMap<String, ProcessUsage>,
     pub now_epoch: i64,
     pub animation_tick: u64,
+    /// The one-shot launch animation; `None` once skipped, finished, or never started. Left
+    /// `None` by `App::new` so screen snapshot tests never render it.
+    boot_animation: Option<crate::boot_animation::BootAnimation>,
     pub tasks_ui: crate::screens::tasks::TasksUi,
     pub global_ui: crate::screens::global_tasks::GlobalUi,
     pub new_task_ui: crate::screens::new_task::NewTaskUi,
@@ -1169,6 +1172,7 @@ impl App {
             live_usage: BTreeMap::new(),
             now_epoch: 0,
             animation_tick: 0,
+            boot_animation: None,
             tasks_ui: crate::screens::tasks::TasksUi::default(),
             global_ui: crate::screens::global_tasks::GlobalUi::default(),
             new_task_ui: crate::screens::new_task::NewTaskUi::default(),
@@ -1606,6 +1610,14 @@ impl App {
     /// for the boot project before the registry has loaded.
     pub fn set_boot_root(&mut self, root: PathBuf) {
         self.boot_root = Some(root);
+    }
+
+    /// Play the one-shot launch animation over the next frames. Only `runtime::entry` calls
+    /// this; nothing else in the app starts it, and it never re-arms once it ends.
+    pub fn start_boot_animation(&mut self) {
+        self.boot_animation = Some(crate::boot_animation::BootAnimation::start(
+            self.animation_tick,
+        ));
     }
 
     pub fn take_pending(&mut self) -> Vec<PendingAction> {
@@ -2147,6 +2159,17 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: Event) {
+        if self.boot_animation.is_some() {
+            let skips_boot_animation = match &event {
+                Event::Key(key) => key.kind == KeyEventKind::Press,
+                Event::Mouse(mouse) => matches!(mouse.kind, MouseEventKind::Down(_)),
+                _ => false,
+            };
+            if skips_boot_animation {
+                self.boot_animation = None;
+            }
+            return;
+        }
         match event {
             Event::Key(key)
                 if key.kind == KeyEventKind::Press
@@ -2173,8 +2196,18 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
-        self.hitmap.clear();
         let area = frame.area();
+        if let Some(boot_animation) = &self.boot_animation {
+            if boot_animation.is_finished(self.animation_tick)
+                || !crate::boot_animation::BootAnimation::fits(area)
+            {
+                self.boot_animation = None;
+            } else {
+                boot_animation.render(frame, area, &self.theme, self.animation_tick);
+                return;
+            }
+        }
+        self.hitmap.clear();
         self.last_width = area.width;
         let vertical = Layout::default()
             .direction(Direction::Vertical)

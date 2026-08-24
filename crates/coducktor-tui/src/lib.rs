@@ -5,6 +5,7 @@
 //! benches and future integration tests need to link against — lives here.
 
 pub mod app;
+pub mod boot_animation;
 pub mod cli;
 pub mod clipboard;
 pub mod diff;
