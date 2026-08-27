@@ -736,6 +736,16 @@ fn render_handoff(frame: &mut Frame<'_>, area: Rect, thread_area: Rect, app: &mu
                 format!("{} {}", if picked { "☑" } else { "☐" }, skill.name),
                 Style::default().fg(app.theme.palette.fg),
             )));
+            let Some(row) = inner.y.checked_add(lines.len() as u16 - 1) else {
+                continue;
+            };
+            if row < inner.bottom() {
+                app.hitmap.register(
+                    Rect::new(inner.x, row, inner.width, 1),
+                    10,
+                    HitAction::GithubScreen(GithubAction::ToggleSkill(index)),
+                );
+            }
         }
         frame.render_widget(Paragraph::new(lines), inner);
     }
@@ -947,6 +957,7 @@ pub fn apply_hit(app: &mut App, action: GithubAction) {
                     .push(PendingAction::LoadGithubMergeState { project, number });
             }
         }
+        GithubAction::ToggleSkill(index) => toggle_skill(app, index),
         GithubAction::SwitchDetailTab(tab) => {
             if app.github_ui.detail_tab == tab {
                 return;
@@ -1035,6 +1046,7 @@ mod tests {
     use crate::input::keymap::Keymap;
     use crate::theme::Theme;
     use coducktor_contract::{GithubData, GithubItem, GithubItemKind};
+    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1193,6 +1205,52 @@ mod tests {
                 .iter()
                 .all(|action| !matches!(action, PendingAction::CreateConversation { .. }))
         );
+    }
+
+    #[test]
+    fn github_skill_picker_rows_are_clickable() {
+        let mut app = app_with_github();
+        app.github_ui.detail_item = Some(sample_item(GithubItemKind::Issue, 12));
+        app.github_ui.skills = vec![
+            Skill {
+                name: "om-fix".to_owned(),
+                description: None,
+                interactive: None,
+                body: String::new(),
+                path: "/skills/om-fix.md".to_owned(),
+                source: coducktor_contract::SkillSource::Global,
+            },
+            Skill {
+                name: "om-test".to_owned(),
+                description: None,
+                interactive: None,
+                body: String::new(),
+                path: "/skills/om-test.md".to_owned(),
+                source: coducktor_contract::SkillSource::Global,
+            },
+        ];
+        apply_hit(&mut app, GithubAction::OpenSkillPicker);
+        let _ = render(&mut app, 120, 40);
+
+        let target = (0..120).find_map(|column| {
+            (0..40).find_map(|row| {
+                matches!(
+                    app.hitmap.hit(column, row),
+                    Some(HitAction::GithubScreen(GithubAction::ToggleSkill(1)))
+                )
+                .then_some((column, row))
+            })
+        });
+        let (column, row) = target.expect("GitHub skill row should be clickable");
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.github_ui.picked_skills, vec![1]);
+        assert_eq!(app.github_ui.focus, GithubFocus::SkillPicker);
     }
 
     #[test]

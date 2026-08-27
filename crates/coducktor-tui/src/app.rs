@@ -2562,8 +2562,8 @@ impl App {
             self.render_help(frame, area);
         } else if let Some(confirm) = self.confirm.clone() {
             self.render_confirm(frame, area, &confirm);
-        } else if let Some(menu) = &self.row_menu {
-            self.render_row_menu(frame, area, menu);
+        } else if let Some(menu) = self.row_menu.clone() {
+            self.render_row_menu(frame, area, &menu);
         } else if self.tasks_ui.sort_picker {
             self.render_sort_picker(frame, area);
         }
@@ -2643,7 +2643,7 @@ impl App {
         );
     }
 
-    fn render_row_menu(&self, frame: &mut Frame<'_>, area: Rect, menu: &RowMenu) {
+    fn render_row_menu(&mut self, frame: &mut Frame<'_>, area: Rect, menu: &RowMenu) {
         let height = (menu.items.len() as u16 + 3).min(area.height.saturating_sub(2));
         let width = 30.min(area.width);
         let rect = centered_rect(area, width, height);
@@ -2678,6 +2678,23 @@ impl App {
                 .wrap(Wrap { trim: false }),
             rect,
         );
+        for (index, _) in menu.items.iter().enumerate() {
+            let Some(row) = rect.y.checked_add(index as u16 + 2) else {
+                continue;
+            };
+            if row < rect.bottom() {
+                self.hitmap.register(
+                    Rect::new(
+                        rect.x.saturating_add(1),
+                        row,
+                        rect.width.saturating_sub(2),
+                        1,
+                    ),
+                    20,
+                    HitAction::RowMenuItem(index),
+                );
+            }
+        }
     }
 
     fn render_sort_picker(&self, frame: &mut Frame<'_>, area: Rect) {
@@ -3452,6 +3469,20 @@ impl App {
                 if let Route::Tasks { .. } = self.route() {
                     crate::screens::tasks::handle_table_hit(self, HitAction::TableHeader(column));
                 }
+            }
+            HitAction::RowMenuItem(index) => {
+                let Some(action) = self
+                    .row_menu
+                    .as_ref()
+                    .and_then(|menu| menu.items.get(index))
+                    .map(|item| item.action)
+                else {
+                    return;
+                };
+                if let Some(menu) = self.row_menu.as_mut() {
+                    menu.selected = index;
+                }
+                apply_menu_action(self, action);
             }
             HitAction::TableRow(index) => match self.route() {
                 Route::Tasks { .. } => {
@@ -5034,6 +5065,40 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn task_row_menu_choices_are_clickable() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.row_menu = Some(RowMenu {
+            project: "main".to_owned(),
+            run_id: "run-1".to_owned(),
+            title: "Ship the shell".to_owned(),
+            items: vec![
+                RowMenuItem {
+                    label: "Open chat".to_owned(),
+                    action: MenuAction::Open,
+                },
+                RowMenuItem {
+                    label: "Delete".to_owned(),
+                    action: MenuAction::Delete,
+                },
+            ],
+            selected: 0,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        // The second item is three lines below the dialog's top border.
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 48,
+            row: 15,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert!(app.confirm.is_some());
+        assert!(app.row_menu.is_none());
     }
 
     #[test]

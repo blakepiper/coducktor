@@ -23,6 +23,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{App, PendingAction};
+use crate::input::hitmap::HitAction;
 use crate::widgets::run_end::RunOutcome;
 use crate::widgets::transcript::{
     MessageItem, NoteItem, NoteTone as TranscriptNoteTone, ReasoningItem, RunEndItem, ToolItem,
@@ -1727,6 +1728,11 @@ fn render_conversation(
     app.thread_ui
         .composer
         .render(frame, dock_rows[2], theme, &mut app.hitmap, 5);
+    app.hitmap.register(
+        dock_rows[2],
+        4,
+        HitAction::ThreadScreen(ThreadAction::FocusComposer),
+    );
 }
 
 fn is_clipboard_paste_key(key: KeyEvent) -> bool {
@@ -2106,7 +2112,7 @@ mod tests {
     use crate::input::keymap::Keymap;
     use crate::theme::Theme;
     use coducktor_contract::{RunRecord, StepKind, StepState, StepStatus};
-    use crossterm::event::{Event, MouseEvent, MouseEventKind};
+    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use serde_json::json;
@@ -3025,6 +3031,37 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>()
+    }
+
+    #[test]
+    fn clicking_the_conversation_composer_focuses_it() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        app.thread_ui.focus = ThreadFocus::Transcript;
+        app.thread_ui.composer.blur();
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let target = (0..120).find_map(|column| {
+            (0..40).find_map(|row| {
+                matches!(
+                    app.hitmap.hit(column, row),
+                    Some(crate::input::hitmap::HitAction::ThreadScreen(
+                        ThreadAction::FocusComposer
+                    ))
+                )
+                .then_some((column, row))
+            })
+        });
+        let (column, row) = target.expect("conversation composer should be clickable");
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.thread_ui.focus, ThreadFocus::Composer);
+        assert!(app.thread_ui.composer.focused);
     }
 
     #[test]

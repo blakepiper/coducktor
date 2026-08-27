@@ -49,6 +49,7 @@ pub enum IdeAction {
 pub enum GithubAction {
     SwitchTab(GithubTab),
     SelectItem(usize),
+    ToggleSkill(usize),
     SwitchDetailTab(GithubDetailTab),
     CycleMergeMethod,
     Merge,
@@ -100,6 +101,8 @@ pub enum HitAction {
     TableHeader(ColumnId),
     /// A row of the active run table — click to open, right-click to menu.
     TableRow(usize),
+    /// An item in the active run table's open action menu.
+    RowMenuItem(usize),
     /// A row of the open new-task picker overlay.
     PickerRow(usize),
     /// Remove the pasted image at this index from the composer's image row.
