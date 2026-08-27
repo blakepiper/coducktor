@@ -887,6 +887,10 @@ fn render_nav(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         });
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if area.width > 0 && area.height > 0 {
+        app.hitmap
+            .register(area, 0, crate::input::hitmap::HitAction::FocusScreenPane(0));
+    }
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current_scope = "";
     for (index, section) in visible_sections(app).iter().enumerate() {
@@ -937,6 +941,10 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             } else {
                 Style::default().fg(app.theme.palette.border)
             });
+    if area.width > 0 && area.height > 0 {
+        app.hitmap
+            .register(area, 0, crate::input::hitmap::HitAction::FocusScreenPane(1));
+    }
     let header_inner = block.inner(rows_layout[0]);
     frame.render_widget(block, rows_layout[0]);
     frame.render_widget(

@@ -89,6 +89,8 @@ pub enum HitAction {
     ToggleSidebar,
     Help,
     SidebarEdge,
+    /// Empty space in a screen pane — click to focus the pane without activating a control.
+    FocusScreenPane(usize),
     Back,
     Forward,
     Quit,

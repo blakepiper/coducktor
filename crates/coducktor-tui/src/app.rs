@@ -2729,6 +2729,9 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(action) = self.hitmap.hit(mouse.column, mouse.row) {
                     let sidebar_action = self.sidebar_row_for_hit(&action).is_some();
+                    if let Some(pane) = self.settings_mouse_pane(&action) {
+                        self.set_focus_location(FocusLocation::Screen(pane));
+                    }
                     if let Some(row) = self.sidebar_row_for_hit(&action)
                         && let Some(index) = self.sidebar_position(row)
                     {
@@ -2797,6 +2800,20 @@ impl App {
                 );
             }
             _ => {}
+        }
+    }
+
+    fn settings_mouse_pane(&self, action: &HitAction) -> Option<usize> {
+        if !matches!(self.route(), Route::Settings { .. } | Route::GlobalSettings) {
+            return None;
+        }
+        match action {
+            HitAction::FocusScreenPane(pane) => Some(*pane),
+            HitAction::SettingsSection(_) => Some(0),
+            HitAction::SettingsRow(_)
+            | HitAction::SettingsDeleteRow(_)
+            | HitAction::PickerRow(_) => Some(1),
+            _ => None,
         }
     }
 
@@ -3412,6 +3429,9 @@ impl App {
             HitAction::Help => self.help_open = true,
             HitAction::ProjectToggle(project) => self.select_project(project),
             HitAction::SidebarEdge => self.sidebar_dragging = true,
+            HitAction::FocusScreenPane(pane) => {
+                self.set_focus_location(FocusLocation::Screen(pane));
+            }
             HitAction::Back => {
                 self.request_back();
             }
@@ -5233,6 +5253,47 @@ mod tests {
         // The keyboard continues from the clicked row.
         app.handle_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
         assert_eq!(app.sidebar_selected, 3);
+    }
+
+    #[test]
+    fn clicking_settings_panes_moves_focus_even_in_empty_space() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        crate::screens::settings::open_global(&mut app);
+        app.focus_sidebar();
+        app.set_screen_focus(0);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 110,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!app.sidebar_focus);
+        assert_eq!(app.screen_focus(), 1);
+
+        app.focus_sidebar();
+        app.set_screen_focus(0);
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 110,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(!app.sidebar_focus);
+        assert_eq!(app.screen_focus(), 1);
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 40,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(app.screen_focus(), 0);
+        assert_eq!(app.settings_ui.section, 1);
     }
 
     #[test]
