@@ -74,6 +74,7 @@ runtime can no longer execute them.
 | Codex | `codex` | app-server JSON-RPC thread and turn calls |
 | OpenCode | `opencode` | JSON event stream with native session resume |
 | pi | `pi` | RPC session with native prompt and resume |
+| oh-my-pi | `omp` | RPC session with native prompt and resume |
 
 The harness runs autonomously under its normal non-interactive contract. Provider-specific
 session IDs are stored with the chat, so later messages, including messages sent after a

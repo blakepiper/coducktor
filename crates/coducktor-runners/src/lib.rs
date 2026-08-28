@@ -15,6 +15,7 @@ pub mod codex;
 pub mod codex_runner;
 pub mod conversation_factory;
 pub mod model_identity;
+pub mod omp_runner;
 pub mod opencode;
 pub mod opencode_run;
 pub mod pi;

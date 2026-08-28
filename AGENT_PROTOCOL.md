@@ -29,6 +29,8 @@ requests. Skill context augments the provider request but never changes the dura
 - **OpenCode** runs one `run --format json --auto` process per turn and resumes by native session
   identifier. Autonomous execution is explicit.
 - **pi** uses its RPC mode; each message is one native prompt on the retained or resumed session.
+- **oh-my-pi (`omp`)** uses its RPC mode; each message is one native prompt on the retained or
+  resumed session. OMP's `agent_end` event is the native turn boundary.
 
 Provider command lines and wire types remain private to `coducktor-runners`. They are translated
 to the small normalized event vocabulary before reaching core or the UI.

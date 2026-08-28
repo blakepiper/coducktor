@@ -222,6 +222,11 @@ fn backend_allow_prefixes(backend: Runner) -> Vec<&'static str> {
             prefixes.extend_from_slice(MULTI_PROVIDER_PREFIXES);
             prefixes
         }
+        Runner::Omp => {
+            let mut prefixes = vec!["OMP_", "PI_"];
+            prefixes.extend_from_slice(MULTI_PROVIDER_PREFIXES);
+            prefixes
+        }
     }
 }
 

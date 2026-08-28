@@ -126,8 +126,14 @@ impl ConversationSession for CountingSession {
     }
 }
 
-fn harnesses() -> [Runner; 4] {
-    [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi]
+fn harnesses() -> [Runner; 5] {
+    [
+        Runner::Claude,
+        Runner::Codex,
+        Runner::OpenCode,
+        Runner::Pi,
+        Runner::Omp,
+    ]
 }
 
 fn create_input(text: &str, harness: Runner) -> CreateConversationInput {

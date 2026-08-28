@@ -46,6 +46,7 @@ fn runner_value(runner: Runner) -> Value {
             Runner::Codex => "codex",
             Runner::OpenCode => "opencode",
             Runner::Pi => "pi",
+            Runner::Omp => "omp",
         }
         .to_owned(),
     )
@@ -112,17 +113,17 @@ impl AgentAccount {
 }
 
 /// One project's per-provider account choice. An absent key means the discovered
-/// default.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AgentAccountSelection {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
     pub pi: Option<String>,
+    pub omp: Option<String>,
     pub extra: Map<String, Value>,
 }
 
-const SELECTION_KEYS: &[&str] = &["claude", "codex", "opencode", "pi"];
+const SELECTION_KEYS: &[&str] = &["claude", "codex", "opencode", "pi", "omp"];
 
 impl AgentAccountSelection {
     fn parse(value: Option<&Value>) -> Self {
@@ -132,6 +133,7 @@ impl AgentAccountSelection {
             codex: zod::capped_str_opt(zod::field(object, "codex"), 64),
             opencode: zod::capped_str_opt(zod::field(object, "opencode"), 64),
             pi: zod::capped_str_opt(zod::field(object, "pi"), 64),
+            omp: zod::capped_str_opt(zod::field(object, "omp"), 64),
             extra: object
                 .map(|o| zod::extra_fields(o, SELECTION_KEYS))
                 .unwrap_or_default(),
@@ -161,6 +163,10 @@ impl AgentAccountSelection {
                     "pi",
                     self.pi.clone().map(Value::from).unwrap_or(Value::Null),
                 ),
+                (
+                    "omp",
+                    self.omp.clone().map(Value::from).unwrap_or(Value::Null),
+                ),
             ],
         )
     }
@@ -169,6 +175,7 @@ impl AgentAccountSelection {
     pub fn get(&self, provider: Runner) -> Option<&str> {
         match provider {
             Runner::Claude => self.claude.as_deref(),
+            Runner::Omp => self.omp.as_deref(),
             Runner::Codex => self.codex.as_deref(),
             Runner::OpenCode => self.opencode.as_deref(),
             Runner::Pi => self.pi.as_deref(),

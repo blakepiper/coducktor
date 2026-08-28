@@ -23,6 +23,9 @@
 - "Open in Terminal" on Linux now prefers the current desktop session's own terminal (e.g.
   `xfce4-terminal` on an XFCE session) over the static fallback order, and Settings → Appearance
   gained a "Default terminal" row to pin an exact installed emulator instead of auto-detecting.
+- oh-my-pi (`omp`) is now a selectable conversation harness with native RPC prompts, session
+  resume, normalized streaming/tool/usage events, curated environment forwarding, health
+  detection, and project/workspace model settings.
 
 Any future compatibility change belongs in this section with its migration or
 degradation path. Retired release notes and one-time implementation plans are

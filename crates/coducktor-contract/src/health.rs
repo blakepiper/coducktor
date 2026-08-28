@@ -9,6 +9,7 @@ pub enum Runner {
     #[serde(rename = "opencode")]
     OpenCode,
     Pi,
+    Omp,
 }
 
 /// `RunnerSelection` contract shape.
@@ -20,6 +21,7 @@ pub enum RunnerSelection {
     #[serde(rename = "opencode")]
     OpenCode,
     Pi,
+    Omp,
     Auto,
 }
 
@@ -41,6 +43,7 @@ pub enum BackendCheckName {
     #[serde(rename = "opencode")]
     OpenCode,
     Pi,
+    Omp,
     Gh,
     Git,
 }

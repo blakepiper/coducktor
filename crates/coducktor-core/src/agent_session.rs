@@ -3,7 +3,7 @@
 //! A runner adapter lives outside this crate and only has to translate its own native protocol
 //! into these types: live [`EventInput`]s during the turn and one [`SessionOutcome`] out.
 //! Nothing backend-specific crosses this boundary, which is what lets the conversation runtime
-//! treat Claude, Codex, OpenCode, and pi identically.
+//! treat Claude, Codex, OpenCode, pi, and oh-my-pi identically.
 
 use std::io;
 use std::sync::Arc;

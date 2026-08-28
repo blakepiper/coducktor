@@ -12,7 +12,13 @@ use coducktor_contract::{
 };
 
 /// The agent-backend catalog in stable `RUNNERS` order.
-pub const RUNNERS: [Runner; 4] = [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi];
+pub const RUNNERS: [Runner; 5] = [
+    Runner::Claude,
+    Runner::Codex,
+    Runner::OpenCode,
+    Runner::Pi,
+    Runner::Omp,
+];
 
 /// Runners whose provider is both connected and enabled, in `RUNNERS` order.
 pub fn usable_runners(status: Option<&ProviderStatusResponse>) -> Vec<Runner> {
@@ -66,7 +72,9 @@ pub fn static_models_for(runner: Runner) -> Vec<ModelPreset> {
             preset("claude-sonnet-5", "Sonnet 5", "Pinned version"),
             preset("claude-haiku-4-5", "Haiku 4.5", "Pinned version"),
         ],
-        Runner::Codex | Runner::OpenCode => vec![preset("", "auto", "Use your default model")],
+        Runner::Codex | Runner::OpenCode | Runner::Omp => {
+            vec![preset("", "auto", "Use your default model")]
+        }
         Runner::Pi => vec![
             preset("", "auto", "Use your pi default model"),
             preset(
@@ -86,7 +94,7 @@ pub fn static_models_for(runner: Runner) -> Vec<ModelPreset> {
 
 /// Runners that pick with the canonical `provider/model` convention and span every
 /// provider the host has configured, so an id they list is never EXCLUSIVE to them.
-const PROVIDER_SPANNING_RUNNERS: [Runner; 2] = [Runner::OpenCode, Runner::Pi];
+const PROVIDER_SPANNING_RUNNERS: [Runner; 3] = [Runner::OpenCode, Runner::Pi, Runner::Omp];
 
 /// Keep recognized presets from another backend out of a runner's custom-model
 /// escape hatch (#480). Unknown ids remain valid custom models; only a known
@@ -175,19 +183,18 @@ pub fn resolve_runner(picked: Option<Runner>, available: &[Runner], preferred: R
 /// A conversation's harness is concrete and immutable, so the composer resolves an exact
 /// runner: the user's pick when it is usable, else the configured default, else the first
 /// usable backend. There is no Auto choice to route or fail over.
-pub fn resolve_harness(picked: Option<Runner>, available: &[Runner], preferred: Runner) -> Runner {
-    resolve_runner(picked, available, preferred)
-}
-
-/// Collapse a stored `RunnerSelection` default onto a concrete harness. Legacy configs may
-/// still say `auto`; the composer treats that as "no opinion" and falls back to Claude.
 pub fn harness_from_selection(selection: RunnerSelection) -> Runner {
     match selection {
         RunnerSelection::Auto | RunnerSelection::Claude => Runner::Claude,
         RunnerSelection::Codex => Runner::Codex,
         RunnerSelection::OpenCode => Runner::OpenCode,
         RunnerSelection::Pi => Runner::Pi,
+        RunnerSelection::Omp => Runner::Omp,
     }
+}
+/// Resolve a concrete conversation harness from the available provider list.
+pub fn resolve_harness(picked: Option<Runner>, available: &[Runner], preferred: Runner) -> Runner {
+    resolve_runner(picked, available, preferred)
 }
 
 /// The effective model: the user's pick when it exists in the selected runner's
@@ -226,6 +233,7 @@ fn default_for_runner(defaults: &RunnerModels, runner: Runner) -> Option<&String
         Runner::Codex => defaults.codex.as_ref(),
         Runner::OpenCode => defaults.opencode.as_ref(),
         Runner::Pi => defaults.pi.as_ref(),
+        Runner::Omp => defaults.omp.as_ref(),
     }
 }
 

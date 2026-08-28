@@ -79,6 +79,7 @@ pub fn auxiliary_runner(selection: RunnerSelection) -> Runner {
         RunnerSelection::Codex => Runner::Codex,
         RunnerSelection::OpenCode => Runner::OpenCode,
         RunnerSelection::Pi => Runner::Pi,
+        RunnerSelection::Omp => Runner::Omp,
     }
 }
 
@@ -122,6 +123,7 @@ fn runner_selection_value(runner: RunnerSelection) -> Value {
             RunnerSelection::Codex => "codex",
             RunnerSelection::OpenCode => "opencode",
             RunnerSelection::Pi => "pi",
+            RunnerSelection::Omp => "omp",
             RunnerSelection::Auto => "auto",
         }
         .to_owned(),
@@ -141,6 +143,9 @@ fn runner_models_to_map(models: &AgentDefaultModels) -> serde_json::Map<String, 
     }
     if let Some(v) = &models.pi {
         map.insert("pi".to_owned(), Value::String(v.clone()));
+    }
+    if let Some(v) = &models.omp {
+        map.insert("omp".to_owned(), Value::String(v.clone()));
     }
     map
 }
@@ -178,6 +183,7 @@ fn try_parse(raw: &Value) -> Option<RepoConfig> {
             codex: zod::trimmed_str_opt(models.get("codex"), 1, 200),
             opencode: zod::trimmed_str_opt(models.get("opencode"), 1, 200),
             pi: zod::trimmed_str_opt(models.get("pi"), 1, 200),
+            omp: zod::trimmed_str_opt(models.get("omp"), 1, 200),
         })
         .unwrap_or_default();
     let models_locked = zod::bool_opt(object.get("modelsLocked"));
@@ -374,6 +380,7 @@ mod tests {
                 codex: Some("machine-codex".to_owned()),
                 opencode: None,
                 pi: None,
+                omp: None,
                 extra: Default::default(),
             }),
             extra: Default::default(),

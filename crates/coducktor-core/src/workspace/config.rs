@@ -37,9 +37,15 @@ pub fn is_valid_slug(value: &str) -> bool {
     is_head(bytes[0]) && bytes[1..].iter().all(|&b| is_tail(b))
 }
 
-/// The four known agent backends, in the canonical order `disabled_providers` re-sorts
+/// The five known agent backends, in the canonical order `disabled_providers` re-sorts
 /// to.
-pub const PROVIDER_IDS: [Runner; 4] = [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi];
+pub const PROVIDER_IDS: [Runner; 5] = [
+    Runner::Claude,
+    Runner::Codex,
+    Runner::OpenCode,
+    Runner::Pi,
+    Runner::Omp,
+];
 
 fn runner_value(runner: Runner) -> Value {
     Value::String(
@@ -48,6 +54,7 @@ fn runner_value(runner: Runner) -> Value {
             Runner::Codex => "codex",
             Runner::OpenCode => "opencode",
             Runner::Pi => "pi",
+            Runner::Omp => "omp",
         }
         .to_owned(),
     )
@@ -60,6 +67,7 @@ fn runner_selection_value(runner: RunnerSelection) -> Value {
             RunnerSelection::Codex => "codex",
             RunnerSelection::OpenCode => "opencode",
             RunnerSelection::Pi => "pi",
+            RunnerSelection::Omp => "omp",
             RunnerSelection::Auto => "auto",
         }
         .to_owned(),
@@ -361,19 +369,18 @@ impl ComposerDefaults {
     }
 }
 
-/// The per-runner model preset bag nested in `agentDefaults` — unlike `crate::config`'s
-/// `defaultModels` (no passthrough), this one carries `.passthrough()` too, so it needs
-/// its own `extra` bucket.
+/// The per-runner model preset bag nested in `agentDefaults`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AgentDefaultModels {
     pub claude: Option<String>,
     pub codex: Option<String>,
     pub opencode: Option<String>,
     pub pi: Option<String>,
+    pub omp: Option<String>,
     pub extra: Map<String, Value>,
 }
 
-const AGENT_DEFAULT_MODELS_KEYS: &[&str] = &["claude", "codex", "opencode", "pi"];
+const AGENT_DEFAULT_MODELS_KEYS: &[&str] = &["claude", "codex", "opencode", "pi", "omp"];
 
 impl AgentDefaultModels {
     fn parse(value: Option<&Value>) -> Option<Self> {
@@ -383,6 +390,7 @@ impl AgentDefaultModels {
             codex: zod::trimmed_str_opt(object.get("codex"), 1, 200),
             opencode: zod::trimmed_str_opt(object.get("opencode"), 1, 200),
             pi: zod::trimmed_str_opt(object.get("pi"), 1, 200),
+            omp: zod::trimmed_str_opt(object.get("omp"), 1, 200),
             extra: zod::extra_fields(object, AGENT_DEFAULT_MODELS_KEYS),
         })
     }
@@ -409,6 +417,10 @@ impl AgentDefaultModels {
                 (
                     "pi",
                     self.pi.clone().map(Value::from).unwrap_or(Value::Null),
+                ),
+                (
+                    "omp",
+                    self.omp.clone().map(Value::from).unwrap_or(Value::Null),
                 ),
             ],
         )

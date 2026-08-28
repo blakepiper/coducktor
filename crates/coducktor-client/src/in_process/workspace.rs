@@ -286,6 +286,7 @@ fn update_repo_config(
             ("codex", &models_patch.codex),
             ("opencode", &models_patch.opencode),
             ("pi", &models_patch.pi),
+            ("omp", &models_patch.omp),
         ] {
             if let Some(value) = patch {
                 match value.as_deref().map(str::trim) {
@@ -353,7 +354,7 @@ fn default_agent_profile(provider: Runner) -> ResolvedAgentProfile {
         Runner::Claude => home.claude,
         Runner::Codex => home.codex,
         Runner::OpenCode => home.opencode_config,
-        Runner::Pi => PathBuf::new(),
+        Runner::Pi | Runner::Omp => PathBuf::new(),
     };
     ResolvedAgentProfile {
         id: coducktor_contract::DEFAULT_AGENT_ACCOUNT_ID.to_owned(),
@@ -394,7 +395,7 @@ fn profile_file_defs(provider: Runner) -> &'static [(&'static str, &'static str)
             ("opencode.user.config", "opencode.json"),
             ("opencode.user.memory", "AGENTS.md"),
         ],
-        Runner::Pi => &[],
+        Runner::Pi | Runner::Omp => &[],
     }
 }
 
@@ -424,7 +425,7 @@ fn profile_dir_state(profile: &ResolvedAgentProfile) -> (bool, bool) {
     let markers: &[&str] = match profile.provider {
         Runner::Claude => &[".claude.json", "settings.json", "projects", "sessions"],
         Runner::Codex => &["auth.json", "config.toml"],
-        Runner::OpenCode | Runner::Pi => &[],
+        Runner::OpenCode | Runner::Pi | Runner::Omp => &[],
     };
     (true, markers.iter().any(|marker| names.contains(*marker)))
 }
@@ -453,6 +454,7 @@ fn selection_wire(
         codex: selection.codex.clone(),
         opencode: selection.opencode.clone(),
         pi: selection.pi.clone(),
+        omp: selection.omp.clone(),
     }
 }
 
@@ -463,6 +465,7 @@ fn selection_empty(
         && selection.codex.is_none()
         && selection.opencode.is_none()
         && selection.pi.is_none()
+        && selection.omp.is_none()
         && selection.extra.is_empty()
 }
 
@@ -476,6 +479,7 @@ fn set_profile_selection(
         Runner::Codex => selection.codex = profile_id,
         Runner::OpenCode => selection.opencode = profile_id,
         Runner::Pi => selection.pi = profile_id,
+        Runner::Omp => selection.omp = profile_id,
     }
 }
 
@@ -582,6 +586,7 @@ fn account_by_route_id(accounts_path: &Path, id: &str) -> Option<ResolvedAgentPr
         "codex" => Some(Runner::Codex),
         "opencode" => Some(Runner::OpenCode),
         "pi" => Some(Runner::Pi),
+        "omp" => Some(Runner::Omp),
         _ => None,
     }) {
         return Some(default_agent_profile(provider));
@@ -693,6 +698,7 @@ fn auto_route_key(runner: Runner) -> String {
         Runner::Codex => "codex",
         Runner::OpenCode => "opencode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     };
     format!("{name}:default")
 }
@@ -827,7 +833,9 @@ fn quota_aware_routing_decision(
                 Runner::Claude => (QuotaProvider::Claude, &policy.claude),
                 Runner::Codex => (QuotaProvider::Codex, &policy.codex),
                 Runner::OpenCode => (QuotaProvider::OpenCode, &policy.opencode),
-                Runner::Pi => unreachable!("Pi is never offered as an Auto candidate"),
+                Runner::Pi | Runner::Omp => {
+                    unreachable!("non-quota providers are never offered as Auto candidates")
+                }
             };
             if !provider_policy.enabled {
                 return CandidateEval {
@@ -925,6 +933,7 @@ fn provider_executable(provider: Runner) -> String {
         Runner::Codex => ("DUCK_CODEX_BIN", "codex"),
         Runner::OpenCode => ("DUCK_OPENCODE_BIN", "opencode"),
         Runner::Pi => ("DUCK_PI_BIN", "pi"),
+        Runner::Omp => ("DUCK_OMP_BIN", "omp"),
     };
     std::env::var(env_name)
         .ok()
@@ -938,6 +947,7 @@ fn provider_probe_args(provider: Runner) -> &'static [&'static str] {
         Runner::Codex => &["login", "status"],
         Runner::OpenCode => &["auth", "list"],
         Runner::Pi => &["--list-models"],
+        Runner::Omp => &["--version"],
     }
 }
 
@@ -947,18 +957,18 @@ fn provider_install_hint(provider: Runner) -> &'static str {
         Runner::Codex => "Install the Codex CLI, then run `codex login`.",
         Runner::OpenCode => "Install OpenCode, then run `opencode auth login`.",
         Runner::Pi => "Install pi, then run `pi /login`.",
+        Runner::Omp => "Install oh-my-pi, then run `omp` to configure a provider.",
     }
 }
 
 /// The default profile's interactive login subcommand, spawnable as `program` + these args in a
-/// fresh terminal. `None` when the provider has no such one-shot command — pi's `/login` is a
-/// slash command typed inside its own interactive session, not something this seam can drive.
+/// fresh terminal. `None` when the provider has no such one-shot command.
 fn provider_login_args(provider: Runner) -> Option<Vec<String>> {
     match provider {
         Runner::Claude => Some(vec!["auth".to_owned(), "login".to_owned()]),
         Runner::Codex => Some(vec!["login".to_owned()]),
         Runner::OpenCode => Some(vec!["auth".to_owned(), "login".to_owned()]),
-        Runner::Pi => None,
+        Runner::Pi | Runner::Omp => None,
     }
 }
 
@@ -968,6 +978,7 @@ fn runner_display_name(runner: Runner) -> &'static str {
         Runner::Codex => "Codex",
         Runner::OpenCode => "OpenCode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     }
 }
 
@@ -1047,6 +1058,10 @@ fn provider_state_from_output(
                 None
             }
         }
+        Runner::Omp => {
+            (exit_code == Some(0) && !combined.trim().is_empty())
+                .then_some(ProviderConnectionState::Connected)
+        }
     }
 }
 
@@ -1073,7 +1088,7 @@ fn provider_status_for_profile(profile: &ResolvedAgentProfile) -> ProviderStatus
             Runner::Codex => {
                 command.env("CODEX_HOME", &profile.path);
             }
-            Runner::OpenCode | Runner::Pi => {}
+            Runner::OpenCode | Runner::Pi | Runner::Omp => {}
         }
     }
     let result = command.output();
@@ -1120,7 +1135,6 @@ fn capped_json_file(path: &Path) -> Option<Value> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
-
 fn identity_text(value: Option<&Value>) -> Option<String> {
     match value {
         Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
@@ -1130,11 +1144,14 @@ fn identity_text(value: Option<&Value>) -> Option<String> {
 }
 
 fn agent_profile_details(profile: &ResolvedAgentProfile) -> AgentAccountDetailsResponse {
-    if matches!(profile.provider, Runner::OpenCode | Runner::Pi) {
+    if matches!(
+        profile.provider,
+        Runner::OpenCode | Runner::Pi | Runner::Omp
+    ) {
         return AgentAccountDetailsResponse {
             available: false,
             reason: Some(
-                "OpenCode keeps its login outside its config folder, so coducktor cannot read it."
+                "This provider keeps its login outside a readable Coducktor account folder."
                     .to_owned(),
             ),
             fields: Vec::new(),
@@ -1153,7 +1170,7 @@ fn agent_profile_details(profile: &ResolvedAgentProfile) -> AgentAccountDetailsR
             }
         }
         Runner::Codex => profile.path.join("auth.json"),
-        Runner::OpenCode | Runner::Pi => profile.path.clone(),
+        Runner::OpenCode | Runner::Pi | Runner::Omp => profile.path.clone(),
     };
     let Some(document) = capped_json_file(&path) else {
         return AgentAccountDetailsResponse {
@@ -1195,7 +1212,7 @@ fn agent_profile_details(profile: &ResolvedAgentProfile) -> AgentAccountDetailsR
                 });
             }
         }
-        Runner::OpenCode | Runner::Pi => {}
+        Runner::OpenCode | Runner::Pi | Runner::Omp => {}
     }
     if fields.is_empty() {
         AgentAccountDetailsResponse {
@@ -1513,6 +1530,7 @@ fn health_payload(repo_root: &Path, version: &str, probe_backends: bool) -> Heal
             (BackendCheckName::Codex, "codex"),
             (BackendCheckName::OpenCode, "opencode"),
             (BackendCheckName::Pi, "pi"),
+            (BackendCheckName::Omp, "omp"),
             (BackendCheckName::Gh, "gh"),
             (BackendCheckName::Git, "git"),
         ]
@@ -1590,13 +1608,13 @@ fn backend_check(name: BackendCheckName, binary: &str) -> BackendCheck {
         },
     }
 }
-
 fn backend_presence_check(name: BackendCheckName, binary: &str) -> BackendCheck {
     let env_name = match name {
         BackendCheckName::Claude => Some("DUCK_CLAUDE_BIN"),
         BackendCheckName::Codex => Some("DUCK_CODEX_BIN"),
         BackendCheckName::OpenCode => Some("DUCK_OPENCODE_BIN"),
         BackendCheckName::Pi => Some("DUCK_PI_BIN"),
+        BackendCheckName::Omp => Some("DUCK_OMP_BIN"),
         BackendCheckName::Gh | BackendCheckName::Git => None,
     };
     let override_present = env_name

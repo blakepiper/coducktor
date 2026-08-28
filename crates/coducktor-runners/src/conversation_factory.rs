@@ -23,6 +23,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::agent_runner::{AgentRunSpec, ContentBlock, ImageSource, prepend_system_prompt};
 use crate::claude_runner;
+use crate::omp_runner;
 use crate::opencode_run::OpencodeRunSession;
 use crate::session_factory::DefaultSessionFactory;
 use crate::{codex_runner, pi_runner};
@@ -437,6 +438,11 @@ impl ConversationSessionFactory for DefaultSessionFactory {
                 &spec,
                 self.host_env(),
             )?),
+            Runner::Omp => Box::new(omp_runner::open_omp_session(
+                &self.omp_config(&request.cwd),
+                &spec,
+                self.host_env(),
+            )?),
             Runner::OpenCode => unreachable!("OpenCode returned above"),
         };
         Ok(Box::new(ConversationAgentSession::new(inner, cancellation)))
@@ -651,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn all_four_harness_transports_complete_two_marker_free_conversation_turns() {
+    fn all_five_harness_transports_complete_two_marker_free_conversation_turns() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut env = BTreeMap::from([
             (
@@ -678,6 +684,12 @@ mod tests {
                     .to_string_lossy()
                     .into_owned(),
             ),
+            (
+                "DUCK_OMP_BIN".to_owned(),
+                root.join("fixtures/scripts/mock-pi-rpc.mjs")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
         ]);
         if let Ok(path) = std::env::var("PATH") {
             env.insert("PATH".to_owned(), path);
@@ -685,7 +697,13 @@ mod tests {
         let factory = DefaultSessionFactory::with_env(env);
         let dir = tempfile::tempdir().unwrap();
 
-        for harness in [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi] {
+        for harness in [
+            Runner::Claude,
+            Runner::Codex,
+            Runner::OpenCode,
+            Runner::Pi,
+            Runner::Omp,
+        ] {
             let mut first = request_in(dir.path(), harness, "first exact conversation prompt");
             let mut session = ConversationSessionFactory::open(&factory, &first)
                 .unwrap_or_else(|error| panic!("{harness:?} should open: {error}"));

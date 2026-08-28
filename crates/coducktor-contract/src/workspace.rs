@@ -215,6 +215,8 @@ pub struct RunnerModelsPatch {
     pub opencode: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp: Option<Option<String>>,
 }
 
 /// The partial quota-routing patch accepted by workspace settings.
@@ -605,6 +607,8 @@ pub struct RunnerModels {
     pub opencode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp: Option<String>,
 }
 
 /// `ConfigResponse` contract shape.

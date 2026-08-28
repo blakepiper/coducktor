@@ -7,8 +7,7 @@
 //! Binary resolution follows each runner's supported configuration:
 //! - claude/pi: `DUCK_CLAUDE_BIN`/`DUCK_PI_BIN` override, else — when `DUCK_DRY_RUN=1` — the
 //!   bundled mock script, else the bare binary name on PATH.
-//! - codex/opencode: `DUCK_CODEX_BIN`/`DUCK_OPENCODE_BIN` override, else the bare binary name on
-//!   PATH — these runners have no `DUCK_DRY_RUN` fallback.
+//! - codex/opencode/omp: their `DUCK_*_BIN` override, else the bare binary name on PATH.
 //!
 //! The dry-run mock scripts live under the repository's root-level `fixtures/` directory. They
 //! are resolved relative to the conversation's repository root.
@@ -23,7 +22,6 @@ use crate::pi_runner::PiSpawnConfig;
 
 const MOCK_CLAUDE_RELATIVE: &str = "fixtures/scripts/mock-claude.mjs";
 const MOCK_PI_RELATIVE: &str = "fixtures/scripts/mock-pi-rpc.mjs";
-
 /// Resolves the real agent CLI (or, for claude/pi under `DUCK_DRY_RUN=1`, the bundled mock) for
 /// whichever backend a conversation names.
 pub struct DefaultSessionFactory {
@@ -97,6 +95,19 @@ impl DefaultSessionFactory {
             let (program, args) = self.mock_node_config(repo_root, MOCK_PI_RELATIVE);
             config.program = program;
             config.prefix_args = args;
+        }
+        config
+    }
+    pub(crate) fn omp_config(&self, repo_root: &Path) -> PiSpawnConfig {
+        let mut config = PiSpawnConfig::default();
+        if let Some(bin) = self.host_env.get("DUCK_OMP_BIN") {
+            config.program = bin.clone();
+        } else if self.dry_run() {
+            let (program, args) = self.mock_node_config(repo_root, MOCK_PI_RELATIVE);
+            config.program = program;
+            config.prefix_args = args;
+        } else {
+            config.program = "omp".to_owned();
         }
         config
     }
@@ -186,5 +197,18 @@ mod tests {
     fn opencode_config_honors_its_own_env_override() {
         let factory = factory_with_env(&[("DUCK_OPENCODE_BIN", "/opt/opencode")]);
         assert_eq!(factory.opencode_config().program, "/opt/opencode");
+    }
+    #[test]
+    fn omp_config_uses_its_override_and_dry_run_mock() {
+        let factory = factory_with_env(&[("DUCK_OMP_BIN", "/opt/omp"), ("DUCK_DRY_RUN", "1")]);
+        assert_eq!(factory.omp_config(Path::new("/repo")).program, "/opt/omp");
+
+        let factory = factory_with_env(&[("DUCK_DRY_RUN", "1")]);
+        let config = factory.omp_config(Path::new("/repo"));
+        assert_eq!(config.program, "node");
+        assert_eq!(
+            config.prefix_args,
+            vec!["/repo/fixtures/scripts/mock-pi-rpc.mjs".to_owned()]
+        );
     }
 }

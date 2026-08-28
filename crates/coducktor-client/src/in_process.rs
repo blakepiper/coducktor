@@ -1977,7 +1977,7 @@ impl InProcessEngine {
         let runner = match runner {
             Runner::Codex => ModelDiscoveryRunner::Codex,
             Runner::OpenCode => ModelDiscoveryRunner::OpenCode,
-            Runner::Claude | Runner::Pi => {
+            Runner::Claude | Runner::Pi | Runner::Omp => {
                 return Err(EngineError::Conflict {
                     reason: "runner must be codex or opencode".to_owned(),
                 });
@@ -2070,6 +2070,7 @@ impl InProcessEngine {
             RunnerSelection::Codex => Runner::Codex,
             RunnerSelection::OpenCode => Runner::OpenCode,
             RunnerSelection::Pi => Runner::Pi,
+            RunnerSelection::Omp => Runner::Omp,
         };
         workspace.disabled_providers.contains(&provider).then(|| {
             format!(
@@ -3312,6 +3313,7 @@ fn workspace_config_response(
                 codex: models.codex.clone(),
                 opencode: models.opencode.clone(),
                 pi: models.pi.clone(),
+                omp: models.omp.clone(),
             });
     WorkspaceConfigResponse {
         projects_dir: config.projects_dir.clone(),
@@ -3408,6 +3410,7 @@ fn validate_workspace_config_input(input: &SetWorkspaceConfigInput) -> Result<()
             models.codex.as_ref(),
             models.opencode.as_ref(),
             models.pi.as_ref(),
+            models.omp.as_ref(),
         ]
         .into_iter()
         .flatten()
@@ -3492,9 +3495,15 @@ fn apply_workspace_config_input(
             config.agent_defaults.runner = runner;
         }
         if let Some(models) = &agent.models {
-            let has_patch = [&models.claude, &models.codex, &models.opencode, &models.pi]
-                .into_iter()
-                .any(Option::is_some);
+            let has_patch = [
+                &models.claude,
+                &models.codex,
+                &models.opencode,
+                &models.pi,
+                &models.omp,
+            ]
+            .into_iter()
+            .any(Option::is_some);
             if has_patch {
                 let target = config
                     .agent_defaults
@@ -3512,10 +3521,14 @@ fn apply_workspace_config_input(
                 if let Some(value) = &models.pi {
                     target.pi = value.as_ref().map(|value| value.trim().to_owned());
                 }
+                if let Some(value) = &models.omp {
+                    target.omp = value.as_ref().map(|value| value.trim().to_owned());
+                }
                 if target.claude.is_none()
                     && target.codex.is_none()
                     && target.opencode.is_none()
                     && target.pi.is_none()
+                    && target.omp.is_none()
                     && target.extra.is_empty()
                 {
                     config.agent_defaults.models = None;
@@ -3628,6 +3641,7 @@ fn provider_label(provider: Runner) -> &'static str {
         Runner::Codex => "Codex",
         Runner::OpenCode => "OpenCode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     }
 }
 
@@ -3798,13 +3812,12 @@ async fn read_codex_response(
     }
     Err(())
 }
-
 fn quota_provider(runner: Runner) -> Option<QuotaProvider> {
     match runner {
         Runner::Claude => Some(QuotaProvider::Claude),
         Runner::Codex => Some(QuotaProvider::Codex),
         Runner::OpenCode => Some(QuotaProvider::OpenCode),
-        Runner::Pi => None,
+        Runner::Pi | Runner::Omp => None,
     }
 }
 
@@ -3822,7 +3835,7 @@ fn unknown_usage_snapshot(
                 Runner::Claude => "Claude reports limits only after a real session observation",
                 Runner::OpenCode => "configured upstreams do not expose a common quota API",
                 Runner::Codex => "Codex did not return a usable rate-limit snapshot",
-                Runner::Pi => "quota telemetry is unavailable",
+                Runner::Pi | Runner::Omp => "quota telemetry is unavailable",
             },
         ),
         ProviderConnectionState::Disconnected => (

@@ -33,7 +33,13 @@ use crate::theme::{Theme, ThemeName};
 use crate::widgets::editor::Editor;
 use crate::widgets::picker::{Picker, PickerEvent, PickerItem};
 
-const RUNNERS: [Runner; 4] = [Runner::Claude, Runner::Codex, Runner::OpenCode, Runner::Pi];
+const RUNNERS: [Runner; 5] = [
+    Runner::Claude,
+    Runner::Codex,
+    Runner::OpenCode,
+    Runner::Pi,
+    Runner::Omp,
+];
 const THEMES: [ThemeName; 3] = [ThemeName::Dark, ThemeName::LazyVim, ThemeName::Lakes];
 
 pub fn runner_label(runner: Runner) -> &'static str {
@@ -42,6 +48,7 @@ pub fn runner_label(runner: Runner) -> &'static str {
         Runner::Codex => "codex",
         Runner::OpenCode => "opencode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     }
 }
 
@@ -326,7 +333,7 @@ fn rows_agents(app: &App) -> Vec<Row> {
     let git_auto = composer
         .and_then(|defaults| defaults.git_auto)
         .unwrap_or(false);
-    let rows = vec![
+    vec![
         row("Base branch", opt_str(&config.base_branch)),
         row(
             "Project runner",
@@ -345,6 +352,7 @@ fn rows_agents(app: &App) -> Vec<Row> {
             opt_str(&config.default_models.opencode),
         ),
         row("Project model — pi", opt_str(&config.default_models.pi)),
+        row("Project model — omp", opt_str(&config.default_models.omp)),
         row(
             "Project worktree",
             project_composer
@@ -360,8 +368,7 @@ fn rows_agents(app: &App) -> Vec<Row> {
                 .map(|git_auto| git_mode_label(git_auto).to_owned())
                 .unwrap_or_else(|| format!("inherit ({})", git_mode_label(git_auto))),
         ),
-    ];
-    rows
+    ]
 }
 
 fn git_mode_label(git_auto: bool) -> &'static str {
@@ -412,6 +419,10 @@ fn rows_global_agents(app: &App) -> Vec<Row> {
             "Default model — pi",
             opt_str(&agent.models.as_ref().and_then(|models| models.pi.clone())),
         ),
+        row(
+            "Default model — omp",
+            opt_str(&agent.models.as_ref().and_then(|models| models.omp.clone())),
+        ),
         row("Default worktree", bool_label(worktree)),
         row("Default git mode", git_mode_label(git_auto)),
     ]
@@ -424,6 +435,7 @@ fn runner_selection_label(selection: coducktor_contract::RunnerSelection) -> &'s
         coducktor_contract::RunnerSelection::Codex => "codex",
         coducktor_contract::RunnerSelection::OpenCode => "opencode",
         coducktor_contract::RunnerSelection::Pi => "pi",
+        coducktor_contract::RunnerSelection::Omp => "omp",
     }
 }
 
@@ -432,7 +444,7 @@ fn cycle_runner_selection(
     backward: bool,
 ) -> coducktor_contract::RunnerSelection {
     use coducktor_contract::RunnerSelection::*;
-    const ORDER: [coducktor_contract::RunnerSelection; 4] = [Claude, Codex, OpenCode, Pi];
+    const ORDER: [coducktor_contract::RunnerSelection; 5] = [Claude, Codex, OpenCode, Pi, Omp];
     if current == Auto {
         return Claude;
     }
@@ -558,6 +570,7 @@ fn selected_default_label(profiles: &AgentProfilesResponse, runner: Runner) -> S
         Runner::Codex => &profiles.defaults.codex,
         Runner::OpenCode => &profiles.defaults.opencode,
         Runner::Pi => &profiles.defaults.pi,
+        Runner::Omp => &profiles.defaults.omp,
     };
     match selection {
         Some(id) => profiles
@@ -584,7 +597,6 @@ fn rows_providers(app: &App) -> Vec<Row> {
         })
         .collect()
 }
-
 fn provider_status_value(
     app: &App,
     runner: Runner,
@@ -608,6 +620,8 @@ fn provider_status_value(
         coducktor_contract::ProviderConnectionState::Disconnected => {
             if runner == Runner::Pi {
                 "not connected · run `pi`, then type /login".to_owned()
+            } else if runner == Runner::Omp {
+                "not connected · run `omp` to configure a provider".to_owned()
             } else {
                 "not connected · Enter to connect".to_owned()
             }
@@ -630,7 +644,7 @@ fn activate_providers(app: &mut App, row: usize) {
         return;
     };
     if entry.status != coducktor_contract::ProviderConnectionState::Disconnected
-        || runner == Runner::Pi
+        || matches!(runner, Runner::Pi | Runner::Omp)
         || app.settings_ui.connecting_provider.is_some()
     {
         return;
@@ -1626,6 +1640,7 @@ fn model_value(app: &App, scope: ModelScope, runner: Runner) -> Option<String> {
         Runner::Codex => models.codex.clone(),
         Runner::OpenCode => models.opencode.clone(),
         Runner::Pi => models.pi.clone(),
+        Runner::Omp => models.omp.clone(),
     }
 }
 
@@ -1739,6 +1754,7 @@ fn queue_model_update(app: &mut App, scope: ModelScope, runner: Runner, value: O
         Runner::Codex => models.codex = Some(value),
         Runner::OpenCode => models.opencode = Some(value),
         Runner::Pi => models.pi = Some(value),
+        Runner::Omp => models.omp = Some(value),
     }
     match scope {
         ModelScope::Project => app.pending.push(PendingAction::SettingsPutConfig {
@@ -1779,18 +1795,20 @@ fn activate_agents(app: &mut App, row: usize) {
         3 => open_model_picker(app, ModelScope::Project, Runner::Codex),
         4 => open_model_picker(app, ModelScope::Project, Runner::OpenCode),
         5 => open_model_picker(app, ModelScope::Project, Runner::Pi),
-        6..=7 => cycle(app, false),
+        6 => open_model_picker(app, ModelScope::Project, Runner::Omp),
+        7..=8 => cycle(app, false),
         _ => {}
     }
 }
 
 fn activate_global_agents(app: &mut App, row: usize) {
     match row {
-        0 | 5 | 6 => cycle_global_agents(app, row, false),
+        0 | 6 | 7 => cycle_global_agents(app, row, false),
         1 => open_model_picker(app, ModelScope::Global, Runner::Claude),
         2 => open_model_picker(app, ModelScope::Global, Runner::Codex),
         3 => open_model_picker(app, ModelScope::Global, Runner::OpenCode),
         4 => open_model_picker(app, ModelScope::Global, Runner::Pi),
+        5 => open_model_picker(app, ModelScope::Global, Runner::Omp),
         _ => {}
     }
 }
@@ -1878,6 +1896,7 @@ fn activate_accounts(app: &mut App, row: usize) {
             Runner::Codex => &profiles.defaults.codex,
             Runner::OpenCode => &profiles.defaults.opencode,
             Runner::Pi => &profiles.defaults.pi,
+            Runner::Omp => &profiles.defaults.omp,
         };
         let candidates: Vec<Option<String>> = std::iter::once(None)
             .chain(
@@ -1953,6 +1972,7 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
                 Runner::Codex => models.codex = Some(value),
                 Runner::OpenCode => models.opencode = Some(value),
                 Runner::Pi => models.pi = Some(value),
+                Runner::Omp => models.omp = Some(value),
             }
             let input = SetConfigInput {
                 default_models: Some(models),
@@ -1969,6 +1989,7 @@ fn submit_edit(app: &mut App, edit: SettingsEdit) {
                 Runner::Codex => models.codex = Some(value),
                 Runner::OpenCode => models.opencode = Some(value),
                 Runner::Pi => models.pi = Some(value),
+                Runner::Omp => models.omp = Some(value),
             }
             app.pending.push(PendingAction::SettingsPutWorkspaceConfig {
                 input: SetWorkspaceConfigInput {

@@ -3028,6 +3028,7 @@ fn backend_check_name(name: BackendCheckName) -> String {
         BackendCheckName::Codex => "codex".to_owned(),
         BackendCheckName::OpenCode => "opencode".to_owned(),
         BackendCheckName::Pi => "pi".to_owned(),
+        BackendCheckName::Omp => "omp".to_owned(),
         BackendCheckName::Gh => "gh".to_owned(),
         BackendCheckName::Git => "git".to_owned(),
     }

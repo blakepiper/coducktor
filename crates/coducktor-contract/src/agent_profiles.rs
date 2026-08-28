@@ -49,6 +49,7 @@ fn runner_name(runner: Runner) -> &'static str {
         Runner::Codex => "codex",
         Runner::OpenCode => "opencode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     }
 }
 
@@ -63,6 +64,8 @@ pub struct AgentAccountSelection {
     pub opencode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp: Option<String>,
 }
 
 /// `AgentProfilesResponse` contract shape.

@@ -53,9 +53,7 @@ use crate::claude_runner::{EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS};
 use crate::usage::{self, RawUsage};
 use crate::wire::{as_nonempty_str, as_record};
 
-/// Where to find the pi binary. Production wiring resolves `program`/`prefix_args` from
-/// `DUCK_PI_BIN`/`DUCK_DRY_RUN` are resolved by the session factory;
-/// tests point `program` at `node` with `prefix_args: vec![mock_script_path]`.
+/// Spawn configuration shared by the Pi-compatible RPC runners.
 #[derive(Debug, Clone)]
 pub struct PiSpawnConfig {
     pub program: String,
@@ -77,53 +75,59 @@ impl Default for PiSpawnConfig {
     }
 }
 
-fn wrap_spawn_error(error: &io::Error, program: &str) -> String {
+fn wrap_spawn_error(error: &io::Error, program: &str, cli_name: &str) -> String {
     if error.kind() == io::ErrorKind::NotFound {
         format!(
-            "`{program}` not found on PATH — install pi and run `pi` once to configure a provider"
+            "`{program}` not found on PATH — install {cli_name} and configure its provider before starting a conversation"
         )
     } else {
         error.to_string()
     }
 }
 
-/// A live `pi` RPC session. Implements [`AgentSession`].
+/// A live Pi-compatible RPC session. Implements [`AgentSession`].
 pub struct PiSession {
     process: ChildProcess,
     session_id: Option<String>,
     /// Whether stdin is still open for this session.
     open: bool,
+    cli_name: &'static str,
+    settle_event: &'static str,
 }
 
-/// Spawn a pi session, probe its state, and send the opening message — mirrors `startSession`'s
-/// synchronous `write({type:'get_state'})` + `sendMessage([...images, text])` calls before it
-/// returns a session object.
-pub fn open_pi_session(
+/// Spawn a Pi-compatible RPC session, probe its state, and send the opening message.
+pub fn open_rpc_session(
     config: &PiSpawnConfig,
     spec: &AgentRunSpec,
     host_env: &BTreeMap<String, String>,
+    runner: Runner,
+    cli_name: &'static str,
+    settle_event: &'static str,
+    args: Vec<String>,
 ) -> Result<PiSession, String> {
-    let mut args = config.prefix_args.clone();
-    args.extend(build_pi_args(spec));
+    let mut full_args = config.prefix_args.clone();
+    full_args.extend(args);
     let mut process = ChildProcess::spawn(
         &SpawnConfig {
             program: config.program.clone(),
-            args,
+            args: full_args,
             eof_term_grace: config.eof_term_grace,
             eof_kill_grace: config.eof_kill_grace,
         },
-        Runner::Pi,
+        runner,
         &spec.cwd,
         &spec.env,
         host_env,
     )
-    .map_err(|error| wrap_spawn_error(&error, &config.program))?;
+    .map_err(|error| wrap_spawn_error(&error, &config.program, cli_name))?;
     process.set_cancellation(spec.cancellation.clone());
 
     let mut session = PiSession {
         process,
         session_id: spec.session_id.clone(),
         open: true,
+        cli_name,
+        settle_event,
     };
 
     session.write_get_state()?;
@@ -134,6 +138,23 @@ pub fn open_pi_session(
     session.write_prompt(&opening)?;
 
     Ok(session)
+}
+
+/// Spawn a pi session, probe its state, and send the opening message.
+pub fn open_pi_session(
+    config: &PiSpawnConfig,
+    spec: &AgentRunSpec,
+    host_env: &BTreeMap<String, String>,
+) -> Result<PiSession, String> {
+    open_rpc_session(
+        config,
+        spec,
+        host_env,
+        Runner::Pi,
+        "pi",
+        "agent_settled",
+        build_pi_args(spec),
+    )
 }
 
 /// Build the arguments for a Pi RPC session.
@@ -169,6 +190,34 @@ pub fn build_pi_args(spec: &AgentRunSpec) -> Vec<String> {
     args
 }
 
+/// Build arguments for an oh-my-pi RPC session.
+pub fn build_omp_args(spec: &AgentRunSpec) -> Vec<String> {
+    let mut args = vec![
+        "--mode".to_owned(),
+        "rpc".to_owned(),
+        "--approval-mode".to_owned(),
+        "yolo".to_owned(),
+    ];
+    if spec.resume
+        && let Some(session_id) = &spec.session_id
+    {
+        args.push("--resume".to_owned());
+        args.push(session_id.clone());
+    }
+    if let Some(system_prompt) = &spec.system_prompt {
+        args.push("--append-system-prompt".to_owned());
+        args.push(system_prompt.clone());
+    }
+    if let Some(model) = &spec.model {
+        args.push("--model".to_owned());
+        args.push(model.clone());
+    }
+    if let Some(effort) = selected_reasoning(spec) {
+        args.push("--thinking".to_owned());
+        args.push(effort.to_owned());
+    }
+    args
+}
 /// Convert prompt content to Pi's text and image payloads.
 fn to_pi_prompt(content: &[ContentBlock]) -> (String, Vec<Value>) {
     let mut text_parts = Vec::new();
@@ -258,8 +307,8 @@ fn tool_result_images(value: Option<&Value>) -> Vec<PiImage> {
         .collect()
 }
 
-/// Extract a useful message from a failed Pi RPC record.
-fn rpc_error_message(record: &Map<String, Value>) -> String {
+/// Extract a useful message from a failed Pi-compatible RPC record.
+fn rpc_error_message(record: &Map<String, Value>, cli_name: &str) -> String {
     if let Some(error) = record.get("error").and_then(as_record)
         && let Some(message) = as_nonempty_str(error.get("message"))
     {
@@ -272,9 +321,8 @@ fn rpc_error_message(record: &Map<String, Value>) -> String {
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    format!("pi RPC command {command} failed")
+    format!("{cli_name} RPC command {command} failed")
 }
-
 fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() > max {
         let head: String = text.chars().take(max).collect();
@@ -357,7 +405,11 @@ impl PiSession {
                 Err(_) => {
                     on_event(EventInput::new("note").field(
                         "message",
-                        format!("pi: skipped unparseable RPC line: {}", truncate(line, 200)),
+                        format!(
+                            "{}: skipped unparseable RPC line: {}",
+                            self.cli_name,
+                            truncate(line, 200)
+                        ),
                     ))
                     .map_err(|error| error.to_string())?;
                     continue;
@@ -385,7 +437,8 @@ impl PiSession {
                         }
                     } else if record.get("success").and_then(Value::as_bool) == Some(false) {
                         on_event(
-                            EventInput::new("error").field("message", rpc_error_message(record)),
+                            EventInput::new("error")
+                                .field("message", rpc_error_message(record, self.cli_name)),
                         )
                         .map_err(|error| error.to_string())?;
                     }
@@ -464,15 +517,21 @@ impl PiSession {
                         }
                     }
                 }
-                "agent_settled" => {
+                _ if kind == self.settle_event
+                    && (self.settle_event != "agent_end"
+                        || record
+                            .get("isTerminal")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true)) =>
+                {
                     // `settled` only matters for the post-loop "channel closed early" note below;
                     // this branch returns before that check runs.
                     on_event(EventInput::new("turn-end")).map_err(|error| error.to_string())?;
                     if tokens_used == 0.0 {
-                        on_event(
-                            EventInput::new("note")
-                                .field("message", "token usage not reported by pi CLI"),
-                        )
+                        on_event(EventInput::new("note").field(
+                            "message",
+                            format!("token usage not reported by {} CLI", self.cli_name),
+                        ))
                         .map_err(|error| error.to_string())?;
                     }
                     return self.finalize_turn(text_chunks, tokens_used, cost_usd);
@@ -480,7 +539,8 @@ impl PiSession {
                 "extension_error" => {
                     let message = as_nonempty_str(record.get("error"))
                         .or_else(|| as_nonempty_str(record.get("message")))
-                        .unwrap_or("pi extension error");
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("{} extension error", self.cli_name));
                     on_event(EventInput::new("note").field("message", message))
                         .map_err(|error| error.to_string())?;
                 }
@@ -488,7 +548,7 @@ impl PiSession {
             }
         }
 
-        // stdout closed without agent_settled — the process exited (or crashed) mid-turn.
+        // stdout closed before the provider's settle event — the process exited mid-turn.
         let exit_code = self.process.wait_for_exit();
         if let Some(code) = exit_code
             && code != 0
@@ -499,21 +559,25 @@ impl PiSession {
             } else {
                 format!(" — {stderr}")
             };
-            let message = format!("pi CLI exited with code {code}{detail}");
+            let message = format!("{} CLI exited with code {code}{detail}", self.cli_name);
             on_event(EventInput::new("error").field("message", message.clone()))
                 .map_err(|error| error.to_string())?;
             return Err(message);
         }
-        // Reaching here means the loop above never saw `agent_settled` (that branch returns
-        // directly) — the channel simply closed mid-turn.
-        on_event(
-            EventInput::new("note").field("message", "pi RPC session ended before agent_settled"),
-        )
+        // Reaching here means the provider never emitted its settle event; the channel closed mid-turn.
+        on_event(EventInput::new("note").field(
+            "message",
+            format!(
+                "{} RPC session ended before {}",
+                self.cli_name, self.settle_event
+            ),
+        ))
         .map_err(|error| error.to_string())?;
         if tokens_used == 0.0 {
-            on_event(
-                EventInput::new("note").field("message", "token usage not reported by pi CLI"),
-            )
+            on_event(EventInput::new("note").field(
+                "message",
+                format!("token usage not reported by {} CLI", self.cli_name),
+            ))
             .map_err(|error| error.to_string())?;
         }
         self.finalize_turn(text_chunks, tokens_used, cost_usd)

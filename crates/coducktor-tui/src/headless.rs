@@ -367,6 +367,7 @@ pub async fn doctor_command(repo_root: PathBuf, json: bool) -> i32 {
                 | BackendCheckName::Codex
                 | BackendCheckName::OpenCode
                 | BackendCheckName::Pi
+                | BackendCheckName::Omp
         )
     });
     let agent_count = agent_checks.clone().count();
@@ -423,6 +424,7 @@ fn backend_check_label(name: BackendCheckName) -> &'static str {
         BackendCheckName::Codex => "codex",
         BackendCheckName::OpenCode => "opencode",
         BackendCheckName::Pi => "pi",
+        BackendCheckName::Omp => "omp",
         BackendCheckName::Gh => "gh",
         BackendCheckName::Git => "git",
     }

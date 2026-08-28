@@ -178,6 +178,7 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
                 Runner::Codex => config.default_models.codex.as_deref(),
                 Runner::OpenCode => config.default_models.opencode.as_deref(),
                 Runner::Pi => config.default_models.pi.as_deref(),
+                Runner::Omp => config.default_models.omp.as_deref(),
             }),
         ],
     );
@@ -268,6 +269,7 @@ fn runner_label(runner: Runner) -> &'static str {
         Runner::Codex => "codex",
         Runner::OpenCode => "opencode",
         Runner::Pi => "pi",
+        Runner::Omp => "omp",
     }
 }
 
@@ -799,6 +801,7 @@ fn runner_desc(runner: Runner) -> &'static str {
         Runner::Codex => "OpenAI Codex (app-server)",
         Runner::OpenCode => "OpenCode (serve)",
         Runner::Pi => "pi CLI (provider/model)",
+        Runner::Omp => "oh-my-pi CLI (provider/model)",
     }
 }
 
@@ -978,6 +981,7 @@ fn parse_harness(value: &str) -> Option<Runner> {
         Some("codex") => Some(Runner::Codex),
         Some("opencode") => Some(Runner::OpenCode),
         Some("pi") => Some(Runner::Pi),
+        Some("omp") => Some(Runner::Omp),
         _ => None,
     }
 }
