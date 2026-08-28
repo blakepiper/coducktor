@@ -175,7 +175,14 @@ fn build_conversation_cards(
                 CardChip::Project(project_name(registry, &entry.project_id)),
                 CardChip::Harness {
                     harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
-                    model: entry.model.clone().or_else(|| entry.model_identity.clone()),
+                    model: Some(
+                        entry
+                            .model
+                            .clone()
+                            .or_else(|| entry.model_identity.clone())
+                            .unwrap_or_else(|| "auto".to_owned()),
+                    ),
+                    reasoning: Some(entry.reasoning.clone().unwrap_or_else(|| "auto".to_owned())),
                 },
             ];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
@@ -265,6 +272,9 @@ fn build_cards(
                 chips.push(CardChip::Harness {
                     harness: format!("{runner:?}").to_ascii_lowercase(),
                     model: entry.model.clone().or_else(|| entry.model_identity.clone()),
+                    reasoning: entry
+                        .reasoning_effort
+                        .map(|effort| format!("{effort:?}").to_ascii_lowercase()),
                 });
             } else if let Some(model) = entry.model.as_deref().or(entry.model_identity.as_deref()) {
                 chips.push(CardChip::Custom(model.to_owned()));

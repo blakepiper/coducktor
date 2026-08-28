@@ -86,14 +86,12 @@ pub fn render_conversation_header(
     let mut lines = vec![Line::from(title_line)];
 
     let soft = Style::default().fg(theme.palette.soft_fg);
-    let mut affinity = format!("{:?}", record.harness).to_ascii_lowercase();
-    if let Some(model) = record.model.as_deref().or(record.model_identity.as_deref()) {
-        affinity.push('/');
-        affinity.push_str(model);
-    }
-    if let Some(reasoning) = record.reasoning.as_deref() {
-        affinity.push_str(&format!(" · {reasoning}"));
-    }
+    let affinity = conversation_affinity(
+        record.harness,
+        record.model.as_deref(),
+        record.model_identity.as_deref(),
+        record.reasoning.as_deref(),
+    );
     let mut meta = vec![Span::styled(format!("{affinity}  "), soft)];
     if let Some(branch) = &record.branch {
         meta.push(Span::styled(format!("{branch}  "), soft));
@@ -180,6 +178,18 @@ pub fn render_conversation_header(
         }
     }
     height
+}
+
+fn conversation_affinity(
+    harness: coducktor_contract::Runner,
+    model: Option<&str>,
+    model_identity: Option<&str>,
+    reasoning: Option<&str>,
+) -> String {
+    let harness = format!("{harness:?}").to_ascii_lowercase();
+    let model = model.or(model_identity).unwrap_or("auto");
+    let reasoning = reasoning.unwrap_or("auto");
+    format!("{harness}/{model} · {reasoning}")
 }
 
 const FULL_DUCK_WIDTH: u16 = 26;
@@ -1195,7 +1205,9 @@ fn render_child_line(item: &UiItem, theme: &Theme) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL_DUCK_WIDTH, STAR_RING, agent_metadata, render_placebo_duck};
+    use super::{
+        FULL_DUCK_WIDTH, STAR_RING, agent_metadata, conversation_affinity, render_placebo_duck,
+    };
     use crate::screens::thread::PlaceboDuck;
     use crate::theme::{ColorCapability, Theme, ThemeName};
     use coducktor_contract::{ReasoningEffort, RunRecord, Runner};
@@ -1260,6 +1272,23 @@ mod tests {
         assert_eq!(
             agent_metadata(&record).as_deref(),
             Some("runner codex · model gpt-5.4 · reasoning high")
+        );
+    }
+
+    #[test]
+    fn conversation_affinity_keeps_auto_visible_and_prefers_a_reported_model() {
+        assert_eq!(
+            conversation_affinity(Runner::Claude, None, Some("claude-opus-4-8-exact"), None,),
+            "claude/claude-opus-4-8-exact · auto"
+        );
+        assert_eq!(
+            conversation_affinity(
+                Runner::Claude,
+                Some("opus"),
+                Some("claude-opus-4-8-exact"),
+                Some("high"),
+            ),
+            "claude/opus · high"
         );
     }
 }

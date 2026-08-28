@@ -52,6 +52,7 @@ pub enum CardChip {
     Harness {
         harness: String,
         model: Option<String>,
+        reasoning: Option<String>,
     },
     Branch(String),
     Worktree(String),
@@ -460,7 +461,11 @@ fn chip_line(chips: &[CardChip], width: usize, theme: &Theme) -> Line<'static> {
 fn chip_spans(chip: &CardChip, theme: &Theme) -> Vec<Span<'static>> {
     let soft = Style::default().fg(theme.palette.soft_fg);
     match chip {
-        CardChip::Harness { harness, model } => {
+        CardChip::Harness {
+            harness,
+            model,
+            reasoning,
+        } => {
             let mut spans = vec![
                 Span::styled(format!("{} ", tool_icon(ToolKind::Execute)), soft),
                 Span::styled(harness.clone(), Style::default().fg(theme.palette.accent)),
@@ -471,6 +476,13 @@ fn chip_spans(chip: &CardChip, theme: &Theme) -> Vec<Span<'static>> {
                     soft.add_modifier(Modifier::DIM),
                 ));
                 spans.push(Span::styled(model.clone(), soft));
+            }
+            if let Some(reasoning) = reasoning {
+                spans.push(Span::styled(
+                    glyphs().separator,
+                    soft.add_modifier(Modifier::DIM),
+                ));
+                spans.push(Span::styled(reasoning.clone(), soft));
             }
             spans
         }
@@ -634,6 +646,7 @@ mod tests {
                 vec![CardChip::Harness {
                     harness: "opencode".to_owned(),
                     model: Some("opencode-go/glm-5.3-flash".to_owned()),
+                    reasoning: Some("high".to_owned()),
                 }]
             } else {
                 Vec::new()
@@ -718,12 +731,13 @@ mod tests {
     }
 
     #[test]
-    fn typed_chips_keep_harness_and_model_separate_and_drop_whole_chips() {
+    fn typed_chips_keep_affinity_fields_separate_and_drop_whole_chips() {
         let theme = theme();
         let chips = vec![
             CardChip::Harness {
                 harness: "opencode".to_owned(),
                 model: Some("opencode-go/glm-5.3-flash".to_owned()),
+                reasoning: Some("high".to_owned()),
             },
             CardChip::Branch("duck/chat-18c".to_owned()),
             CardChip::PullRequest(42),
@@ -731,9 +745,10 @@ mod tests {
         let full = chip_line(&chips, 120, &theme).to_string();
         assert!(full.contains("opencode"));
         assert!(full.contains("opencode-go/glm-5.3-flash"));
+        assert!(full.contains("high"));
         assert!(!full.contains("opencode/opencode-go"));
 
-        let narrow = chip_line(&chips, 45, &theme).to_string();
+        let narrow = chip_line(&chips, 60, &theme).to_string();
         assert!(narrow.contains("+2"));
         assert!(!narrow.contains("duck/chat-18c"));
     }

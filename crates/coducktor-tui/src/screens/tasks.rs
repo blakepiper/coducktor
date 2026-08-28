@@ -127,7 +127,14 @@ fn build_conversation_cards(
             let entry = &conversations[index];
             let mut chips = vec![CardChip::Harness {
                 harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
-                model: entry.model.clone().or_else(|| entry.model_identity.clone()),
+                model: Some(
+                    entry
+                        .model
+                        .clone()
+                        .or_else(|| entry.model_identity.clone())
+                        .unwrap_or_else(|| "auto".to_owned()),
+                ),
+                reasoning: Some(entry.reasoning.clone().unwrap_or_else(|| "auto".to_owned())),
             }];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
                 chips.push(CardChip::Branch(branch.to_owned()));
@@ -204,6 +211,9 @@ fn build_cards(runs: &[ApiRun], view: TaskView, query: &str, now: i64) -> Vec<Ta
                         .model
                         .clone()
                         .or_else(|| record.model_identity.clone()),
+                    reasoning: record
+                        .reasoning_effort
+                        .map(|effort| format!("{effort:?}").to_ascii_lowercase()),
                 });
             } else if let Some(model) = record.model.as_deref().or(record.model_identity.as_deref())
             {
@@ -971,21 +981,38 @@ mod tests {
     }
 
     #[test]
-    fn conversation_card_chip_prefers_the_resolved_model_over_a_requested_auto() {
+    fn conversation_card_chip_shows_model_and_reasoning_selections() {
         let auto = conversation_entry(None, Some("claude-opus-4-8-exact"));
         let cards = build_conversation_cards(&[auto], TaskView::Active, "", 1_800_000_000);
-        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+        let Some(CardChip::Harness {
+            model, reasoning, ..
+        }) = cards[0].chips.first()
+        else {
             panic!("expected a harness chip");
         };
         assert_eq!(model.as_deref(), Some("claude-opus-4-8-exact"));
+        assert_eq!(reasoning.as_deref(), Some("auto"));
 
         // An explicit pick still wins over whatever the harness reports back.
-        let explicit = conversation_entry(Some("opus"), Some("claude-opus-4-8-exact"));
+        let mut explicit = conversation_entry(Some("opus"), Some("claude-opus-4-8-exact"));
+        explicit.reasoning = Some("high".to_owned());
         let cards = build_conversation_cards(&[explicit], TaskView::Active, "", 1_800_000_000);
-        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+        let Some(CardChip::Harness {
+            model, reasoning, ..
+        }) = cards[0].chips.first()
+        else {
             panic!("expected a harness chip");
         };
         assert_eq!(model.as_deref(), Some("opus"));
+        assert_eq!(reasoning.as_deref(), Some("high"));
+
+        let unresolved_auto = conversation_entry(None, None);
+        let cards =
+            build_conversation_cards(&[unresolved_auto], TaskView::Active, "", 1_800_000_000);
+        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+            panic!("expected a harness chip");
+        };
+        assert_eq!(model.as_deref(), Some("auto"));
     }
 
     #[test]
