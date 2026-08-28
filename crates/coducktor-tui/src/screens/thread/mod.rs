@@ -24,6 +24,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::{App, PendingAction};
 use crate::input::hitmap::HitAction;
+use crate::input::keymap::{ActionId, KeyMode};
 use crate::widgets::run_end::RunOutcome;
 use crate::widgets::transcript::{
     FrameCtx, MessageItem, NoteItem, NoteTone as TranscriptNoteTone, ReasoningItem, RunEndItem,
@@ -1231,6 +1232,10 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
                 theme: &theme,
                 tick: app.animation_tick,
                 now_epoch: app.now_epoch,
+                expand_key: app
+                    .keymap
+                    .key_for_action(KeyMode::Normal, ActionId::ToggleTranscriptItem)
+                    .unwrap_or("Enter"),
             },
             &mut app.hitmap,
         );
@@ -1729,6 +1734,10 @@ fn render_conversation(
                 theme: &theme,
                 tick: app.animation_tick,
                 now_epoch: app.now_epoch,
+                expand_key: app
+                    .keymap
+                    .key_for_action(KeyMode::Normal, ActionId::ToggleTranscriptItem)
+                    .unwrap_or("Enter"),
             },
             &mut app.hitmap,
         );
@@ -2898,6 +2907,7 @@ mod tests {
                 &mut buffer,
                 viewport,
                 FrameCtx {
+                    expand_key: "za",
                     theme: &theme,
                     tick: 0,
                     now_epoch: 0,
@@ -2916,6 +2926,7 @@ mod tests {
             &mut buffer,
             viewport,
             FrameCtx {
+                expand_key: "za",
                 theme: &theme,
                 tick: 0,
                 now_epoch: 0,

@@ -126,6 +126,7 @@ fn prepare_thread(event_count: usize) -> (ThreadUi, Theme) {
             &mut buffer,
             VIEWPORT,
             FrameCtx {
+                expand_key: "za",
                 theme: &theme,
                 tick: 0,
                 now_epoch: 0,
@@ -150,6 +151,7 @@ fn next_frame(thread: &mut ThreadUi, theme: &Theme) -> (Duration, Duration) {
         &mut buffer,
         VIEWPORT,
         FrameCtx {
+            expand_key: "za",
             theme,
             tick: 0,
             now_epoch: 0,

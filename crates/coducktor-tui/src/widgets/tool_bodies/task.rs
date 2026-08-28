@@ -52,6 +52,6 @@ pub(super) fn result_body(
     let output = item.output.as_deref()?;
     Some((
         Span::raw("Result"),
-        tool_card::output_lines(item, output, ctx.theme),
+        tool_card::output_lines(item, output, ctx.theme, ctx.expand_key),
     ))
 }

@@ -2,6 +2,9 @@
 ":" = "command"
 "ctrl-o" = "back"
 "ctrl-i" = "forward"
+"za" = "toggle-transcript-item"
+"zR" = "expand-transcript"
+"zM" = "collapse-transcript"
 
 [command]
 escape = "normal"

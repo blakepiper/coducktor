@@ -26,6 +26,9 @@
 - oh-my-pi (`omp`) is now a selectable conversation harness with native RPC prompts, session
   resume, normalized streaming/tool/usage events, curated environment forwarding, health
   detection, and project/workspace model settings.
+- Chat timelines now use framed semantic tool cards, live reasoning and activity indicators,
+  syntax-highlighted fenced code, durations and exit codes, pressure-aware folding, and
+  configurable `za`/`zR`/`zM` fold controls with viewport-anchor preservation.
 
 Any future compatibility change belongs in this section with its migration or
 degradation path. Retired release notes and one-time implementation plans are

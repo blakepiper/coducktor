@@ -17,11 +17,15 @@ User overrides are read from `$DUCK_HOME/keymap.toml` (normally
 | `/`, then `n` / `N` | Search, next match, previous match |
 | `i` | Enter Insert mode in a chat composer |
 | `gt` / `gT` | Next / previous tab |
+| `za` / `Enter` | Toggle the selected reasoning or tool card |
+| `zR` / `zM` | Expand / collapse every reasoning and tool card |
 | `:` | Open the Ex command line |
 | `Ctrl-O` / `Ctrl-I` | Older / newer cockpit location |
 
-`g` and `Ctrl-W` appear as pending prefixes in the status line. `Esc` or an invalid suffix cancels
-a prefix.
+`g`, `z`, and `Ctrl-W` appear as pending prefixes in the status line. `Esc` or an invalid suffix
+cancels a prefix. The `za`, `zR`, and `zM` actions can be overridden in `keymap.toml` as
+`toggle-transcript-item`, `expand-transcript`, and `collapse-transcript`; clamped output hints show
+the configured toggle key.
 
 ## Windows and text input
 
@@ -64,8 +68,9 @@ paste, and mouse click/drag remain available for conventional editing.
 
 - Chats, All Chats, Skills, Settings, Git, and GitHub lists use `j`/`k` and arrow keys for
   selection; `Enter` opens or activates the selected control.
-- Conversation transcripts use `j`/`k`, `gg`/`G`, paging, and search. `Enter` toggles a selected
-  expandable activity item. Changes, Files, and Commits use `gt`/`gT`.
+- Conversation transcripts use `j`/`k`, `gg`/`G`, paging, and search. `Enter` or `za` toggles a
+  selected expandable activity item; `zR` expands every reasoning and tool card, and `zM`
+  collapses them. Changes, Files, and Commits use `gt`/`gT`.
 - A chat header offers Cancel while a turn runs, and Git mode, Archive/Restore, Mark unread, and
   Delete while it is settled. **Restart session** appears only after the harness refused to resume
   its own session; it confirms first and sends nothing — the next message you write carries a

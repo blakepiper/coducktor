@@ -1009,7 +1009,7 @@ pub struct App {
     pub history: History,
     pub hitmap: HitMap,
     pub theme: Theme,
-    keymap: Keymap,
+    pub(crate) keymap: Keymap,
     mode: InputMode,
     command: String,
     search: String,
@@ -3138,6 +3138,12 @@ impl App {
             NormalCommand::Search => self.begin_search(),
             NormalCommand::SearchNext => self.repeat_search(true),
             NormalCommand::SearchPrevious => self.repeat_search(false),
+            NormalCommand::MappedZ(suffix) => {
+                let key = format!("z{suffix}");
+                if let Some(action) = self.keymap.action_for_id(KeyMode::Normal, &key) {
+                    self.apply_action(action);
+                }
+            }
             NormalCommand::Insert => {
                 let key = KeyEvent::new(KeyCode::Char('i'), crossterm::event::KeyModifiers::NONE);
                 self.handle_route_key(key);
@@ -3578,6 +3584,21 @@ impl App {
             ActionId::Command => {
                 self.mode = InputMode::Command;
                 self.command.clear();
+            }
+            ActionId::ToggleTranscriptItem => {
+                if matches!(self.route(), Route::Thread { .. }) {
+                    self.thread_ui.transcript.toggle_selected();
+                }
+            }
+            ActionId::ExpandTranscript => {
+                if matches!(self.route(), Route::Thread { .. }) {
+                    self.thread_ui.transcript.set_all_expanded(true);
+                }
+            }
+            ActionId::CollapseTranscript => {
+                if matches!(self.route(), Route::Thread { .. }) {
+                    self.thread_ui.transcript.set_all_expanded(false);
+                }
             }
             ActionId::ExecuteCommand | ActionId::Normal | ActionId::Noop => {}
         }

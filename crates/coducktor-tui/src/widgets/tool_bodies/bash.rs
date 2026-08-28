@@ -63,7 +63,7 @@ pub(super) fn result_body(
     ctx: FrameCtx<'_>,
 ) -> Option<(Span<'static>, Vec<Line<'static>>)> {
     let output = item.output.as_deref()?;
-    let mut lines = tool_card::output_lines(item, output, ctx.theme);
+    let mut lines = tool_card::output_lines(item, output, ctx.theme, ctx.expand_key);
     let mut footer = Vec::new();
     if let Some(duration) = item.duration_ms {
         footer.push(format!("Wall: {}", tool_card::format_ms(duration)));

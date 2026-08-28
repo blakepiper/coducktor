@@ -119,6 +119,7 @@ pub fn card_height(item: &ToolItem, width: u16, tier: ToolTier) -> u16 {
                 item,
                 width,
                 FrameCtx {
+                    expand_key: "za",
                     theme: &HEIGHT_THEME,
                     tick: 0,
                     now_epoch: 0,
@@ -194,14 +195,19 @@ fn sections(item: &ToolItem, width: u16, ctx: FrameCtx<'_>) -> Vec<CardSection<'
                     "Output",
                     Style::default().fg(theme.palette.soft_fg),
                 )),
-                lines: output_lines(item, output, theme),
+                lines: output_lines(item, output, theme, ctx.expand_key),
             });
         }
     }
     sections
 }
 
-pub(crate) fn output_lines(item: &ToolItem, output: &str, theme: &Theme) -> Vec<Line<'static>> {
+pub(crate) fn output_lines(
+    item: &ToolItem,
+    output: &str,
+    theme: &Theme,
+    expand_key: &str,
+) -> Vec<Line<'static>> {
     let total = output.lines().count().max(1);
     let limit = if item.user_expanded == Some(true) {
         OUTPUT_EXPANDED_LINES
@@ -215,7 +221,7 @@ pub(crate) fn output_lines(item: &ToolItem, output: &str, theme: &Theme) -> Vec<
             format!("… (showing last {shown} of {total})")
         } else {
             format!(
-                "… ({} earlier lines, showing {shown} of {total}) (za to expand)",
+                "… ({} earlier lines, showing {shown} of {total}) ({expand_key} to expand)",
                 total - shown
             )
         };
@@ -384,6 +390,7 @@ mod tests {
 
     fn context<'a>(theme: &'a Theme, tick: u64, now_epoch: i64) -> FrameCtx<'a> {
         FrameCtx {
+            expand_key: "za",
             theme,
             tick,
             now_epoch,
@@ -487,6 +494,27 @@ mod tests {
                 .count();
             assert_eq!(painted, usize::from(height), "width {width}");
         }
+    }
+
+    #[test]
+    fn clamped_output_hint_uses_the_configured_toggle_binding() {
+        let mut item = ToolItem::new("tool", "Bash", None, ToolStatus::Completed);
+        let output = (0..30)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rendered = output_lines(&item, &output, &theme(), "zx")
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        assert!(rendered.contains("(zx to expand)"));
+
+        item.user_expanded = Some(true);
+        let expanded = output_lines(&item, &output, &theme(), "zx")
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        assert!(!expanded.contains("to expand"));
     }
 
     #[test]

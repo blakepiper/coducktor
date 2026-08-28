@@ -42,6 +42,7 @@ pub struct FrameCtx<'a> {
     pub theme: &'a Theme,
     pub tick: u64,
     pub now_epoch: i64,
+    pub expand_key: &'a str,
 }
 
 /// One transcript entry. Deliberately a small, closed set: this is the rendering
@@ -893,6 +894,22 @@ impl Transcript {
         }
     }
 
+    pub fn set_all_expanded(&mut self, expanded: bool) {
+        for item in &mut self.items {
+            match item {
+                TranscriptItem::Reasoning(item) => item.expanded = expanded,
+                TranscriptItem::Tool(item) => item.user_expanded = Some(expanded),
+                TranscriptItem::Message(_)
+                | TranscriptItem::Note(_)
+                | TranscriptItem::Image(_)
+                | TranscriptItem::RunEnd(_) => {}
+            }
+        }
+        self.height_cache = HeightCache::default();
+        self.tiers.clear();
+        self.restore_anchor = self.top_anchor.is_some();
+    }
+
     /// Set the row budget used to progressively fold trailing live cards.
     pub fn set_pressure(&mut self, viewport_height: u16) {
         self.pressure_height = viewport_height;
@@ -1256,6 +1273,7 @@ mod tests {
         static THEME: LazyLock<Theme> =
             LazyLock::new(|| Theme::new(ThemeName::Dark, ColorCapability::TrueColor));
         FrameCtx {
+            expand_key: "za",
             theme: &THEME,
             tick: 0,
             now_epoch: 0,
@@ -1320,6 +1338,7 @@ mod tests {
             &mut buf,
             area,
             FrameCtx {
+                expand_key: "za",
                 theme: &theme,
                 tick: 4,
                 now_epoch: 75,
@@ -1438,6 +1457,72 @@ mod tests {
         transcript.toggle_tool("t1");
         let expanded = render_to_string(&mut transcript, 60, 10);
         assert!(expanded.contains("contents"));
+    }
+
+    #[test]
+    fn expand_and_collapse_all_preserve_the_view_anchor_and_invalidate_heights() {
+        let mut transcript = Transcript::new();
+        transcript.push(TranscriptItem::Message(MessageItem::new(
+            "m1",
+            MessageRole::Assistant,
+            "first\n\nsecond\n\nthird",
+        )));
+        transcript.push(TranscriptItem::Reasoning(ReasoningItem::new(
+            "r1",
+            "reasoning first\nreasoning second\nreasoning third",
+        )));
+        for index in 0..4 {
+            transcript.push(TranscriptItem::Message(MessageItem::new(
+                format!("m{}", index + 2),
+                MessageRole::Assistant,
+                "line one\n\nline two\n\nline three",
+            )));
+        }
+        let mut tool = ToolItem::new(
+            "t1",
+            "Bash",
+            Some(&serde_json::json!({"command": "printf output"})),
+            ToolStatus::Completed,
+        );
+        tool.output = Some((0..30).map(|line| format!("output {line}\n")).collect());
+        transcript.push(TranscriptItem::Tool(tool));
+
+        render_to_string(&mut transcript, 48, 8);
+        transcript.scroll_by(-6);
+        render_to_string(&mut transcript, 48, 8);
+        let anchor = transcript
+            .top_anchor
+            .clone()
+            .expect("a scrolled viewport records its top anchor");
+
+        transcript.set_all_expanded(true);
+        assert!(transcript.height_cache.entries.is_empty());
+        assert!(transcript.restore_anchor);
+        assert_eq!(transcript.top_anchor.as_ref(), Some(&anchor));
+        assert!(matches!(
+            &transcript.items[1],
+            TranscriptItem::Reasoning(item) if item.expanded
+        ));
+        assert!(matches!(
+            transcript.items.last(),
+            Some(TranscriptItem::Tool(item)) if item.user_expanded == Some(true)
+        ));
+        render_to_string(&mut transcript, 48, 8);
+        assert_eq!(transcript.top_anchor.as_ref(), Some(&anchor));
+
+        transcript.set_all_expanded(false);
+        assert!(transcript.height_cache.entries.is_empty());
+        assert!(transcript.restore_anchor);
+        render_to_string(&mut transcript, 48, 8);
+        assert_eq!(transcript.top_anchor.as_ref(), Some(&anchor));
+        assert!(matches!(
+            &transcript.items[1],
+            TranscriptItem::Reasoning(item) if !item.expanded
+        ));
+        assert!(matches!(
+            transcript.items.last(),
+            Some(TranscriptItem::Tool(item)) if item.user_expanded == Some(false)
+        ));
     }
 
     #[test]
@@ -1694,6 +1779,7 @@ mod tests {
                     frame.buffer_mut(),
                     area,
                     FrameCtx {
+                        expand_key: "za",
                         theme: &snapshot_theme,
                         tick: 0,
                         now_epoch: 0,
@@ -1748,6 +1834,7 @@ mod tests {
                 &mut buf,
                 area,
                 FrameCtx {
+                    expand_key: "za",
                     theme: frame_ctx().theme,
                     tick,
                     now_epoch: 1_000,

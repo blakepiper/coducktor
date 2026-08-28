@@ -10,6 +10,8 @@ without checking that:
 - New Chat exposes only Message, Harness, Model, Reasoning, Skills, Base branch, Worktree, and Git
   mode;
 - Chats and All Chats use Needs you, Working, Recent, and Archived groupings;
+- chat timelines use shared framed status cards, semantic tool bodies, reasoning activity, and
+  readable folded-output hints without clipping at each reference size;
 - active conversations retain their draft while Send is disabled;
 - current screens contain no workflow, variant, compare, review, finish, continue, task-mode, or
   provider-routing controls; and

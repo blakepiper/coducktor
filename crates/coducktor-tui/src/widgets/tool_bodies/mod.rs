@@ -79,6 +79,7 @@ mod tests {
 
     fn ctx(theme: &Theme) -> FrameCtx<'_> {
         FrameCtx {
+            expand_key: "za",
             theme,
             tick: 0,
             now_epoch: 100,

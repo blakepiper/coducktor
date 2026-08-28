@@ -87,6 +87,7 @@ fn bench_static_scroll(c: &mut Criterion) {
         &mut buf,
         VIEWPORT,
         FrameCtx {
+            expand_key: "za",
             theme: &theme,
             tick: 0,
             now_epoch: 0,
@@ -101,6 +102,7 @@ fn bench_static_scroll(c: &mut Criterion) {
                 &mut buf,
                 VIEWPORT,
                 FrameCtx {
+                    expand_key: "za",
                     theme: &theme,
                     tick: 0,
                     now_epoch: 0,
@@ -121,6 +123,7 @@ fn bench_first_render_cold_cache(c: &mut Criterion) {
                 &mut buf,
                 VIEWPORT,
                 FrameCtx {
+                    expand_key: "za",
                     theme: &theme,
                     tick: 0,
                     now_epoch: 0,

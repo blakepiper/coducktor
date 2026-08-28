@@ -25,6 +25,7 @@ pub enum NormalCommand {
     SearchPrevious,
     Insert,
     Ex,
+    MappedZ(char),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub enum FeedResult {
 enum Prefix {
     Window,
     G,
+    Z,
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +57,7 @@ impl NeovimInput {
             return match prefix {
                 Prefix::Window => window_command(key),
                 Prefix::G => g_command(key),
+                Prefix::Z => z_command(key),
             };
         }
 
@@ -66,6 +69,10 @@ impl NeovimInput {
             }
             KeyCode::Char('g') if !control => {
                 self.prefix = Some(Prefix::G);
+                FeedResult::Pending
+            }
+            KeyCode::Char('z') if !control => {
+                self.prefix = Some(Prefix::Z);
                 FeedResult::Pending
             }
             KeyCode::Char('h') if !control => command(NormalCommand::Motion(Direction::Left)),
@@ -88,6 +95,7 @@ impl NeovimInput {
         match self.prefix {
             Some(Prefix::Window) => Some("CTRL-W"),
             Some(Prefix::G) => Some("g"),
+            Some(Prefix::Z) => Some("z"),
             None => None,
         }
     }
@@ -125,6 +133,16 @@ fn g_command(key: KeyEvent) -> FeedResult {
         KeyCode::Char('g') => command(NormalCommand::First),
         KeyCode::Char('t') => command(NormalCommand::NextTab),
         KeyCode::Char('T') => command(NormalCommand::PreviousTab),
+        _ => FeedResult::Cancelled,
+    }
+}
+
+fn z_command(key: KeyEvent) -> FeedResult {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return FeedResult::Cancelled;
+    }
+    match key.code {
+        KeyCode::Char(suffix) => command(NormalCommand::MappedZ(suffix)),
         _ => FeedResult::Cancelled,
     }
 }
@@ -182,6 +200,21 @@ mod tests {
                 NormalCommand::SearchPrevious,
             ),
             ("insert", &[key('i')], NormalCommand::Insert),
+            (
+                "toggle transcript item",
+                &[key('z'), key('a')],
+                NormalCommand::MappedZ('a'),
+            ),
+            (
+                "expand transcript",
+                &[key('z'), key('R')],
+                NormalCommand::MappedZ('R'),
+            ),
+            (
+                "collapse transcript",
+                &[key('z'), key('M')],
+                NormalCommand::MappedZ('M'),
+            ),
             ("Ex command", &[key(':')], NormalCommand::Ex),
             (
                 "left window",

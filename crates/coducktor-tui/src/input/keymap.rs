@@ -36,6 +36,9 @@ pub enum ActionId {
     Normal,
     Back,
     Forward,
+    ToggleTranscriptItem,
+    ExpandTranscript,
+    CollapseTranscript,
     Noop,
 }
 
@@ -60,6 +63,9 @@ impl ActionId {
             "normal" => Some(Self::Normal),
             "back" => Some(Self::Back),
             "forward" => Some(Self::Forward),
+            "toggle-transcript-item" => Some(Self::ToggleTranscriptItem),
+            "expand-transcript" => Some(Self::ExpandTranscript),
+            "collapse-transcript" => Some(Self::CollapseTranscript),
             "noop" => Some(Self::Noop),
             _ => None,
         }
@@ -124,6 +130,16 @@ impl Keymap {
     pub fn action_for(&self, mode: KeyMode, event: &KeyEvent) -> Option<ActionId> {
         let key = key_id(event);
         self.bindings.get(&mode)?.get(&key).copied()
+    }
+    pub fn action_for_id(&self, mode: KeyMode, key: &str) -> Option<ActionId> {
+        self.bindings.get(&mode)?.get(key).copied()
+    }
+
+    pub fn key_for_action(&self, mode: KeyMode, action: ActionId) -> Option<&str> {
+        self.bindings
+            .get(&mode)?
+            .iter()
+            .find_map(|(key, candidate)| (*candidate == action).then_some(key.as_str()))
     }
 
     pub fn help_bindings(&self, mode: KeyMode) -> Vec<(String, ActionId)> {
@@ -203,6 +219,29 @@ mod tests {
     fn key_ids_include_control_modifiers() {
         let event = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
         assert_eq!(key_id(&event), "ctrl-o");
+    }
+
+    #[test]
+    fn transcript_fold_bindings_are_addressable_as_sequences_and_hints() {
+        let mut keymap = Keymap::default();
+        assert_eq!(
+            keymap.action_for_id(KeyMode::Normal, "za"),
+            Some(ActionId::ToggleTranscriptItem)
+        );
+        assert_eq!(
+            keymap.action_for_id(KeyMode::Normal, "zR"),
+            Some(ActionId::ExpandTranscript)
+        );
+        assert_eq!(
+            keymap.action_for_id(KeyMode::Normal, "zM"),
+            Some(ActionId::CollapseTranscript)
+        );
+
+        keymap.merge(Keymap::from_toml("[normal]\nx = \"toggle-transcript-item\"\n").unwrap());
+        assert_eq!(
+            keymap.key_for_action(KeyMode::Normal, ActionId::ToggleTranscriptItem),
+            Some("x")
+        );
     }
 
     #[test]

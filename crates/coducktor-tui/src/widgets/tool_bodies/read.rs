@@ -23,7 +23,7 @@ pub(super) fn result_body(
     if item.user_expanded == Some(true) {
         return Some((
             Span::raw("Contents"),
-            tool_card::output_lines(item, output, ctx.theme),
+            tool_card::output_lines(item, output, ctx.theme, ctx.expand_key),
         ));
     }
     let line_count = output.lines().count();
