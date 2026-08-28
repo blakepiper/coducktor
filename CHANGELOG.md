@@ -29,6 +29,9 @@
 - Chat timelines now use framed semantic tool cards, live reasoning and activity indicators,
   syntax-highlighted fenced code, durations and exit codes, pressure-aware folding, and
   configurable `za`/`zR`/`zM` fold controls with viewport-anchor preservation.
+- Chats and All Chats now use state-colored variable-height cards with typed metadata chips,
+  unread and selection rails, grouped counts, measured scrolling, and centered empty-state
+  creation.
 
 Any future compatibility change belongs in this section with its migration or
 degradation path. Retired release notes and one-time implementation plans are

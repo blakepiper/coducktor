@@ -17,7 +17,7 @@ use crate::screens::runs_util::{
 };
 use crate::theme::Theme;
 use crate::widgets::table::{ColumnId, Table, TableCell, TableRow};
-use crate::widgets::task_cards::{self, CardGroup, TaskCard};
+use crate::widgets::task_cards::{self, CardChip, CardGroup, CardState, TaskCard};
 
 /// The column set for the cross-project table (§8.2). `Tag` is a leading
 /// column used only while grouping by tag.
@@ -171,16 +171,24 @@ fn build_conversation_cards(
     entries
         .into_iter()
         .map(|entry| {
-            let mut metadata = vec![{
-                let mut value = format!("{:?}", entry.harness).to_ascii_lowercase();
-                if let Some(model) = entry.model.as_deref() {
-                    value.push('/');
-                    value.push_str(model);
-                }
-                value
-            }];
+            let mut chips = vec![
+                CardChip::Project(project_name(registry, &entry.project_id)),
+                CardChip::Harness {
+                    harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
+                    model: entry.model.clone(),
+                },
+            ];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
-                metadata.push(format!("branch {branch}"));
+                chips.push(CardChip::Branch(branch.to_owned()));
+            }
+            if let Some(number) = entry
+                .pull_request_url
+                .as_deref()
+                .or(entry.referenced_pull_request_url.as_deref())
+                .and_then(|url| url.rsplit('/').next())
+                .and_then(|number| number.parse().ok())
+            {
+                chips.push(CardChip::PullRequest(number));
             }
             TaskCard {
                 key: format!("{}::{}", entry.project_id, entry.id),
@@ -190,21 +198,11 @@ fn build_conversation_cards(
                     chats_util::ChatGroup::Recent => CardGroup::Recent,
                     chats_util::ChatGroup::Archived => CardGroup::Archived,
                 },
-                glyph: match entry.state {
-                    coducktor_contract::ConversationState::NeedsInput => "?",
-                    coducktor_contract::ConversationState::Running => "*",
-                    coducktor_contract::ConversationState::Queued => "-",
-                    coducktor_contract::ConversationState::Failed => "x",
-                    coducktor_contract::ConversationState::Cancelled => "/",
-                    coducktor_contract::ConversationState::Idle => "=",
-                },
-                animated: entry.state == coducktor_contract::ConversationState::Running,
-                status: chats_util::attention(entry).label,
+                state: chats_util::card_state(entry),
                 title: entry.title.clone(),
-                prompt: entry.prompt_preview.clone(),
-                activity: short_age(chats_util::meaningful_at(entry), now),
-                project: Some(project_name(registry, &entry.project_id)),
-                metadata,
+                body: task_cards::body_after_title(&entry.title, &entry.prompt_preview),
+                age: short_age(chats_util::meaningful_at(entry), now),
+                chips,
                 unread: chats_util::is_unread(entry),
             }
         })
@@ -262,45 +260,44 @@ fn build_cards(
     entries
         .into_iter()
         .map(|entry| {
-            let mut metadata = Vec::new();
+            let mut chips = vec![CardChip::Project(project_name(registry, &entry.project_id))];
             if let Some(runner) = entry.runner {
-                let mut value = format!("{runner:?}").to_ascii_lowercase();
-                if let Some(model) = entry.model.as_deref() {
-                    value.push('/');
-                    value.push_str(model);
-                }
-                metadata.push(value);
+                chips.push(CardChip::Harness {
+                    harness: format!("{runner:?}").to_ascii_lowercase(),
+                    model: entry.model.clone(),
+                });
             } else if let Some(model) = entry.model.as_deref() {
-                metadata.push(model.to_owned());
+                chips.push(CardChip::Custom(model.to_owned()));
             }
             if !entry.workflow.is_empty() {
-                metadata.push(entry.workflow.clone());
+                chips.push(CardChip::Custom(entry.workflow.clone()));
             }
             if group_by_tag {
-                metadata.push(entry_tag(registry, entry));
+                chips.push(CardChip::Custom(entry_tag(registry, entry)));
             }
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
-                metadata.push(format!("branch {branch}"));
+                chips.push(CardChip::Branch(branch.to_owned()));
             }
             if let Some(number) = entry
                 .pr_number
-                .or(entry.marker_refs.as_ref().and_then(|m| m.pr))
+                .or(entry.marker_refs.as_ref().and_then(|markers| markers.pr))
             {
-                metadata.push(format!("PR #{}", number as u64));
+                chips.push(CardChip::PullRequest(number as u64));
             } else if let Some(number) = entry.issue_number {
-                metadata.push(format!("issue #{}", number as u64));
+                chips.push(CardChip::Custom(format!("issue #{}", number as u64)));
             }
+            let title = run_title_entry(entry);
             TaskCard {
                 key: format!("{}/{}", entry.project_id, entry.id),
                 group: entry_group(entry, view),
-                glyph: entry_status_glyph(entry.status),
-                animated: entry.status == coducktor_contract::RunStatus::Running,
-                status: entry_status_label(entry.status),
-                title: run_title_entry(entry),
-                prompt: entry.prompt_preview.clone().unwrap_or_default(),
-                activity: short_age(entry_activity(entry, view), now),
-                project: Some(project_name(registry, &entry.project_id)),
-                metadata,
+                state: run_card_state(entry.status),
+                body: task_cards::body_after_title(
+                    &title,
+                    entry.prompt_preview.as_deref().unwrap_or_default(),
+                ),
+                title,
+                age: short_age(entry_activity(entry, view), now),
+                chips,
                 unread: is_unread_entry(entry),
             }
         })
@@ -348,29 +345,15 @@ fn entry_activity(entry: &RunIndexEntry, view: TaskView) -> &str {
     }
 }
 
-fn entry_status_glyph(status: coducktor_contract::RunStatus) -> &'static str {
+fn run_card_state(status: coducktor_contract::RunStatus) -> CardState {
+    use coducktor_contract::RunStatus;
     match status {
-        coducktor_contract::RunStatus::Waiting => "?",
-        coducktor_contract::RunStatus::Review => "!",
-        coducktor_contract::RunStatus::Queued => "○",
-        coducktor_contract::RunStatus::Running => "●",
-        coducktor_contract::RunStatus::Idle => "·",
-        coducktor_contract::RunStatus::Done => "✓",
-        coducktor_contract::RunStatus::Failed => "✗",
-        coducktor_contract::RunStatus::Cancelled => "×",
-    }
-}
-
-fn entry_status_label(status: coducktor_contract::RunStatus) -> &'static str {
-    match status {
-        coducktor_contract::RunStatus::Waiting => "waiting",
-        coducktor_contract::RunStatus::Review => "needs review",
-        coducktor_contract::RunStatus::Queued => "queued",
-        coducktor_contract::RunStatus::Running => "running",
-        coducktor_contract::RunStatus::Idle => "idle",
-        coducktor_contract::RunStatus::Done => "done",
-        coducktor_contract::RunStatus::Failed => "failed",
-        coducktor_contract::RunStatus::Cancelled => "cancelled",
+        RunStatus::Waiting | RunStatus::Review => CardState::NeedsInput,
+        RunStatus::Queued => CardState::Queued,
+        RunStatus::Running => CardState::Running,
+        RunStatus::Failed => CardState::Failed,
+        RunStatus::Cancelled => CardState::Cancelled,
+        RunStatus::Idle | RunStatus::Done => CardState::Idle,
     }
 }
 
@@ -697,18 +680,25 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     }
     let Some(index) = &app.global_index else {
         app.global_ui.table.rows.clear();
-        app.global_ui.table.render(
+        let hint = app.global_error.clone().unwrap_or_else(|| {
+            if app.global_loading {
+                "Loading…".to_owned()
+            } else {
+                "No chats across projects yet.".to_owned()
+            }
+        });
+        task_cards::render(
             frame,
             layout[2],
+            &[],
+            None,
+            &mut app.global_ui.table.scroll_y,
             &mut app.hitmap,
-            "ALL CHATS",
-            app.global_error
-                .as_deref()
-                .unwrap_or(if app.global_loading {
-                    "Loading…"
-                } else {
-                    "No chats across projects yet."
-                }),
+            all_chats_title(&theme),
+            &hint,
+            &theme,
+            app.animation_tick,
+            None,
         );
         return;
     };
@@ -754,7 +744,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.global_ui.table.selected,
         &mut app.global_ui.table.scroll_y,
         &mut app.hitmap,
-        "ALL CHATS",
+        all_chats_title(&theme),
         if app.global_ui.query.trim().is_empty() {
             "No chats across projects yet."
         } else {
@@ -765,6 +755,15 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         None,
     );
     render_tag_picker(frame, app);
+}
+
+fn all_chats_title(theme: &Theme) -> Line<'static> {
+    Line::from(vec![Span::styled(
+        " ALL CHATS ",
+        Style::default()
+            .fg(theme.palette.soft_fg)
+            .add_modifier(Modifier::BOLD),
+    )])
 }
 
 fn render_title_row(frame: &mut Frame<'_>, area: Rect, app: &mut App, view: TaskView) {
@@ -1179,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn global_table_shows_project_and_statuses() {
+    fn global_browser_shows_project_chips_and_typed_states() {
         let mut app = app_with_index(
             vec![
                 entry("shop", "1", coducktor_contract::RunStatus::Running),
@@ -1193,8 +1192,9 @@ mod tests {
         let content = render(&mut app, 160, 30);
         assert!(content.contains("shop"));
         assert!(content.contains("blog"));
-        assert!(content.contains("running"));
-        assert!(content.contains("NEEDS YOU"));
+        assert!(content.contains(crate::widgets::spinner::status_frame(0)));
+        assert!(content.contains("⟦needs you⟧"));
+        assert!(!content.contains(" idle "));
     }
 
     #[test]

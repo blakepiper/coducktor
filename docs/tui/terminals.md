@@ -9,8 +9,6 @@ checkout or user registry was changed. Each message requested an exact response 
 available harnesses, the second message was submitted from the same chat composer and the rendered
 timeline was captured after the chat returned to idle.
 
-## Harness matrix
-
 | Harness | Local version and availability | First turn | Second turn / resume | Result |
 | --- | --- | --- | --- | --- |
 | Claude Code | 2.1.233; status `claude ok`, selectable | `CLAUDE TURN 1 OK` | `CLAUDE TURN 2 OK` in the same chat | Pass |
@@ -117,3 +115,12 @@ Reply with exactly <HARNESS> TURN 2 OK. Do not use tools.
 
 The terminal was left through tmux after capture; the temporary state contains only disposable
 manual-verification transcripts.
+
+## Chat browser card smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 120×40 broker PTY with a
+disposable `DUCK_HOME`. The empty Chats screen rendered the padded `CHATS · main` frame, a
+vertically centered explanatory hint, and the centered `[+ New chat]` action without clipping.
+Filled card states, selection rails, metadata chips, group counts, and variable card heights were
+verified in the reviewed 80×24, 120×40, and 200×60 executable snapshots; the locale-independent
+renderer tests also exercised the ASCII fallback.

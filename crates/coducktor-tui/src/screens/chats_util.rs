@@ -10,6 +10,7 @@
 use coducktor_contract::{ConversationIndexEntry, ConversationState};
 
 use super::runs_util::{Attention, AttentionTone, parse_iso_seconds};
+use crate::widgets::task_cards::CardState;
 
 /// The three current-chat groups from section 5.4. `Archived` holds only explicitly archived
 /// conversations — archival is never inferred from provider prose or a turn ending.
@@ -53,6 +54,17 @@ pub fn group(entry: &ConversationIndexEntry) -> ChatGroup {
             }
         }
         ConversationState::Idle => ChatGroup::Recent,
+    }
+}
+/// Browser-card state, kept separate from thread-header attention presentation.
+pub fn card_state(entry: &ConversationIndexEntry) -> CardState {
+    match entry.state {
+        ConversationState::NeedsInput => CardState::NeedsInput,
+        ConversationState::Running => CardState::Running,
+        ConversationState::Queued => CardState::Queued,
+        ConversationState::Idle => CardState::Idle,
+        ConversationState::Failed => CardState::Failed,
+        ConversationState::Cancelled => CardState::Cancelled,
     }
 }
 
@@ -214,6 +226,20 @@ mod tests {
             ChatGroup::Recent,
             "a turn ending returns the chat to Recent, never to a done state"
         );
+    }
+
+    #[test]
+    fn every_conversation_state_maps_to_one_card_state() {
+        for (conversation, card) in [
+            (ConversationState::NeedsInput, CardState::NeedsInput),
+            (ConversationState::Running, CardState::Running),
+            (ConversationState::Queued, CardState::Queued),
+            (ConversationState::Idle, CardState::Idle),
+            (ConversationState::Failed, CardState::Failed),
+            (ConversationState::Cancelled, CardState::Cancelled),
+        ] {
+            assert_eq!(card_state(&entry("state", conversation)), card);
+        }
     }
 
     #[test]

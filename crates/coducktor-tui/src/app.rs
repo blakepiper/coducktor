@@ -5735,8 +5735,8 @@ mod tests {
         ));
         let content = render(&mut app);
         assert!(
-            content.contains("needs rev"),
-            "status must progress to review, got: {content}"
+            content.contains("needs you"),
+            "status must progress to needs-you, got: {content}"
         );
 
         // Deletion removes the row.

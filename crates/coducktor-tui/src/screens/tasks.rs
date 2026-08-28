@@ -19,7 +19,9 @@ use crate::screens::runs_util::{
 };
 use crate::theme::Theme;
 use crate::widgets::table::{ColumnId, SortState, Table, TableCell, TableRow};
-use crate::widgets::task_cards::{self, CardGroup, CardHeaderAction, TaskCard};
+use crate::widgets::task_cards::{
+    self, CardChip, CardGroup, CardHeaderAction, CardState, TaskCard,
+};
 
 /// The column set for the per-project table (§8.1).
 pub const COLUMNS: [ColumnId; 11] = [
@@ -123,19 +125,22 @@ fn build_conversation_cards(
         .into_iter()
         .map(|index| {
             let entry = &conversations[index];
-            let mut metadata = vec![harness_metadata(entry)];
+            let mut chips = vec![CardChip::Harness {
+                harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
+                model: entry.model.clone(),
+            }];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
-                metadata.push(format!("branch {branch}"));
+                chips.push(CardChip::Branch(branch.to_owned()));
             }
-            if let Some(url) = entry
+            if let Some(number) = entry
                 .pull_request_url
                 .as_deref()
                 .or(entry.referenced_pull_request_url.as_deref())
-                && let Some(number) = url.rsplit('/').next()
+                .and_then(|url| url.rsplit('/').next())
+                .and_then(|number| number.parse().ok())
             {
-                metadata.push(format!("PR #{number}"));
+                chips.push(CardChip::PullRequest(number));
             }
-            let attention = chats_util::attention(entry);
             TaskCard {
                 key: entry.id.clone(),
                 group: match chats_util::group(entry) {
@@ -144,39 +149,15 @@ fn build_conversation_cards(
                     chats_util::ChatGroup::Recent => CardGroup::Recent,
                     chats_util::ChatGroup::Archived => CardGroup::Archived,
                 },
-                glyph: conversation_glyph(entry.state),
-                animated: entry.state == coducktor_contract::ConversationState::Running,
-                status: attention.label,
+                state: chats_util::card_state(entry),
                 title: entry.title.clone(),
-                prompt: entry.prompt_preview.clone(),
-                activity: short_age(chats_util::meaningful_at(entry), now),
-                project: None,
-                metadata,
+                body: task_cards::body_after_title(&entry.title, &entry.prompt_preview),
+                age: short_age(chats_util::meaningful_at(entry), now),
+                chips,
                 unread: chats_util::is_unread(entry),
             }
         })
         .collect()
-}
-
-fn harness_metadata(entry: &coducktor_contract::ConversationIndexEntry) -> String {
-    let mut value = format!("{:?}", entry.harness).to_ascii_lowercase();
-    if let Some(model) = entry.model.as_deref() {
-        value.push('/');
-        value.push_str(model);
-    }
-    value
-}
-
-fn conversation_glyph(state: coducktor_contract::ConversationState) -> &'static str {
-    use coducktor_contract::ConversationState as State;
-    match state {
-        State::NeedsInput => "?",
-        State::Running => "*",
-        State::Queued => "-",
-        State::Failed => "x",
-        State::Cancelled => "/",
-        State::Idle => "=",
-    }
 }
 
 /// The browser's full card list: live conversations first, then legacy runs.
@@ -215,41 +196,53 @@ fn build_cards(runs: &[ApiRun], view: TaskView, query: &str, now: i64) -> Vec<Ta
         .map(|index| {
             let run = &runs[index];
             let record = &run.record;
-            let mut metadata = Vec::new();
+            let mut chips = Vec::new();
             if let Some(runner) = record.runner {
-                let mut value = format!("{runner:?}").to_ascii_lowercase();
-                if let Some(model) = record.model.as_deref() {
-                    value.push('/');
-                    value.push_str(model);
-                }
-                metadata.push(value);
+                chips.push(CardChip::Harness {
+                    harness: format!("{runner:?}").to_ascii_lowercase(),
+                    model: record.model.clone(),
+                });
             } else if let Some(model) = record.model.as_deref() {
-                metadata.push(model.to_owned());
+                chips.push(CardChip::Custom(model.to_owned()));
             }
             if !record.workflow.is_empty() {
-                metadata.push(workflow_label(run));
+                chips.push(CardChip::Custom(workflow_label(run)));
             }
             if let Some(branch) = record.branch.as_deref().filter(|value| !value.is_empty()) {
-                metadata.push(format!("branch {branch}"));
+                chips.push(CardChip::Branch(branch.to_owned()));
+            }
+            if let Some(path) = record
+                .worktree_path
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
+                chips.push(CardChip::Worktree(path.to_owned()));
             }
             let diff = format_diff(record.diff_stat.as_ref());
             if !diff.is_empty() {
-                metadata.push(diff);
+                chips.push(CardChip::Custom(diff));
             }
             if let Some(reference) = task_reference(run) {
-                metadata.push(format!("{} #{}", reference.kind, reference.number));
+                if reference.kind.eq_ignore_ascii_case("PR")
+                    && let Ok(number) = reference.number.parse()
+                {
+                    chips.push(CardChip::PullRequest(number));
+                } else {
+                    chips.push(CardChip::Custom(format!(
+                        "{} #{}",
+                        reference.kind, reference.number
+                    )));
+                }
             }
+            let title = run_title(run);
             TaskCard {
                 key: record.id.clone(),
                 group: card_group(run, view),
-                glyph: status_glyph(record.status),
-                animated: record.status == RunStatus::Running,
-                status: status_label(record.status),
-                title: run_title(run),
-                prompt: record.task.clone(),
-                activity: short_age(meaningful_at(record, view), now),
-                project: None,
-                metadata,
+                state: run_card_state(record.status),
+                body: task_cards::body_after_title(&title, &record.task),
+                title,
+                age: short_age(meaningful_at(record, view), now),
+                chips,
                 unread: is_unread(run),
             }
         })
@@ -285,29 +278,14 @@ fn meaningful_at(record: &coducktor_contract::RunRecord, view: TaskView) -> &str
     }
 }
 
-fn status_glyph(status: RunStatus) -> &'static str {
+fn run_card_state(status: RunStatus) -> CardState {
     match status {
-        RunStatus::Waiting => "?",
-        RunStatus::Review => "!",
-        RunStatus::Queued => "○",
-        RunStatus::Running => "●",
-        RunStatus::Idle => "·",
-        RunStatus::Done => "✓",
-        RunStatus::Failed => "✗",
-        RunStatus::Cancelled => "×",
-    }
-}
-
-fn status_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Waiting => "waiting",
-        RunStatus::Review => "needs review",
-        RunStatus::Queued => "queued",
-        RunStatus::Running => "running",
-        RunStatus::Idle => "idle",
-        RunStatus::Done => "done",
-        RunStatus::Failed => "failed",
-        RunStatus::Cancelled => "cancelled",
+        RunStatus::Waiting | RunStatus::Review => CardState::NeedsInput,
+        RunStatus::Queued => CardState::Queued,
+        RunStatus::Running => CardState::Running,
+        RunStatus::Failed => CardState::Failed,
+        RunStatus::Cancelled => CardState::Cancelled,
+        RunStatus::Idle | RunStatus::Done => CardState::Idle,
     }
 }
 
@@ -482,7 +460,17 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.tasks_ui.table.selected,
         &mut app.tasks_ui.table.scroll_y,
         &mut app.hitmap,
-        &format!("CHATS — {project}"),
+        Line::from(vec![
+            Span::styled(
+                " CHATS",
+                Style::default()
+                    .fg(theme.palette.soft_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ", Style::default().fg(theme.palette.soft_fg)),
+            Span::styled(project, Style::default().fg(theme.palette.accent)),
+            Span::raw(" "),
+        ]),
         if app.tasks_ui.query.trim().is_empty() {
             "No chats in this project. Use :new or click New chat."
         } else {
@@ -847,21 +835,20 @@ mod tests {
     }
 
     #[test]
-    fn tasks_table_renders_statuses_and_usage() {
+    fn tasks_table_renders_typed_card_states_and_chips() {
         let mut app = app_with_tasks(vec![
             api_run(1, RunStatus::Running, Some("feat/shell")),
             api_run(2, RunStatus::Waiting, None),
             api_run(3, RunStatus::Done, None),
         ]);
-        app.tasks_ui.table.folded.remove(&ColumnId::Branch);
         let content = render(&mut app, 160, 30);
-        assert!(content.contains("running"));
-        assert!(content.contains("NEEDS YOU"));
-        assert!(content.contains("done"));
+        assert!(content.contains(crate::widgets::spinner::status_frame(0)));
+        assert!(content.contains("⟦needs you⟧"));
+        assert!(!content.contains(" idle "));
+        assert!(!content.contains(" done "));
         assert!(content.contains("feat/shell"));
         assert!(content.contains("+12 −3"));
     }
-
     #[test]
     fn terminal_tasks_stay_in_done_even_when_unread() {
         for status in [RunStatus::Done, RunStatus::Failed, RunStatus::Cancelled] {

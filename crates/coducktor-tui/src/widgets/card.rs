@@ -19,9 +19,12 @@ pub const CARD_CHROME_WIDTH: u16 = 4;
 pub enum CardState {
     Pending,
     Running,
+    Queued,
+    Idle,
     Success,
     Warning,
     Error,
+    Cancelled,
 }
 
 impl CardState {
@@ -29,8 +32,10 @@ impl CardState {
         match self {
             Self::Error => theme.palette.failed,
             Self::Warning => theme.palette.waiting,
+            Self::Cancelled => theme.palette.cancelled,
+            Self::Queued => theme.palette.queued,
             Self::Pending | Self::Running => theme.palette.accent,
-            Self::Success => theme.palette.card_quiet_border,
+            Self::Idle | Self::Success => theme.palette.card_quiet_border,
         }
     }
 
@@ -39,6 +44,7 @@ impl CardState {
             Self::Pending | Self::Running => theme.palette.card_pending_bg,
             Self::Error => theme.palette.card_error_bg,
             Self::Success | Self::Warning => theme.palette.card_success_bg,
+            Self::Queued | Self::Idle | Self::Cancelled => Color::Reset,
         }
     }
 }
