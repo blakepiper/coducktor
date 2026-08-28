@@ -1,4 +1,5 @@
 target/
+node_modules/
 .idea
 
 # Coducktor runtime state in this repo (runs, worktrees, and config).
