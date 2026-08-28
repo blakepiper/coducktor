@@ -12,7 +12,7 @@ Linux. Windows, musl Linux, and NixOS are not currently release targets.
 
 ### Recommended: precompiled binary
 
-After `v0.1.0` is published, install the matching GitHub Release binary with:
+Install the matching GitHub Release binary with:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -35,25 +35,6 @@ coducktor
 
 `duck` launches the same application. Run `coducktor doctor` to see which local integrations are
 available.
-
-### Alternative: Homebrew
-
-Homebrew is not active yet because the external tap and its release credential do not exist.
-Once they are configured, cargo-dist can generate and publish a `coducktor` formula, and the
-intended command will be:
-
-```sh
-brew install blakepiper/tap/coducktor
-```
-
-Until then, use the precompiled installer above. Homebrew is not required for `v0.1.0`.
-To activate the tap later, the maintainer must create the public
-`blakepiper/homebrew-tap` repository, grant a narrowly scoped token write access to that repo,
-store it here as the `HOMEBREW_TAP_TOKEN` Actions secret, and then add
-`"homebrew"` to `installers` plus `tap = "blakepiper/homebrew-tap"` and
-`publish-jobs = ["homebrew"]` to
-`dist-workspace.toml`, set `formula = "coducktor"` in the package's dist metadata, and regenerate
-the release workflow.
 
 ### Build from source
 
