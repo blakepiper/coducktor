@@ -214,17 +214,19 @@ fn duck_layout(area: Rect) -> Option<(Rect, bool)> {
 /// Width of the ASCII duck column, including the star ring, so the text column lines up.
 const DUCK_ART_WIDTH: usize = 15;
 
-/// `(row, column)` cells around the duck, clockwise from the top-left, that the star ring fills.
+/// `(row, column)` cells around the duck, clockwise from the top-left, that the star ring
+/// fills. The four true corners of the `DUCK_ART_WIDTH`-wide box anchor a rectangle — not an
+/// inscribed circle — so the edges stay straight and the corners stay square.
 const STAR_RING: [(usize, usize); 12] = [
     (0, 0),
-    (0, 2),
-    (0, 8),
-    (0, 10),
-    (1, 12),
-    (2, 12),
-    (3, 11),
+    (0, 3),
+    (0, 9),
+    (0, 14),
+    (1, 14),
+    (2, 14),
+    (3, 14),
     (3, 9),
-    (3, 2),
+    (3, 3),
     (3, 0),
     (2, 0),
     (1, 0),
