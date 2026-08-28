@@ -182,7 +182,7 @@ pub fn render_conversation_header(
     height
 }
 
-const FULL_DUCK_WIDTH: u16 = 24;
+const FULL_DUCK_WIDTH: u16 = 26;
 const COMPACT_DUCK_WIDTH: u16 = 18;
 
 fn duck_layout(area: Rect) -> Option<(Rect, bool)> {
@@ -209,6 +209,50 @@ fn duck_layout(area: Rect) -> Option<(Rect, bool)> {
     } else {
         None
     }
+}
+
+/// Width of the ASCII duck column, including the star ring, so the text column lines up.
+const DUCK_ART_WIDTH: usize = 15;
+
+/// `(row, column)` cells around the duck, clockwise from the top-left, that the star ring fills.
+const STAR_RING: [(usize, usize); 12] = [
+    (0, 0),
+    (0, 2),
+    (0, 8),
+    (0, 10),
+    (1, 12),
+    (2, 12),
+    (3, 11),
+    (3, 9),
+    (3, 2),
+    (3, 0),
+    (2, 0),
+    (1, 0),
+];
+
+/// Splits one art row into spans so lit stars pick up the accent colour and the duck does not.
+fn star_spans(row: &[char], duck_style: Style, accent: Style) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut chunk = String::new();
+    let mut chunk_is_star = false;
+    for &cell in row {
+        let is_star = cell == '*';
+        if is_star != chunk_is_star && !chunk.is_empty() {
+            spans.push(Span::styled(
+                std::mem::take(&mut chunk),
+                if chunk_is_star { accent } else { duck_style },
+            ));
+        }
+        chunk_is_star = is_star;
+        chunk.push(cell);
+    }
+    if !chunk.is_empty() {
+        spans.push(Span::styled(
+            chunk,
+            if chunk_is_star { accent } else { duck_style },
+        ));
+    }
+    spans
 }
 
 fn render_placebo_duck(
@@ -241,31 +285,42 @@ fn render_placebo_duck(
     };
 
     let lines = if full {
-        // Art column is padded to DUCK_ART_WIDTH so the text column lines up.
-        const DUCK_ART_WIDTH: usize = 12;
         let art = [
             "    __".to_owned(),
             format!("  <({eye} )___"),
             "   ( ._> /".to_owned(),
             "    `---'".to_owned(),
         ];
+        let mut grid: Vec<Vec<char>> = art
+            .iter()
+            .map(|row| {
+                let mut cells: Vec<char> = row.chars().collect();
+                cells.resize(DUCK_ART_WIDTH, ' ');
+                cells
+            })
+            .collect();
+        // Each pet lights the next star clockwise; a completed ring wraps and starts over, so
+        // the spam never runs out of ring.
+        let lit = usize::from(combo % (STAR_RING.len() as u16));
+        let lit = if combo > 0 && lit == 0 {
+            STAR_RING.len()
+        } else {
+            lit
+        };
+        for &(row, column) in STAR_RING.iter().take(lit) {
+            grid[row][column] = '*';
+        }
+        let art_spans =
+            |row: usize| -> Vec<Span<'static>> { star_spans(&grid[row], duck_style, accent) };
+        let mut second = art_spans(1);
+        second.push(Span::styled(label, accent));
+        let mut third = art_spans(2);
+        third.push(Span::styled(combo_text, soft));
         vec![
-            Line::from(vec![Span::styled(
-                format!("{:<DUCK_ART_WIDTH$}", art[0]),
-                duck_style,
-            )]),
-            Line::from(vec![
-                Span::styled(format!("{:<DUCK_ART_WIDTH$}", art[1]), duck_style),
-                Span::styled(label, accent),
-            ]),
-            Line::from(vec![
-                Span::styled(format!("{:<DUCK_ART_WIDTH$}", art[2]), duck_style),
-                Span::styled(combo_text, soft),
-            ]),
-            Line::from(vec![Span::styled(
-                format!("{:<DUCK_ART_WIDTH$}", art[3]),
-                duck_style,
-            )]),
+            Line::from(art_spans(0)),
+            Line::from(second),
+            Line::from(third),
+            Line::from(art_spans(3)),
         ]
     } else {
         vec![
@@ -273,10 +328,7 @@ fn render_placebo_duck(
                 Span::styled(format!("<({eye} )> "), duck_style),
                 Span::styled(label, accent),
             ]),
-            Line::from(vec![
-                Span::raw("       "),
-                Span::styled(combo_text, soft),
-            ]),
+            Line::from(vec![Span::raw("       "), Span::styled(combo_text, soft)]),
         ]
     };
     frame.render_widget(Paragraph::new(Text::from(lines)), area);
@@ -1141,8 +1193,59 @@ fn render_child_line(item: &UiItem, theme: &Theme) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_metadata;
+    use super::{FULL_DUCK_WIDTH, STAR_RING, agent_metadata, render_placebo_duck};
+    use crate::screens::thread::PlaceboDuck;
+    use crate::theme::{ColorCapability, Theme, ThemeName};
     use coducktor_contract::{ReasoningEffort, RunRecord, Runner};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    fn duck_frame(combo: u16) -> Vec<String> {
+        let duck = PlaceboDuck {
+            combo,
+            last_pet_tick: Some(1),
+        };
+        let theme = Theme::new(ThemeName::LazyVim, ColorCapability::TrueColor);
+        let mut terminal = Terminal::new(TestBackend::new(FULL_DUCK_WIDTH, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_placebo_duck(
+                    frame,
+                    Rect::new(0, 0, FULL_DUCK_WIDTH, 4),
+                    true,
+                    duck,
+                    1,
+                    "ctrl-g",
+                    &theme,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..4)
+            .map(|row| {
+                (0..FULL_DUCK_WIDTH)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn stars(frame: &[String]) -> usize {
+        frame.iter().map(|row| row.matches('*').count()).sum()
+    }
+
+    #[test]
+    fn the_star_ring_fills_with_the_combo_and_wraps_when_the_circle_closes() {
+        assert_eq!(stars(&duck_frame(0)), 0);
+        assert_eq!(stars(&duck_frame(1)), 1);
+        assert_eq!(stars(&duck_frame(5)), 5);
+        // A closed circle stays full, and the next pet starts the ring over.
+        assert_eq!(stars(&duck_frame(STAR_RING.len() as u16)), STAR_RING.len());
+        assert_eq!(stars(&duck_frame(STAR_RING.len() as u16 + 1)), 1);
+        assert_eq!(
+            stars(&duck_frame(STAR_RING.len() as u16 * 3)),
+            STAR_RING.len()
+        );
+    }
 
     #[test]
     fn agent_metadata_shows_runner_model_and_reasoning() {
