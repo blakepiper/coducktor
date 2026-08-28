@@ -1,1 +1,0 @@
-{"version":3,"file":"review-gate.js","sourceRoot":"","sources":["../../src/runs/review-gate.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;GAcG;AACH,MAAM,UAAU,iBAAiB,CAC/B,MAAgC,EAChC,GAAG,GAAsB,OAAO,CAAC,GAAG;IAEpC,IAAI,MAAM,CAAC,UAAU,KAAK,SAAS;QAAE,OAAO,MAAM,CAAC,UAAU,CAAC;IAC9D,OAAO,GAAG,CAAC,eAAe,KAAK,GAAG,CAAC;AACrC,CAAC"}
