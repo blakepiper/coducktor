@@ -969,4 +969,44 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn conversation_card_chip_prefers_the_resolved_model_over_a_requested_auto() {
+        let auto = conversation_entry(None, Some("claude-opus-4-8-exact"));
+        let cards = build_conversation_cards(&[auto], TaskView::Active, "", 1_800_000_000);
+        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+            panic!("expected a harness chip");
+        };
+        assert_eq!(model.as_deref(), Some("claude-opus-4-8-exact"));
+
+        // An explicit pick still wins over whatever the harness reports back.
+        let explicit = conversation_entry(Some("opus"), Some("claude-opus-4-8-exact"));
+        let cards = build_conversation_cards(&[explicit], TaskView::Active, "", 1_800_000_000);
+        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+            panic!("expected a harness chip");
+        };
+        assert_eq!(model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn legacy_run_card_chip_prefers_the_resolved_model_over_a_requested_auto() {
+        let run = ApiRun {
+            record: RunRecord {
+                id: "run-1".to_owned(),
+                title: "Task 1".to_owned(),
+                runner: Some(coducktor_contract::Runner::Codex),
+                model: None,
+                model_identity: Some("gpt-5.4-exact".to_owned()),
+                status: RunStatus::Done,
+                created_at: "2026-08-15T00:00:00Z".to_owned(),
+                ..RunRecord::default()
+            },
+            usage: None,
+        };
+        let cards = build_cards(&[run], TaskView::Active, "", 1_800_000_000);
+        let Some(CardChip::Harness { model, .. }) = cards[0].chips.first() else {
+            panic!("expected a harness chip");
+        };
+        assert_eq!(model.as_deref(), Some("gpt-5.4-exact"));
+    }
 }
