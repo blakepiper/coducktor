@@ -182,8 +182,8 @@ pub fn render_conversation_header(
     height
 }
 
-const FULL_DUCK_WIDTH: u16 = 32;
-const COMPACT_DUCK_WIDTH: u16 = 20;
+const FULL_DUCK_WIDTH: u16 = 24;
+const COMPACT_DUCK_WIDTH: u16 = 18;
 
 fn duck_layout(area: Rect) -> Option<(Rect, bool)> {
     if area.height >= 4 && area.width >= 110 {
@@ -227,67 +227,56 @@ fn render_placebo_duck(
         Some(2..=4) => "^",
         _ => "o",
     };
-    let reaction = match combo {
-        0 => "PET DUCK".to_owned(),
-        1 => "PAT!".to_owned(),
-        2..=4 => "GO FASTER!".to_owned(),
-        5..=8 => "THINK HARDER!".to_owned(),
-        _ => "MAXIMUM DUCK".to_owned(),
-    };
     let key = placebo_key_label(pet_key);
     let accent = Style::default()
         .fg(theme.palette.accent)
         .add_modifier(Modifier::BOLD);
     let soft = Style::default().fg(theme.palette.soft_fg);
     let duck_style = Style::default().fg(theme.palette.fg);
+    let label = format!("{key} PET DUCK");
+    let combo_text = if combo == 0 {
+        String::new()
+    } else {
+        format!("combo x{combo}")
+    };
 
     let lines = if full {
-        let spark = if combo >= 9 {
-            "*   __   *"
-        } else if elapsed.is_some_and(|value| value <= 5) {
-            "    __   *"
-        } else {
-            "    __"
-        };
+        // Art column is padded to DUCK_ART_WIDTH so the text column lines up.
+        const DUCK_ART_WIDTH: usize = 12;
+        let art = [
+            "    __".to_owned(),
+            format!("  <({eye} )___"),
+            "   ( ._> /".to_owned(),
+            "    `---'".to_owned(),
+        ];
         vec![
+            Line::from(vec![Span::styled(
+                format!("{:<DUCK_ART_WIDTH$}", art[0]),
+                duck_style,
+            )]),
             Line::from(vec![
-                Span::styled(format!("{spark:<15}"), duck_style),
-                Span::styled(format!("{key} PET"), accent),
+                Span::styled(format!("{:<DUCK_ART_WIDTH$}", art[1]), duck_style),
+                Span::styled(label, accent),
             ]),
             Line::from(vec![
-                Span::styled(format!(" <({eye} )___      "), duck_style),
-                Span::styled(reaction, accent),
+                Span::styled(format!("{:<DUCK_ART_WIDTH$}", art[2]), duck_style),
+                Span::styled(combo_text, soft),
             ]),
-            Line::from(vec![
-                Span::styled("  ( ._> /       ", duck_style),
-                Span::styled(
-                    if combo == 0 {
-                        "".to_owned()
-                    } else {
-                        format!("combo x{combo}")
-                    },
-                    soft,
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("   `---'        ", duck_style),
-                Span::styled("morale only", soft),
-            ]),
+            Line::from(vec![Span::styled(
+                format!("{:<DUCK_ART_WIDTH$}", art[3]),
+                duck_style,
+            )]),
         ]
     } else {
-        let compact_reaction = match combo {
-            0 => format!("{key} PET"),
-            1 => "PAT! x1".to_owned(),
-            2..=4 => format!("FASTER! x{combo}"),
-            5..=8 => format!("HARDER! x{combo}"),
-            _ => format!("MAX DUCK x{}", combo.min(99)),
-        };
         vec![
             Line::from(vec![
-                Span::styled(format!("<({eye})> "), duck_style),
-                Span::styled(compact_reaction, accent),
+                Span::styled(format!("<({eye} )> "), duck_style),
+                Span::styled(label, accent),
             ]),
-            Line::from(Span::styled("      morale only", soft)),
+            Line::from(vec![
+                Span::raw("       "),
+                Span::styled(combo_text, soft),
+            ]),
         ]
     };
     frame.render_widget(Paragraph::new(Text::from(lines)), area);

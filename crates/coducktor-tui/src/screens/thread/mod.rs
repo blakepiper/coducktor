@@ -3291,7 +3291,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(content.contains("morale only"));
+        assert!(content.contains("PET DUCK"));
 
         let target = (0..120).find_map(|column| {
             (0..40).find_map(|row| {
@@ -3327,7 +3327,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(reacted.contains("FASTER! x2"));
+        assert!(reacted.contains("combo x2"));
         assert!(app.pending.is_empty(), "the animation remains TUI-local");
     }
 
@@ -4013,3 +4013,4 @@ mod tests {
         assert_eq!(app.thread_ui.composer.text, "first\nsecond");
     }
 }
+
