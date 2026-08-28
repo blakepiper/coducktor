@@ -15,7 +15,7 @@ pub mod reducer;
 mod widgets;
 
 use coducktor_contract::{ApiRun, ImageInput, RunEvent, RunStatus};
-use coducktor_protocol::UiItem;
+use coducktor_protocol::{MessagePhase, MessageRole, UiItem, UiMessageItem};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -768,22 +768,16 @@ fn build_transcript_items(
                 &user_message.text,
             ));
         }
+        let mut assistant_answers = Vec::new();
         for entry in &turn.items {
             match entry {
+                ThreadEntry::Item(UiItem::Message(message))
+                    if is_assistant_answer(message, turn.completed.is_some()) =>
+                {
+                    assistant_answers.push(message);
+                }
                 ThreadEntry::Item(UiItem::Message(message)) => {
-                    let text = if message.role == coducktor_protocol::MessageRole::Assistant
-                        && message.text.contains("DUCK:")
-                    {
-                        std::borrow::Cow::Owned(strip_done_marker(&message.text, strip_ask))
-                    } else {
-                        std::borrow::Cow::Borrowed(message.text.as_str())
-                    };
-                    items.push(reuse_message(
-                        existing,
-                        message.id.clone(),
-                        message.role,
-                        &text,
-                    ));
+                    push_message_entry(&mut items, existing, message, strip_ask);
                 }
                 ThreadEntry::Item(UiItem::Reasoning(reasoning)) => {
                     items.push(reuse_reasoning(
@@ -839,6 +833,9 @@ fn build_transcript_items(
                 Some(&input),
                 status,
             )));
+        }
+        for message in assistant_answers {
+            push_message_entry(&mut items, existing, message, strip_ask);
         }
         if let Some(projected) = projected
             && let Some(outcome) = outcome_item(projected)
@@ -913,6 +910,31 @@ fn build_transcript_items(
         }
     }
     items
+}
+
+fn is_assistant_answer(message: &UiMessageItem, turn_completed: bool) -> bool {
+    message.role == MessageRole::Assistant
+        && (matches!(message.phase, Some(MessagePhase::Final))
+            || message.phase.is_none() && (turn_completed || message.id.starts_with("v1-message:")))
+}
+
+fn push_message_entry(
+    items: &mut Vec<TranscriptItem>,
+    existing: &mut std::collections::HashMap<String, TranscriptItem>,
+    message: &UiMessageItem,
+    strip_ask: bool,
+) {
+    let text = if message.role == MessageRole::Assistant && message.text.contains("DUCK:") {
+        std::borrow::Cow::Owned(strip_done_marker(&message.text, strip_ask))
+    } else {
+        std::borrow::Cow::Borrowed(message.text.as_str())
+    };
+    items.push(reuse_message(
+        existing,
+        message.id.clone(),
+        message.role,
+        &text,
+    ));
 }
 
 fn reuse_message(
@@ -3878,6 +3900,56 @@ mod tests {
         let content = render_to_string(&mut app);
         assert!(content.contains("LATEST MESSAGE"));
         assert!(content.contains("Which export format should I use?"));
+    }
+
+    #[test]
+    fn legacy_plain_text_answer_follows_all_tool_calls() {
+        let mut app = app_with_run(RunStatus::Running);
+        app.thread_ui.push_events([
+            (
+                1.0,
+                event(1.0, "text", json!({"text": "I’ll inspect it. "})),
+            ),
+            (
+                2.0,
+                event(
+                    2.0,
+                    "tool-call",
+                    json!({"id": "inspect", "tool": "shell", "input": {"cmd": "inspect"}}),
+                ),
+            ),
+            (
+                3.0,
+                event(
+                    3.0,
+                    "tool-result",
+                    json!({"toolCallId": "inspect", "result": "done"}),
+                ),
+            ),
+            (4.0, event(4.0, "text", json!({"text": "Done."}))),
+        ]);
+
+        let ids: Vec<_> = app
+            .thread_ui
+            .transcript
+            .items()
+            .iter()
+            .map(TranscriptItem::id)
+            .collect();
+        assert!(
+            ids.iter().position(|id| *id == "inspect")
+                < ids.iter().position(|id| *id == "v1-message:0"),
+            "the completed plain-text answer belongs below its tool cards"
+        );
+        assert!(matches!(
+            app.thread_ui
+                .transcript
+                .items()
+                .iter()
+                .find(|item| item.id() == "v1-message:0"),
+            Some(TranscriptItem::Message(message))
+                if message.text == "I’ll inspect it. Done."
+        ));
     }
 
     /// An ordinary turn end — no question asked — parks as `Idle`, not `Waiting` (F4). The
