@@ -577,6 +577,11 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             remember_selection(app);
             true
         }
+        KeyCode::Char('a') => {
+            app.tasks_ui.new_task_focused = false;
+            open_row_menu(app);
+            true
+        }
         KeyCode::Enter => {
             if app.tasks_ui.new_task_focused {
                 app.navigate(NavItem::NewTask);

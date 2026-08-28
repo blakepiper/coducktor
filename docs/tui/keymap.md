@@ -69,6 +69,8 @@ paste, and mouse click/drag remain available for conventional editing.
 
 - Chats, All Chats, Skills, Settings, Git, and GitHub lists use `j`/`k` and arrow keys for
   selection; `Enter` opens or activates the selected control.
+- In Chats and All Chats, `a` opens the selected chat's actions. Settled chats can be deleted
+  from that menu after confirmation; right-clicking a chat opens the same menu.
 - Conversation transcripts use `j`/`k`, `gg`/`G`, paging, and search. `Enter` or `za` toggles a
   selected expandable activity item; `zR` expands every reasoning and tool card, and `zM`
   collapses them. Changes, Files, and Commits use `gt`/`gT`.

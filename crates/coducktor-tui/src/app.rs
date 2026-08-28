@@ -4239,7 +4239,6 @@ pub fn handle_row_menu_key(app: &mut App, menu: &RowMenu, key: KeyEvent) -> bool
             let Some(action) = menu.items.get(selected).map(|item| item.action) else {
                 return true;
             };
-            app.row_menu = None;
             apply_menu_action(app, action);
             true
         }
@@ -4262,7 +4261,13 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
     let is_conversation = app
         .project_tasks
         .get(&project)
-        .is_some_and(|state| state.conversations.iter().any(|entry| entry.id == id));
+        .is_some_and(|state| state.conversations.iter().any(|entry| entry.id == id))
+        || app.global_conversations.as_ref().is_some_and(|index| {
+            index
+                .conversations
+                .iter()
+                .any(|entry| entry.project_id == project && entry.id == id)
+        });
     match action {
         MenuAction::Open => crate::screens::thread::open(app, &project, &id),
         MenuAction::Archive | MenuAction::Restore => {
@@ -4289,8 +4294,17 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
         }),
         MenuAction::Delete => {
             let title = menu.title;
+            let text = if is_conversation {
+                let mut targets = vec![format!("the transcript for \"{title}\"")];
+                if let Some(branch) = run_branch(app, &project, &id) {
+                    targets.push(format!("its branch {branch}"));
+                }
+                format!("Delete {}?", targets.join(", "))
+            } else {
+                format!("Delete \"{title}\" and its branch?")
+            };
             app.confirm = Some(ConfirmRequest {
-                text: format!("Delete \"{title}\" and its branch?"),
+                text,
                 action: if is_conversation {
                     PendingAction::DeleteConversation { project, id }
                 } else {
@@ -4318,6 +4332,12 @@ fn apply_menu_action(app: &mut App, action: MenuAction) {
 }
 
 fn run_reference_url(app: &App, project: &str, id: &str) -> Option<String> {
+    if let Some(entry) = conversation_index_entry(app, project, id) {
+        return entry
+            .pull_request_url
+            .clone()
+            .or_else(|| entry.referenced_pull_request_url.clone());
+    }
     if project == app.current_project()
         && let Some(run) = app.tasks.iter().find(|run| run.record.id == id)
     {
@@ -4344,6 +4364,9 @@ fn run_reference_url(app: &App, project: &str, id: &str) -> Option<String> {
 }
 
 fn run_branch(app: &App, project: &str, id: &str) -> Option<String> {
+    if let Some(entry) = conversation_index_entry(app, project, id) {
+        return entry.branch.clone();
+    }
     if project == app.current_project()
         && let Some(run) = app.tasks.iter().find(|run| run.record.id == id)
     {
@@ -4358,6 +4381,24 @@ fn run_branch(app: &App, project: &str, id: &str) -> Option<String> {
         return entry.branch.clone();
     }
     None
+}
+
+fn conversation_index_entry<'a>(
+    app: &'a App,
+    project: &str,
+    id: &str,
+) -> Option<&'a coducktor_contract::ConversationIndexEntry> {
+    app.project_tasks
+        .get(project)
+        .and_then(|state| state.conversations.iter().find(|entry| entry.id == id))
+        .or_else(|| {
+            app.global_conversations.as_ref().and_then(|index| {
+                index
+                    .conversations
+                    .iter()
+                    .find(|entry| entry.project_id == project && entry.id == id)
+            })
+        })
 }
 
 fn copy_to_clipboard(text: &str) -> bool {

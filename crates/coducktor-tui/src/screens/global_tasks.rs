@@ -983,6 +983,10 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
             app.global_ui.table.move_selection(-1);
             true
         }
+        KeyCode::Char('a') => {
+            open_row_menu(app);
+            true
+        }
         KeyCode::Enter => {
             if let Some((_, row)) = app.global_ui.table.selected_row() {
                 let key = row.key.clone();
@@ -1048,6 +1052,16 @@ pub fn open_row_menu(app: &mut App) {
     let Some((project, id)) = split_key(&row.key) else {
         return;
     };
+    if let Some(entry) = app.global_conversations.as_ref().and_then(|index| {
+        index
+            .conversations
+            .iter()
+            .find(|entry| entry.project_id == project && entry.id == id)
+            .cloned()
+    }) {
+        open_conversation_row_menu(app, &entry);
+        return;
+    }
     let Some(index) = &app.global_index else {
         return;
     };
@@ -1100,6 +1114,74 @@ pub fn open_row_menu(app: &mut App) {
         project: entry.project_id.clone(),
         run_id: entry.id.clone(),
         title: run_title_entry(&entry),
+        items,
+        selected: 0,
+    });
+}
+
+fn open_conversation_row_menu(app: &mut App, entry: &coducktor_contract::ConversationIndexEntry) {
+    use crate::screens::chats_util;
+
+    let mut items = vec![
+        RowMenuItem {
+            label: "Open chat".to_owned(),
+            action: crate::app::MenuAction::Open,
+        },
+        RowMenuItem {
+            label: if entry.archived {
+                "Restore to active".to_owned()
+            } else {
+                "Archive".to_owned()
+            },
+            action: if entry.archived {
+                crate::app::MenuAction::Restore
+            } else {
+                crate::app::MenuAction::Archive
+            },
+        },
+    ];
+    if chats_util::can_be_unread(entry) || entry.seen_at.is_some() {
+        let unread = chats_util::is_unread(entry);
+        items.push(RowMenuItem {
+            label: if unread {
+                "Mark read".to_owned()
+            } else {
+                "Mark unread".to_owned()
+            },
+            action: if unread {
+                crate::app::MenuAction::MarkRead
+            } else {
+                crate::app::MenuAction::MarkUnread
+            },
+        });
+    }
+    if entry
+        .pull_request_url
+        .as_deref()
+        .or(entry.referenced_pull_request_url.as_deref())
+        .is_some()
+    {
+        items.push(RowMenuItem {
+            label: "Open PR/issue".to_owned(),
+            action: crate::app::MenuAction::OpenPr,
+        });
+    }
+    if !entry.branch.as_deref().is_none_or(str::is_empty) {
+        items.push(RowMenuItem {
+            label: "Copy branch".to_owned(),
+            action: crate::app::MenuAction::CopyBranch,
+        });
+    }
+    if chats_util::can_delete(entry) {
+        items.push(RowMenuItem {
+            label: "Delete".to_owned(),
+            action: crate::app::MenuAction::Delete,
+        });
+    }
+    app.row_menu = Some(RowMenu {
+        project: entry.project_id.clone(),
+        run_id: entry.id.clone(),
+        title: entry.title.clone(),
         items,
         selected: 0,
     });
@@ -1170,6 +1252,32 @@ mod tests {
         app
     }
 
+    fn conversation_entry(
+        project: &str,
+        id: &str,
+        state: coducktor_contract::ConversationState,
+    ) -> coducktor_contract::ConversationIndexEntry {
+        coducktor_contract::ConversationIndexEntry {
+            project_id: project.to_owned(),
+            id: id.to_owned(),
+            title: format!("Global chat {id}"),
+            state,
+            harness: coducktor_contract::Runner::Claude,
+            model: Some("opus".to_owned()),
+            reasoning: None,
+            created_at: "2026-08-15T00:00:00Z".to_owned(),
+            updated_at: "2026-08-15T00:01:00Z".to_owned(),
+            seen_at: None,
+            archived: false,
+            archived_at: None,
+            prompt_preview: "Implement the requested change".to_owned(),
+            branch: Some("duck/task-chat-1".to_owned()),
+            pull_request_url: None,
+            referenced_pull_request_url: None,
+            extra: Default::default(),
+        }
+    }
+
     fn render(app: &mut App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.render(frame)).unwrap();
@@ -1195,6 +1303,55 @@ mod tests {
         assert!(content.contains(crate::widgets::spinner::status_frame(0)));
         assert!(content.contains("⟦needs you⟧"));
         assert!(!content.contains(" idle "));
+    }
+
+    #[test]
+    fn failed_global_chat_can_be_deleted_from_keyboard_actions() {
+        let mut app = app_with_index(Vec::new(), vec![project("shop", Vec::new())]);
+        app.set_global_conversations(coducktor_contract::ConversationsIndexResponse {
+            conversations: vec![conversation_entry(
+                "shop",
+                "chat-1",
+                coducktor_contract::ConversationState::Failed,
+            )],
+            extra: Default::default(),
+        });
+        let content = render(&mut app, 160, 30);
+        assert!(content.contains("Global chat chat-1"));
+
+        assert!(handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ));
+        let delete = app
+            .row_menu
+            .as_ref()
+            .and_then(|menu| {
+                menu.items
+                    .iter()
+                    .position(|item| item.action == crate::app::MenuAction::Delete)
+            })
+            .expect("a settled failed chat offers Delete");
+        app.row_menu
+            .as_mut()
+            .expect("actions menu is open")
+            .selected = delete;
+
+        assert!(handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ));
+        assert!(matches!(
+            app.confirm.as_ref().map(|confirm| &confirm.action),
+            Some(crate::app::PendingAction::DeleteConversation { project, id })
+                if project == "shop" && id == "chat-1"
+        ));
     }
 
     #[test]
