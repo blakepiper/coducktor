@@ -84,7 +84,11 @@ fn locale_supports_unicode(value: &str) -> bool {
 }
 
 pub fn glyphs() -> Glyphs {
-    if unicode_supported() { UNICODE } else { ASCII }
+    glyphs_for(unicode_supported())
+}
+
+pub(crate) fn glyphs_for(unicode: bool) -> Glyphs {
+    if unicode { UNICODE } else { ASCII }
 }
 
 pub fn tool_icon(kind: ToolKind) -> &'static str {

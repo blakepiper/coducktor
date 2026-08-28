@@ -62,4 +62,5 @@ toml = "0.8"
 regex = "1"
 # Workflow YAML. Maintained fork of `serde_yaml`.
 serde_yaml_ng = "0.10"
+unicode-width = "0.2"
 sha2 = "0.10"

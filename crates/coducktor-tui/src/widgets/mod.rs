@@ -1,3 +1,4 @@
+pub mod card;
 pub mod composer;
 pub mod editor;
 pub mod file_tree;

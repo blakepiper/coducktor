@@ -831,6 +831,7 @@ dependencies = [
  "toml",
  "tui-markdown",
  "two-face",
+ "unicode-width 0.2.0",
  "vt100",
 ]
 
