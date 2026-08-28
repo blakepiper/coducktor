@@ -502,16 +502,21 @@ pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
     if !contains {
         return false;
     }
-    let delta: isize = if up { 3 } else { -3 };
     match app.task_git_ui.tab {
         TaskGitTab::Changes => {
-            app.task_git_ui.diff_scroll =
-                (app.task_git_ui.diff_scroll as isize).saturating_add(delta) as usize;
+            app.task_git_ui.diff_scroll = if up {
+                app.task_git_ui.diff_scroll.saturating_sub(3)
+            } else {
+                app.task_git_ui.diff_scroll.saturating_add(3)
+            };
             true
         }
         TaskGitTab::Commits => {
-            app.task_git_ui.commit_diff_scroll =
-                (app.task_git_ui.commit_diff_scroll as isize).saturating_add(delta) as usize;
+            app.task_git_ui.commit_diff_scroll = if up {
+                app.task_git_ui.commit_diff_scroll.saturating_sub(3)
+            } else {
+                app.task_git_ui.commit_diff_scroll.saturating_add(3)
+            };
             true
         }
         TaskGitTab::Files => false,
@@ -956,6 +961,21 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn wheel_scrolls_diff_without_underflow() {
+        let mut app = app_with_changes();
+        app.task_git_ui.diff_area = Some(Rect::new(10, 10, 20, 20));
+
+        assert!(wheel(&mut app, false, (11, 11)));
+        assert_eq!(app.task_git_ui.diff_scroll, 3);
+
+        assert!(wheel(&mut app, true, (11, 11)));
+        assert_eq!(app.task_git_ui.diff_scroll, 0);
+
+        assert!(wheel(&mut app, true, (11, 11)));
+        assert_eq!(app.task_git_ui.diff_scroll, 0);
     }
 
     #[test]

@@ -403,16 +403,21 @@ pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
     if !contains {
         return false;
     }
-    let delta: isize = if up { 3 } else { -3 };
     match app.repo_git_ui.tab {
         RepoGitTab::Changes => {
-            app.repo_git_ui.diff_scroll =
-                (app.repo_git_ui.diff_scroll as isize).saturating_add(delta) as usize;
+            app.repo_git_ui.diff_scroll = if up {
+                app.repo_git_ui.diff_scroll.saturating_sub(3)
+            } else {
+                app.repo_git_ui.diff_scroll.saturating_add(3)
+            };
             true
         }
         RepoGitTab::Commits => {
-            app.repo_git_ui.commit_diff_scroll =
-                (app.repo_git_ui.commit_diff_scroll as isize).saturating_add(delta) as usize;
+            app.repo_git_ui.commit_diff_scroll = if up {
+                app.repo_git_ui.commit_diff_scroll.saturating_sub(3)
+            } else {
+                app.repo_git_ui.commit_diff_scroll.saturating_add(3)
+            };
             true
         }
         RepoGitTab::Branches => false,
@@ -615,5 +620,28 @@ impl RepoGitUi {
             return None;
         };
         present.branches.get(self.branches_selected).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::keymap::Keymap;
+    use crate::theme::Theme;
+
+    #[test]
+    fn wheel_scrolls_commit_diff_without_underflow() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.repo_git_ui.tab = RepoGitTab::Commits;
+        app.repo_git_ui.diff_area = Some(Rect::new(10, 10, 20, 20));
+
+        assert!(wheel(&mut app, false, (11, 11)));
+        assert_eq!(app.repo_git_ui.commit_diff_scroll, 3);
+
+        assert!(wheel(&mut app, true, (11, 11)));
+        assert_eq!(app.repo_git_ui.commit_diff_scroll, 0);
+
+        assert!(wheel(&mut app, true, (11, 11)));
+        assert_eq!(app.repo_git_ui.commit_diff_scroll, 0);
     }
 }
