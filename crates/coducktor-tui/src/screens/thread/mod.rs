@@ -2978,6 +2978,29 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_composer_releases_sidebar_focus_for_immediate_typing() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        render_to_string(&mut app);
+        let Some(area) = app.thread_ui.composer.input_area() else {
+            panic!("the composer has been rendered");
+        };
+        app.focus_sidebar();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 2,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+
+        assert_eq!(app.thread_ui.composer.text, "x");
+    }
+
+    #[test]
     fn clicking_the_transcript_focuses_it_and_blurs_the_composer() {
         let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
         render_to_string(&mut app);

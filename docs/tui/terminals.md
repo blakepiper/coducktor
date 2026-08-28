@@ -99,6 +99,16 @@ status line from `NORMAL · SIDEBAR` to `INSERT · CONTENT`; typing and submitti
 `__TERMINAL_CLICK_OK__` in the embedded shell. This verifies that a terminal click transfers
 keyboard input while retaining the grid's click-drag selection path.
 
+## Composer click-to-type smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 80×24 PTY with a disposable
+`DUCK_HOME` and throwaway Git repository. On New Chat, `Ctrl-W h` moved keyboard focus from the
+composer to the sidebar and changed the composer title to `COMPOSER (i to type)`. A left-click
+event inside the composer immediately restored `INSERT · COMPOSER`; typing
+`__COMPOSER_CLICK_OK__` without another focus command rendered that exact text in the composer.
+The same sidebar-to-composer transition on an existing chat is covered by the focused mouse
+regression test.
+
 ## Reproduction shape
 
 The real sessions followed this sequence:

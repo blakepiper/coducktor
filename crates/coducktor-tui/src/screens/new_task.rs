@@ -1498,6 +1498,28 @@ mod tests {
     }
 
     #[test]
+    fn clicking_the_composer_releases_sidebar_focus_for_immediate_typing() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut app = app_with_new_task("t-click-focus");
+        render_app(&mut app, 120, 40);
+        let Some(area) = app.new_task_ui.composer.input_area() else {
+            panic!("the composer has been rendered");
+        };
+        app.focus_sidebar();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 2,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_event(Event::Key(key('x')));
+
+        assert_eq!(app.new_task_ui.composer.text, "x");
+    }
+
+    #[test]
     fn tab_moves_from_the_composer_through_every_task_option() {
         let mut app = app_with_new_task("t-options");
         let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);

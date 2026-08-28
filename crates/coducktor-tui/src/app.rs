@@ -2950,6 +2950,16 @@ impl App {
             return Some(*pane);
         }
         match self.route() {
+            Route::NewTask { .. } => match action {
+                HitAction::NewTaskScreen(crate::input::hitmap::NewTaskAction::Compose) => Some(0),
+                _ => None,
+            },
+            Route::Thread { .. } => match action {
+                HitAction::ThreadScreen(crate::screens::thread::ThreadAction::FocusComposer) => {
+                    Some(0)
+                }
+                _ => None,
+            },
             Route::Settings { .. } | Route::GlobalSettings => match action {
                 HitAction::SettingsSection(_) => Some(0),
                 HitAction::SettingsRow(_) | HitAction::SettingsDeleteRow(_) => Some(1),
