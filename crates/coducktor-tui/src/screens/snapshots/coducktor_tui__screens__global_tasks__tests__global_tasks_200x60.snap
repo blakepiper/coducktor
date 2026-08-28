@@ -1,5 +1,6 @@
 ---
 source: crates/coducktor-tui/src/screens/global_tasks.rs
+assertion_line: 1269
 expression: terminal.backend().buffer()
 ---
 Buffer {
@@ -17,7 +18,7 @@ Buffer {
         "    Skills                  │└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘│",
         "    Settings                │ WORKING                                                                                                                                                                  │",
         "                            │┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐│",
-        "  WORKSPACE                 ││  ● running  Global task 1  shop  153d                                                                                                                                  ││",
+        "  WORKSPACE                 ││  ⠋ running  Global task 1  shop  153d                                                                                                                                  ││",
         "  ▸ All chats               ││  Implement global task 1 exactly — café 🦆 — and preserve project-scoped behavior across long wrapped prompts.                                                         ││", // hidden by multi-width symbols: [(72, " ")]
         "    Settings                ││                                                                                                                                                                        ││",
         "                            ││  quick-task                                                                                                                                                            ││",
@@ -150,6 +151,8 @@ Buffer {
         x: 28, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 29, y: 12, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,
         x: 30, y: 12, fg: Rgb(192, 202, 245), bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 12, fg: Rgb(190, 130, 245), bg: Reset, underline: Reset, modifier: BOLD,
+        x: 33, y: 12, fg: Rgb(192, 202, 245), bg: Reset, underline: Reset, modifier: NONE,
         x: 56, y: 12, fg: Rgb(122, 162, 247), bg: Reset, underline: Reset, modifier: NONE,
         x: 62, y: 12, fg: Rgb(130, 139, 184), bg: Reset, underline: Reset, modifier: NONE,
         x: 68, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

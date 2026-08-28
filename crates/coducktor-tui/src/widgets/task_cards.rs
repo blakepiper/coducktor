@@ -35,6 +35,9 @@ pub struct TaskCard {
     pub key: String,
     pub group: CardGroup,
     pub glyph: &'static str,
+    /// While true the renderer swaps the static glyph for the shared spinner frame,
+    /// driven by the frame tick passed to [`render`].
+    pub animated: bool,
     pub status: &'static str,
     pub title: String,
     pub prompt: String,
@@ -64,6 +67,7 @@ pub fn render(
     title: &str,
     empty_hint: &str,
     theme: &Theme,
+    animation_tick: u64,
     header_action: Option<CardHeaderAction<'_>>,
 ) {
     let outer = Block::default().borders(Borders::ALL).title(title);
@@ -143,11 +147,22 @@ pub fn render(
             } else {
                 Style::default().fg(theme.palette.fg)
             };
+            let glyph = if card.animated {
+                crate::widgets::spinner::frame(animation_tick)
+            } else {
+                card.glyph
+            };
+            let glyph_style = if card.animated {
+                Style::default()
+                    .fg(theme.palette.review)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                title_style
+            };
             let mut header = vec![
-                Span::styled(
-                    format!("{marker} {} {}  ", card.glyph, card.status),
-                    title_style,
-                ),
+                Span::styled(format!("{marker} "), title_style),
+                Span::styled(glyph, glyph_style),
+                Span::styled(format!(" {}  ", card.status), title_style),
                 Span::styled(card.title.clone(), title_style),
             ];
             if let Some(project) = &card.project {

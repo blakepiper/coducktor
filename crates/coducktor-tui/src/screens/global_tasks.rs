@@ -198,6 +198,7 @@ fn build_conversation_cards(
                     coducktor_contract::ConversationState::Cancelled => "/",
                     coducktor_contract::ConversationState::Idle => "=",
                 },
+                animated: entry.state == coducktor_contract::ConversationState::Running,
                 status: chats_util::attention(entry).label,
                 title: entry.title.clone(),
                 prompt: entry.prompt_preview.clone(),
@@ -293,6 +294,7 @@ fn build_cards(
                 key: format!("{}/{}", entry.project_id, entry.id),
                 group: entry_group(entry, view),
                 glyph: entry_status_glyph(entry.status),
+                animated: entry.status == coducktor_contract::RunStatus::Running,
                 status: entry_status_label(entry.status),
                 title: run_title_entry(entry),
                 prompt: entry.prompt_preview.clone().unwrap_or_default(),
@@ -759,6 +761,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             "No chats match your search."
         },
         &theme,
+        app.animation_tick,
         None,
     );
     render_tag_picker(frame, app);
