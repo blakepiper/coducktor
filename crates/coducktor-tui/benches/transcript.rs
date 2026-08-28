@@ -16,7 +16,8 @@ use coducktor_protocol::{MessageRole, ToolStatus};
 use coducktor_tui::image::ImageSupport;
 use coducktor_tui::theme::{ColorCapability, Theme, ThemeName};
 use coducktor_tui::widgets::transcript::{
-    ImageItem, MessageItem, NoteItem, NoteTone, ReasoningItem, ToolItem, Transcript, TranscriptItem,
+    FrameCtx, ImageItem, MessageItem, NoteItem, NoteTone, ReasoningItem, ToolItem, Transcript,
+    TranscriptItem,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use ratatui::buffer::Buffer;
@@ -82,13 +83,29 @@ fn bench_static_scroll(c: &mut Criterion) {
     let theme = theme();
     let mut buf = Buffer::empty(VIEWPORT);
     // Warm the height cache the same way the real app would after its first frame.
-    transcript.render(&mut buf, VIEWPORT, &theme);
+    transcript.render(
+        &mut buf,
+        VIEWPORT,
+        FrameCtx {
+            theme: &theme,
+            tick: 0,
+            now_epoch: 0,
+        },
+    );
 
     c.bench_function("transcript_static_scroll_5000_items", |b| {
         b.iter(|| {
             transcript.scroll_by(black_box(3));
             let mut buf = Buffer::empty(VIEWPORT);
-            transcript.render(&mut buf, VIEWPORT, &theme);
+            transcript.render(
+                &mut buf,
+                VIEWPORT,
+                FrameCtx {
+                    theme: &theme,
+                    tick: 0,
+                    now_epoch: 0,
+                },
+            );
             black_box(&buf);
         });
     });
@@ -100,7 +117,15 @@ fn bench_first_render_cold_cache(c: &mut Criterion) {
         b.iter(|| {
             let mut transcript = build_transcript();
             let mut buf = Buffer::empty(VIEWPORT);
-            transcript.render(&mut buf, VIEWPORT, &theme);
+            transcript.render(
+                &mut buf,
+                VIEWPORT,
+                FrameCtx {
+                    theme: &theme,
+                    tick: 0,
+                    now_epoch: 0,
+                },
+            );
             black_box(&buf);
         });
     });

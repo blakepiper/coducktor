@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use coducktor_contract::{ApiRun, RunEvent, RunRecord, RunStatus};
 use coducktor_tui::screens::thread::ThreadUi;
 use coducktor_tui::theme::{ColorCapability, Theme, ThemeName};
+use coducktor_tui::widgets::transcript::FrameCtx;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -121,7 +122,15 @@ fn prepare_thread(event_count: usize) -> (ThreadUi, Theme) {
     for batch in events.chunks(FRAME_BATCH_SIZE) {
         thread.push_events(batch.iter().cloned().map(|event| (event.seq, event)));
         let mut buffer = Buffer::empty(VIEWPORT);
-        thread.transcript.render(&mut buffer, VIEWPORT, &theme);
+        thread.transcript.render(
+            &mut buffer,
+            VIEWPORT,
+            FrameCtx {
+                theme: &theme,
+                tick: 0,
+                now_epoch: 0,
+            },
+        );
     }
     (thread, theme)
 }
@@ -137,7 +146,15 @@ fn next_frame(thread: &mut ThreadUi, theme: &Theme) -> (Duration, Duration) {
 
     let mut buffer = Buffer::empty(VIEWPORT);
     let started = Instant::now();
-    thread.transcript.render(&mut buffer, VIEWPORT, theme);
+    thread.transcript.render(
+        &mut buffer,
+        VIEWPORT,
+        FrameCtx {
+            theme,
+            tick: 0,
+            now_epoch: 0,
+        },
+    );
     let render = started.elapsed();
     std::hint::black_box(buffer);
     (projection, render)

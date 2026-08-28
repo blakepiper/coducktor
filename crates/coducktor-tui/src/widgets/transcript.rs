@@ -36,6 +36,14 @@ const IMAGE_MAX_ROWS: u16 = 16;
 const ITEM_GUTTER_WIDTH: u16 = 2;
 const ITEM_SPACING: u16 = 1;
 
+/// Per-frame render inputs that are not part of an item's identity or height.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameCtx<'a> {
+    pub theme: &'a Theme,
+    pub tick: u64,
+    pub now_epoch: i64,
+}
+
 /// One transcript entry. Deliberately a small, closed set: this is the rendering
 /// primitive, not the thread reducer's full `ThreadEntry` union (no ask/provider-auth
 /// cards — those are interactive, run-aware, and belong to the thread screen.
@@ -142,7 +150,8 @@ impl TranscriptItem {
         }
     }
 
-    fn paint(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
+    fn paint(&mut self, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+        let theme = ctx.theme;
         if area.height <= ITEM_SPACING || area.width == 0 {
             return;
         }
@@ -181,11 +190,11 @@ impl TranscriptItem {
             area.height.saturating_sub(ITEM_SPACING),
         );
         match self {
-            Self::Message(item) => paint_message(item, buf, content, theme),
-            Self::Reasoning(item) => paint_reasoning(item, buf, content, theme),
-            Self::Tool(item) => paint_tool_card(item, buf, content, theme),
-            Self::Note(item) => paint_note(item, buf, content, theme),
-            Self::Image(item) => paint_image(item, buf, content, theme),
+            Self::Message(item) => paint_message(item, buf, content, ctx),
+            Self::Reasoning(item) => paint_reasoning(item, buf, content, ctx),
+            Self::Tool(item) => paint_tool_card(item, buf, content, ctx),
+            Self::Note(item) => paint_note(item, buf, content, ctx),
+            Self::Image(item) => paint_image(item, buf, content, ctx),
             Self::RunEnd(_) => {}
         }
     }
@@ -404,7 +413,8 @@ fn wrapped_line_count(text: &str, width: u16) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
-fn paint_message(item: &mut MessageItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
+fn paint_message(item: &mut MessageItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    let theme = ctx.theme;
     let style = Style::default().fg(theme.palette.fg);
     Paragraph::new(item.cache.text(&item.text).clone())
         .style(style)
@@ -412,7 +422,8 @@ fn paint_message(item: &mut MessageItem, buf: &mut Buffer, area: Rect, theme: &T
         .render(area, buf);
 }
 
-fn paint_reasoning(item: &mut ReasoningItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
+fn paint_reasoning(item: &mut ReasoningItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    let theme = ctx.theme;
     if item.text.trim().is_empty() {
         return;
     }
@@ -433,7 +444,8 @@ fn paint_reasoning(item: &mut ReasoningItem, buf: &mut Buffer, area: Rect, theme
     }
 }
 
-fn paint_note(item: &NoteItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
+fn paint_note(item: &NoteItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    let theme = ctx.theme;
     let color = match item.tone {
         NoteTone::Danger => theme.palette.failed,
         NoteTone::Warning => theme.palette.waiting,
@@ -445,7 +457,8 @@ fn paint_note(item: &NoteItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
         .render(area, buf);
 }
 
-fn paint_tool_card(item: &ToolItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
+fn paint_tool_card(item: &ToolItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    let theme = ctx.theme;
     let open = item.open();
     let (verb, argument) = item.title.split_once(' ').unwrap_or((&item.title, ""));
     let verb_color = match item.tool_kind {
@@ -556,7 +569,8 @@ fn paint_tool_card(item: &ToolItem, buf: &mut Buffer, area: Rect, theme: &Theme)
     }
 }
 
-fn paint_image(item: &mut ImageItem, buf: &mut Buffer, area: Rect, theme: &Theme) {
+fn paint_image(item: &mut ImageItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    let theme = ctx.theme;
     let style = Style::default().fg(theme.palette.border);
     if item.decoded.is_some() {
         image::render_image(area, buf, style, &mut item.decoded);
@@ -910,27 +924,28 @@ impl Transcript {
     /// sized to its own full height, then only the rows actually inside the viewport
     /// are copied into `buf` — the mechanism that lets an item straddling the top or
     /// bottom edge render at exact row granularity instead of only whole-item steps.
-    pub fn render(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
-        self.render_inner(buf, area, theme, None);
+    pub fn render(&mut self, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+        self.render_inner(buf, area, ctx, None);
     }
 
     pub fn render_interactive(
         &mut self,
         buf: &mut Buffer,
         area: Rect,
-        theme: &Theme,
+        ctx: FrameCtx<'_>,
         hitmap: &mut HitMap,
     ) {
-        self.render_inner(buf, area, theme, Some(hitmap));
+        self.render_inner(buf, area, ctx, Some(hitmap));
     }
 
     fn render_inner(
         &mut self,
         buf: &mut Buffer,
         area: Rect,
-        theme: &Theme,
+        ctx: FrameCtx<'_>,
         mut hitmap: Option<&mut HitMap>,
     ) {
+        let theme = ctx.theme;
         if area.width == 0 || area.height == 0 || self.items.is_empty() {
             return;
         }
@@ -978,7 +993,7 @@ impl Transcript {
                     full_height: height as u16,
                     available,
                 };
-                paint_clipped(&mut self.items[index], buf, area, clip, theme);
+                paint_clipped(&mut self.items[index], buf, area, clip, ctx);
                 if self.selected == Some(index)
                     && let Some(cell) = buf.cell_mut((area.x.saturating_add(1), screen_y))
                 {
@@ -1028,7 +1043,7 @@ fn paint_clipped(
     dest: &mut Buffer,
     area: Rect,
     clip: ClipGeometry,
-    theme: &Theme,
+    ctx: FrameCtx<'_>,
 ) {
     let ClipGeometry {
         screen_y,
@@ -1040,12 +1055,12 @@ fn paint_clipped(
         // The common case — the item fits entirely within the viewport — paints
         // straight into the destination buffer, no scratch copy needed.
         let target = Rect::new(area.x, screen_y, area.width, available);
-        item.paint(dest, target, theme);
+        item.paint(dest, target, ctx);
         return;
     }
     let scratch_area = Rect::new(0, 0, area.width, full_height);
     let mut scratch = Buffer::empty(scratch_area);
-    item.paint(&mut scratch, scratch_area, theme);
+    item.paint(&mut scratch, scratch_area, ctx);
     for row in 0..available {
         for col in 0..area.width {
             if let Some(cell) = scratch.cell((col, skip_top + row)) {
@@ -1090,6 +1105,8 @@ impl HeightCache {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
     use crate::theme::{ColorCapability, ThemeName};
 
@@ -1097,10 +1114,20 @@ mod tests {
         Theme::new(ThemeName::Dark, ColorCapability::TrueColor)
     }
 
+    fn frame_ctx() -> FrameCtx<'static> {
+        static THEME: LazyLock<Theme> =
+            LazyLock::new(|| Theme::new(ThemeName::Dark, ColorCapability::TrueColor));
+        FrameCtx {
+            theme: &THEME,
+            tick: 0,
+            now_epoch: 0,
+        }
+    }
+
     fn render_to_string(transcript: &mut Transcript, width: u16, height: u16) -> String {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        transcript.render(&mut buf, area, &theme());
+        transcript.render(&mut buf, area, frame_ctx());
         buf.content.iter().map(|cell| cell.symbol()).collect()
     }
 
@@ -1242,7 +1269,7 @@ mod tests {
         )));
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
-        transcript.render(&mut buf, area, &theme());
+        transcript.render(&mut buf, area, frame_ctx());
 
         let verb = buf.cell((2, 0)).expect("tool verb painted");
         assert_eq!(verb.fg, theme().palette.add);
@@ -1273,7 +1300,7 @@ mod tests {
         )));
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
-        transcript.render(&mut buf, area, &theme());
+        transcript.render(&mut buf, area, frame_ctx());
         let cell = buf.cell((0, 0)).expect("first cell painted");
         assert_eq!(cell.fg, theme().palette.failed);
     }
@@ -1352,7 +1379,7 @@ mod tests {
         )));
         let narrow_area = Rect::new(0, 0, 20, 20);
         let mut narrow_buf = Buffer::empty(narrow_area);
-        transcript.render(&mut narrow_buf, narrow_area, &theme());
+        transcript.render(&mut narrow_buf, narrow_area, frame_ctx());
         let narrow_height = transcript
             .height_cache
             .entries
@@ -1363,7 +1390,7 @@ mod tests {
 
         let wide_area = Rect::new(0, 0, 80, 20);
         let mut wide_buf = Buffer::empty(wide_area);
-        transcript.render(&mut wide_buf, wide_area, &theme());
+        transcript.render(&mut wide_buf, wide_area, frame_ctx());
         let wide_height = transcript
             .height_cache
             .entries
@@ -1479,7 +1506,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let snapshot_theme = Theme::new(theme_name, ColorCapability::TrueColor);
         terminal
-            .draw(|frame| transcript.render(frame.buffer_mut(), area, &snapshot_theme))
+            .draw(|frame| {
+                transcript.render(
+                    frame.buffer_mut(),
+                    area,
+                    FrameCtx {
+                        theme: &snapshot_theme,
+                        tick: 0,
+                        now_epoch: 0,
+                    },
+                );
+            })
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -1514,5 +1551,26 @@ mod tests {
             "transcript_mixed_lakes",
             snapshot_at(true, 100, 32, ThemeName::Lakes)
         );
+    }
+
+    #[test]
+    fn animation_never_changes_item_heights() {
+        let mut transcript = snapshot_fixture(false);
+        let width = 100;
+        let expected = transcript.total_height(width);
+        for tick in 0..24 {
+            let area = Rect::new(0, 0, width, 40);
+            let mut buf = Buffer::empty(area);
+            transcript.render(
+                &mut buf,
+                area,
+                FrameCtx {
+                    theme: frame_ctx().theme,
+                    tick,
+                    now_epoch: 1_000,
+                },
+            );
+            assert_eq!(transcript.total_height(width), expected, "tick {tick}");
+        }
     }
 }

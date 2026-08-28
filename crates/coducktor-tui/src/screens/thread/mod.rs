@@ -26,8 +26,8 @@ use crate::app::{App, PendingAction};
 use crate::input::hitmap::HitAction;
 use crate::widgets::run_end::RunOutcome;
 use crate::widgets::transcript::{
-    MessageItem, NoteItem, NoteTone as TranscriptNoteTone, ReasoningItem, RunEndItem, ToolItem,
-    Transcript, TranscriptItem,
+    FrameCtx, MessageItem, NoteItem, NoteTone as TranscriptNoteTone, ReasoningItem, RunEndItem,
+    ToolItem, Transcript, TranscriptItem,
 };
 
 use projection::ThreadViewModel;
@@ -1204,7 +1204,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
-            &theme,
+            FrameCtx {
+                theme: &theme,
+                tick: app.animation_tick,
+                now_epoch: app.now_epoch,
+            },
             &mut app.hitmap,
         );
     }
@@ -1713,7 +1717,11 @@ fn render_conversation(
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
-            &theme,
+            FrameCtx {
+                theme: &theme,
+                tick: app.animation_tick,
+                now_epoch: app.now_epoch,
+            },
             &mut app.hitmap,
         );
     }
@@ -2857,9 +2865,15 @@ mod tests {
                     (event.seq, event)
                 }));
             let mut buffer = Buffer::empty(viewport);
-            app.thread_ui
-                .transcript
-                .render(&mut buffer, viewport, &theme);
+            app.thread_ui.transcript.render(
+                &mut buffer,
+                viewport,
+                FrameCtx {
+                    theme: &theme,
+                    tick: 0,
+                    now_epoch: 0,
+                },
+            );
         }
 
         let started = Instant::now();
@@ -2868,9 +2882,15 @@ mod tests {
             (event.seq, event)
         }));
         let mut buffer = Buffer::empty(viewport);
-        app.thread_ui
-            .transcript
-            .render(&mut buffer, viewport, &theme);
+        app.thread_ui.transcript.render(
+            &mut buffer,
+            viewport,
+            FrameCtx {
+                theme: &theme,
+                tick: 0,
+                now_epoch: 0,
+            },
+        );
         let elapsed = started.elapsed();
         let budget = if cfg!(debug_assertions) {
             Duration::from_millis(30)
