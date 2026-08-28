@@ -18,9 +18,25 @@ use crate::screens::runs_util::{attention, compact_tokens, parse_iso_seconds, ru
 use crate::theme::Theme;
 use crate::widgets::run_end::{self, RunOutcome};
 
-use super::{PlaceboDuck, ThreadAction};
 use super::actions::run_action_flags;
 use super::reducer::{ThreadAsk, ThreadEntry, ThreadState};
+use super::{PlaceboDuck, ThreadAction};
+
+pub(crate) struct PlaceboDuckView<'a> {
+    state: PlaceboDuck,
+    tick: u64,
+    pet_key: &'a str,
+}
+
+impl<'a> PlaceboDuckView<'a> {
+    pub(crate) fn new(state: PlaceboDuck, tick: u64, pet_key: &'a str) -> Self {
+        Self {
+            state,
+            tick,
+            pet_key,
+        }
+    }
+}
 
 /// The header: title, status pill, meta row, tabs, action bar. Returns the height it used.
 /// The conversation header. Harness, model, reasoning, branch, and worktree are immutable
@@ -33,9 +49,7 @@ pub fn render_conversation_header(
     theme: &Theme,
     hitmap: &mut crate::input::hitmap::HitMap,
     action_focus: Option<usize>,
-    placebo_duck: &PlaceboDuck,
-    tick: u64,
-    pet_key: &str,
+    placebo_duck: PlaceboDuckView<'_>,
 ) -> u16 {
     use crate::screens::chats_util;
 
@@ -141,16 +155,12 @@ pub fn render_conversation_header(
             frame,
             duck_area,
             full,
-            *placebo_duck,
-            tick,
-            pet_key,
+            placebo_duck.state,
+            placebo_duck.tick,
+            placebo_duck.pet_key,
             theme,
         );
-        hitmap.register(
-            duck_area,
-            5,
-            HitAction::ThreadScreen(ThreadAction::PetDuck),
-        );
+        hitmap.register(duck_area, 5, HitAction::ThreadScreen(ThreadAction::PetDuck));
     }
     if let Some(action_row) = area.y.checked_add(3)
         && action_row < area.bottom()
@@ -170,6 +180,125 @@ pub fn render_conversation_header(
         }
     }
     height
+}
+
+const FULL_DUCK_WIDTH: u16 = 32;
+const COMPACT_DUCK_WIDTH: u16 = 20;
+
+fn duck_layout(area: Rect) -> Option<(Rect, bool)> {
+    if area.height >= 4 && area.width >= 110 {
+        Some((
+            Rect::new(
+                area.right().saturating_sub(FULL_DUCK_WIDTH),
+                area.y,
+                FULL_DUCK_WIDTH,
+                4,
+            ),
+            true,
+        ))
+    } else if area.height >= 2 && area.width >= 86 {
+        Some((
+            Rect::new(
+                area.right().saturating_sub(COMPACT_DUCK_WIDTH),
+                area.y,
+                COMPACT_DUCK_WIDTH,
+                2,
+            ),
+            false,
+        ))
+    } else {
+        None
+    }
+}
+
+fn render_placebo_duck(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    full: bool,
+    duck: PlaceboDuck,
+    tick: u64,
+    pet_key: &str,
+    theme: &Theme,
+) {
+    let combo = duck.combo_at(tick);
+    let elapsed = duck.elapsed(tick);
+    let eye = match elapsed {
+        Some(0..=1) => "-",
+        Some(2..=4) => "^",
+        _ => "o",
+    };
+    let reaction = match combo {
+        0 => "PET DUCK".to_owned(),
+        1 => "PAT!".to_owned(),
+        2..=4 => "GO FASTER!".to_owned(),
+        5..=8 => "THINK HARDER!".to_owned(),
+        _ => "MAXIMUM DUCK".to_owned(),
+    };
+    let key = placebo_key_label(pet_key);
+    let accent = Style::default()
+        .fg(theme.palette.accent)
+        .add_modifier(Modifier::BOLD);
+    let soft = Style::default().fg(theme.palette.soft_fg);
+    let duck_style = Style::default().fg(theme.palette.fg);
+
+    let lines = if full {
+        let spark = if combo >= 9 {
+            "*   __   *"
+        } else if elapsed.is_some_and(|value| value <= 5) {
+            "    __   *"
+        } else {
+            "    __"
+        };
+        vec![
+            Line::from(vec![
+                Span::styled(format!("{spark:<15}"), duck_style),
+                Span::styled(format!("{key} PET"), accent),
+            ]),
+            Line::from(vec![
+                Span::styled(format!(" <({eye} )___      "), duck_style),
+                Span::styled(reaction, accent),
+            ]),
+            Line::from(vec![
+                Span::styled("  ( ._> /       ", duck_style),
+                Span::styled(
+                    if combo == 0 {
+                        "".to_owned()
+                    } else {
+                        format!("combo x{combo}")
+                    },
+                    soft,
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("   `---'        ", duck_style),
+                Span::styled("morale only", soft),
+            ]),
+        ]
+    } else {
+        let compact_reaction = match combo {
+            0 => format!("{key} PET"),
+            1 => "PAT! x1".to_owned(),
+            2..=4 => format!("FASTER! x{combo}"),
+            5..=8 => format!("HARDER! x{combo}"),
+            _ => format!("MAX DUCK x{}", combo.min(99)),
+        };
+        vec![
+            Line::from(vec![
+                Span::styled(format!("<({eye})> "), duck_style),
+                Span::styled(compact_reaction, accent),
+            ]),
+            Line::from(Span::styled("      morale only", soft)),
+        ]
+    };
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
+fn placebo_key_label(binding: &str) -> String {
+    binding
+        .strip_prefix("ctrl-")
+        .filter(|key| key.chars().count() == 1)
+        .map(|key| format!("^{}", key.to_ascii_uppercase()))
+        .unwrap_or_else(|| binding.to_owned())
 }
 
 /// What a conversation can do from its header. Section 5.5 keeps Changes/Files/Commits, Git and

@@ -1219,6 +1219,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             &theme,
             &mut app.hitmap,
             app.thread_ui.header_action_focus,
+            widgets::PlaceboDuckView::new(
+                app.thread_ui.placebo_duck,
+                app.animation_tick,
+                app.keymap
+                    .key_for_action(KeyMode::Normal, ActionId::PetDuck)
+                    .unwrap_or("click"),
+            ),
         );
     } else {
         widgets::render_header(
@@ -1741,6 +1748,13 @@ fn render_conversation(
         &theme,
         &mut app.hitmap,
         app.thread_ui.header_action_focus,
+        widgets::PlaceboDuckView::new(
+            app.thread_ui.placebo_duck,
+            app.animation_tick,
+            app.keymap
+                .key_for_action(KeyMode::Normal, ActionId::PetDuck)
+                .unwrap_or("click"),
+        ),
     );
 
     let transcript_title = format!(
@@ -2127,6 +2141,7 @@ fn send_ask_answer(app: &mut App, ask: &ThreadAsk) {
 
 pub fn apply_hit(app: &mut App, action: ThreadAction) {
     match action {
+        ThreadAction::PetDuck => app.thread_ui.placebo_duck.pet(app.animation_tick),
         ThreadAction::AskOption { question, option } => {
             if let Some(ask) = pending_ask(&app.thread_ui.data.state).cloned() {
                 ensure_ask_selection_shape(app, &ask);
@@ -2228,6 +2243,7 @@ fn apply_action(app: &mut App, action: ThreadAction) {
         | ThreadAction::FocusComposer
         | ThreadAction::FocusTranscript
         | ThreadAction::FocusReviewNotes
+        | ThreadAction::PetDuck
         | ThreadAction::OpenGitTab(_) => {}
     }
 }
@@ -3207,6 +3223,90 @@ mod tests {
             KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
         ));
         assert_eq!(app.thread_ui.header_action_focus, Some(0));
+    }
+
+    #[test]
+    fn placebo_duck_combo_decays_without_persisting_history() {
+        let mut duck = PlaceboDuck::default();
+        duck.pet(10);
+        duck.pet(11);
+        assert_eq!(duck.combo_at(11), 2);
+        assert_eq!(duck.combo_at(11 + DUCK_COMBO_TICKS + 1), 0);
+
+        duck.pet(11 + DUCK_COMBO_TICKS + 2);
+        assert_eq!(duck.combo_at(11 + DUCK_COMBO_TICKS + 2), 1);
+    }
+
+    #[test]
+    fn ctrl_g_pets_the_duck_without_editing_or_contacting_the_agent() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Running);
+        app.thread_ui.composer.set_text("draft stays put");
+        app.pending.clear();
+        app.animation_tick = 7;
+
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )));
+
+        assert_eq!(app.thread_ui.placebo_duck.combo_at(7), 1);
+        assert_eq!(app.thread_ui.composer.text, "draft stays put");
+        assert!(
+            app.pending.is_empty(),
+            "the placebo must not queue engine work"
+        );
+    }
+
+    #[test]
+    fn the_visible_placebo_duck_is_clickable_and_disclosed() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Running);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let content = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(content.contains("morale only"));
+
+        let target = (0..120).find_map(|column| {
+            (0..40).find_map(|row| {
+                matches!(
+                    app.hitmap.hit(column, row),
+                    Some(HitAction::ThreadScreen(ThreadAction::PetDuck))
+                )
+                .then_some((column, row))
+            })
+        });
+        let (column, row) = target.expect("the responsive chat header should expose the duck");
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.thread_ui.placebo_duck.combo_at(app.animation_tick), 1);
+        assert!(app.pending.is_empty(), "a click must remain TUI-local");
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let reacted = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(reacted.contains("FASTER! x2"));
+        assert!(app.pending.is_empty(), "the animation remains TUI-local");
     }
 
     #[test]

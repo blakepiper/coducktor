@@ -21,6 +21,7 @@ User overrides are read from `$DUCK_HOME/keymap.toml` (normally
 | `zR` / `zM` | Expand / collapse every reasoning and tool card |
 | `:` | Open the Ex command line |
 | `Ctrl-O` / `Ctrl-I` | Older / newer cockpit location |
+| `Ctrl-G` | Pet the chat's placebo duck; this is cosmetic and never affects the agent |
 
 `g`, `z`, and `Ctrl-W` appear as pending prefixes in the status line. `Esc` or an invalid suffix
 cancels a prefix. The `za`, `zR`, and `zM` actions can be overridden in `keymap.toml` as
@@ -78,6 +79,9 @@ paste, and mouse click/drag remain available for conventional editing.
   Delete while it is settled. **Restart session** appears only after the harness refused to resume
   its own session; it confirms first and sends nothing — the next message you write carries a
   bounded excerpt of the chat into the new session.
+- The chat-header duck responds to clicks and `Ctrl-G`. Its combo and animation are local,
+  ephemeral morale only; they never alter the model, reasoning, priority, token budget, or agent
+  request.
 - The IDE tree uses `h` or `Left` for the parent and `l`, `Enter`, or `Right` to open an entry.
 - In project and Global Settings, `l` moves into values and `h` returns to the section list.
 - Structured question cards and confirmation dialogs retain their displayed local keys.

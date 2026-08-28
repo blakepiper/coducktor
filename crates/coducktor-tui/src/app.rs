@@ -3039,6 +3039,14 @@ impl App {
             self.handle_search_key(key);
             return;
         }
+        // This configured chord stays available while the chat composer owns literal input.
+        // Handling it before route dispatch prevents Ctrl-G from being inserted as a plain `g`.
+        if matches!(self.route(), Route::Thread { .. })
+            && self.keymap.action_for(KeyMode::Normal, &key) == Some(ActionId::PetDuck)
+        {
+            self.apply_action(ActionId::PetDuck);
+            return;
+        }
         let starts_window_prefix = key
             .modifiers
             .contains(crossterm::event::KeyModifiers::CONTROL)
@@ -3616,6 +3624,13 @@ impl App {
             ActionId::CollapseTranscript => {
                 if matches!(self.route(), Route::Thread { .. }) {
                     self.thread_ui.transcript.set_all_expanded(false);
+                }
+            }
+            ActionId::PetDuck => {
+                if matches!(self.route(), Route::Thread { .. })
+                    && self.thread_ui.data.conversation().is_some()
+                {
+                    self.thread_ui.placebo_duck.pet(self.animation_tick);
                 }
             }
             ActionId::ExecuteCommand | ActionId::Normal | ActionId::Noop => {}

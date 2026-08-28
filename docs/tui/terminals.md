@@ -143,3 +143,13 @@ vertically centered explanatory hint, and the centered `[+ New chat]` action wit
 Filled card states, selection rails, metadata chips, group counts, and variable card heights were
 verified in the reviewed 80×24, 120×40, and 200×60 executable snapshots; the locale-independent
 renderer tests also exercised the ASCII fallback.
+
+## Placebo duck smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in real 80×24 and 120×40 PTYs with
+a disposable `DUCK_HOME` and throwaway Git repository. At 80×24 the duck yielded its space and
+the chat header remained unclipped. At 120×40 the compact `<(o)> ^G PET` control and its
+`morale only` disclosure rendered in the top-right corner. Rapid `Ctrl-G` presses animated the
+duck and advanced its reaction through `PAT! x1` to `FASTER! x3`; the empty composer and chat
+transcript remained unchanged. The click path is covered by the focused mouse regression test
+because this PTY driver does not emit physical pointer input.
