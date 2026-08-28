@@ -240,7 +240,6 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     let inside = area.contains((mouse.column, mouse.row).into());
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if inside => {
-            app.scratchpad_ui.mode = ScratchpadMode::Insert;
             place_mouse_caret(app, mouse, false);
             app.scratchpad_ui.editor.begin_selection();
             app.scratchpad_ui.mouse_dragging = true;
@@ -579,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_places_the_caret_and_enters_insert_mode() {
+    fn mouse_click_places_the_caret_without_forcing_insert_mode() {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         open(&mut app, "main");
         app.scratchpad_ui.editor.set_text("alpha\nbeta");
@@ -596,8 +595,18 @@ mod tests {
             }
         ));
 
-        assert_eq!(app.scratchpad_ui.mode, ScratchpadMode::Insert);
+        assert_eq!(app.scratchpad_ui.mode, ScratchpadMode::Normal);
         assert_eq!(app.scratchpad_ui.editor.row, 1);
         assert_eq!(app.scratchpad_ui.editor.col, 2);
+
+        // Pressing `i` after a click must enter insert mode, not type a literal "i" —
+        // clicking used to force insert mode already, so this keystroke was swallowed
+        // as text instead of switching modes.
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('i'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.scratchpad_ui.mode, ScratchpadMode::Insert);
+        assert_eq!(app.scratchpad_ui.editor.text, "alpha\nbeta");
     }
 }

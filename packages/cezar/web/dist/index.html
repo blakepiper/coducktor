@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- interactive-widget: engines that honor it shrink the viewport under the virtual
+         keyboard themselves; the visualViewport --kb watcher (lib/keyboard-inset.ts) is the
+         required iOS fallback beneath it. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <!-- Relative so Vite bundles the favicon out of web/ instead of duplicating it under a public dir. -->
+    <link rel="icon" href="/open-mercato.svg" />
+    <title>coducktor</title>
+    <!-- Theme before first paint — no flash. Mirrors resolveTheme()/applyResolvedTheme() in
+         src/lib/theme.ts; keep the two in sync. Shares the legacy cockpit's `cez-theme` key
+         ('light' | 'dark' | 'system' | 'lazyvim'); anything else falls back to dark, as legacy does. -->
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem('cez-theme')
+          var lazyvim = pref === 'lazyvim'
+          var light =
+            pref === 'light' ||
+            (pref === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
+          document.documentElement.classList.toggle('light', light)
+          document.documentElement.classList.toggle('lazyvim', lazyvim)
+          document.documentElement.style.colorScheme = light ? 'light' : 'dark'
+        } catch (e) {
+          // Storage or matchMedia unavailable — the default dark tokens already apply.
+        }
+        // Accent + density before first paint, from the localStorage MIRROR of ui-state.json
+        // (src/lib/appearance.ts owns the contract; keep the two in sync). Defaults are the
+        // absence of the attribute, so only the known deviations are stamped.
+        try {
+          var accent = localStorage.getItem('cez-accent')
+          if (accent === 'violet')
+            document.documentElement.dataset.accent = accent
+          var density = localStorage.getItem('cez-density')
+          if (density === 'compact' || density === 'ultra')
+            document.documentElement.dataset.density = density
+          if (localStorage.getItem('cez-width') === 'wide')
+            document.documentElement.dataset.width = 'wide'
+        } catch (e) {
+          // Storage unavailable — lime/comfortable defaults already apply.
+        }
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-CU7jAoHk.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-QTnfLwEv.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-runtime-CCIEwYL0.js">
+    <link rel="modulepreload" crossorigin href="/assets/bundle-mjs-BT31bpU6.js">
+    <link rel="modulepreload" crossorigin href="/assets/utils-DBeZk3M8.js">
+    <link rel="modulepreload" crossorigin href="/assets/centered-state-BOoZ-amu.js">
+    <link rel="modulepreload" crossorigin href="/assets/new-task-form-OxUNo_Rs.js">
+    <link rel="modulepreload" crossorigin href="/assets/toaster-B41MFmgY.js">
+    <link rel="modulepreload" crossorigin href="/assets/dropdown-menu-CdSTYm-9.js">
+    <link rel="modulepreload" crossorigin href="/assets/folder-D0LgrtMm.js">
+    <link rel="modulepreload" crossorigin href="/assets/sparkles-B64RcpK3.js">
+    <link rel="modulepreload" crossorigin href="/assets/square-terminal-ZG87elY_.js">
+    <link rel="modulepreload" crossorigin href="/assets/alert-dialog-BklIZhpT.js">
+    <link rel="modulepreload" crossorigin href="/assets/lib-BxQXEXDF.js">
+    <link rel="modulepreload" crossorigin href="/assets/chunk-BO2N2NFS-DE6qKn3r.js">
+    <link rel="modulepreload" crossorigin href="/assets/highlighter-CdHqIwFr.js">
+    <link rel="modulepreload" crossorigin href="/assets/markdown-Dkj-lLOl.js">
+    <link rel="modulepreload" crossorigin href="/assets/pill-BVvGKNRO.js">
+    <link rel="modulepreload" crossorigin href="/assets/editable-title-BQMpF55U.js">
+    <link rel="modulepreload" crossorigin href="/assets/chevron-right-DyYtovAz.js">
+    <link rel="modulepreload" crossorigin href="/assets/x-DTO-NK3e.js">
+    <link rel="modulepreload" crossorigin href="/assets/use-submit-shortcut-CQ8Z_8ig.js">
+    <link rel="modulepreload" crossorigin href="/assets/prompt-templates-BO5z9WzX.js">
+    <link rel="modulepreload" crossorigin href="/assets/arrow-up-CQkqKDXI.js">
+    <link rel="modulepreload" crossorigin href="/assets/skills-BiWfHmCR.js">
+    <link rel="modulepreload" crossorigin href="/assets/thread-loading-BDvTiLGz.js">
+    <link rel="modulepreload" crossorigin href="/assets/search-x-BTfSrjiF.js">
+    <link rel="modulepreload" crossorigin href="/assets/triangle-alert-Bu3HIAZI.js">
+    <link rel="modulepreload" crossorigin href="/assets/project-router-DoxdvYmK.js">
+    <link rel="modulepreload" crossorigin href="/assets/diff-stat-B1WwMNz0.js">
+    <link rel="modulepreload" crossorigin href="/assets/textarea-YEegk9zQ.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-DMvgVoot.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
