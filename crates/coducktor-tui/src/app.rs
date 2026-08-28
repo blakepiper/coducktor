@@ -2740,6 +2740,9 @@ impl App {
         if matches!(self.route(), Route::Scratchpad { .. })
             && crate::screens::scratchpad::handle_mouse(self, mouse)
         {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.set_focus_location(FocusLocation::Screen(0));
+            }
             return;
         }
         if matches!(self.route(), Route::Terminal { .. })
@@ -4615,6 +4618,43 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(matches!(app.route(), Route::Tasks { .. }));
+    }
+
+    #[test]
+    fn scratchpad_body_click_moves_focus_from_sidebar_and_allows_immediate_typing() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(matches!(app.route(), Route::Scratchpad { .. }));
+        assert!(app.sidebar_focus);
+
+        app.scratchpad_ui.editor.set_text("note");
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let area = app.scratchpad_ui.area;
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+
+        assert!(!app.sidebar_focus);
+        assert_eq!(
+            app.scratchpad_ui.mode,
+            crate::screens::scratchpad::ScratchpadMode::Insert
+        );
+        assert_eq!(app.scratchpad_ui.editor.text, "xnote");
     }
 
     #[test]
