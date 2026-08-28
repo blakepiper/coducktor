@@ -75,4 +75,17 @@ paste, and mouse click/drag remain available for conventional editing.
 - Structured question cards and confirmation dialogs retain their displayed local keys.
 
 Every visible product control is mouse-operable, including chat cards and menus, Git/GitHub tabs,
-settings rows, sidebar navigation, confirmations, pickers, and composer buttons.
+settings rows, sidebar navigation, confirmations, pickers, and composer buttons. Mouse and
+keyboard are complementary, never exclusive:
+
+- Clicking any pane focuses it — transcript, composer, IDE explorer or editor, Git/GitHub panes,
+  Settings sections or values — exactly as the pane-focus keys do. Vim keys then apply to the
+  clicked pane.
+- The chat and New Chat composers place the caret where you click (the completion menu closes).
+- The IDE editor and the scratchpad support click-to-caret and click-drag selection; the wheel
+  scrolls both.
+- The embedded terminal supports click-drag text selection; releasing a non-empty selection
+  copies it to the clipboard, and the wheel scrolls scrollback.
+- The wheel scrolls the pane under the cursor: transcripts, tables, diff panes, the GitHub list,
+  Settings rows, and the Skills list — independent of keyboard focus.
+- The command palette is clickable: a row click selects and runs it, a click elsewhere closes it.

@@ -134,6 +134,9 @@ pub struct Composer {
     /// Large clipboard payloads keyed by the compact placeholder shown in `text`.
     pub pending_pastes: Vec<PendingPaste>,
     pub menu: Option<ComposerMenu>,
+    /// The full composer card rect from the last render, so a mouse click can be
+    /// mapped back to a caret position.
+    input_area: Option<Rect>,
 }
 
 impl Default for Composer {
@@ -146,6 +149,7 @@ impl Default for Composer {
             attachments: Vec::new(),
             pending_pastes: Vec::new(),
             menu: None,
+            input_area: None,
         }
     }
 }
@@ -629,13 +633,15 @@ impl Composer {
     /// Render the composer card (textarea + attachment row). The host draws the
     /// pill row below it.
     pub fn render(
-        &self,
+        &mut self,
         frame: &mut Frame<'_>,
         area: Rect,
         theme: Theme,
         hitmap: &mut HitMap,
         z: u8,
     ) {
+        self.input_area = Some(area);
+        let (inner, text_width, visual_lines, scroll, visible) = self.layout(area);
         let style = if self.focused {
             Style::default().fg(theme.palette.fg)
         } else {
@@ -652,26 +658,14 @@ impl Composer {
         if self.focused {
             block = block.border_style(Style::default().fg(theme.palette.accent));
         }
-        let inner = block.inner(area);
+        let block_inner = block.inner(area);
+        debug_assert_eq!(block_inner, inner);
         frame.render_widget(block, area);
 
-        let reserved_height = if self.attachments.is_empty() { 2 } else { 3 };
-        let visible = area.height.saturating_sub(reserved_height).clamp(1, 6);
-        let text_width = usize::from(inner.width.saturating_sub(1)).max(1);
-        let mut visual_lines = self.visual_lines(text_width);
-        let (last_line, last_col) = self.caret_position();
-        if last_line + 1 == self.text.split('\n').count()
-            && last_col > 0
-            && last_col % text_width == 0
-            && self.caret == self.line_end(last_line)
-        {
-            visual_lines.push((self.caret, self.caret));
-        }
         let (caret_row, caret_col) = self.visual_caret(text_width, &visual_lines);
-        let scroll = caret_row.saturating_sub(visible as usize - 1);
 
         let mut row = inner.y;
-        for offset in 0..visible as usize {
+        for offset in 0..visible {
             if row >= inner.bottom() {
                 break;
             }
@@ -741,6 +735,67 @@ impl Composer {
         if let Some(menu) = &self.menu {
             render_menu_overlay(frame, menu, area, theme);
         }
+    }
+
+    /// The composer's text layout: inner rect, wrap width, visual line byte ranges, first
+    /// visible visual row, and visible row count. Shared by rendering and click-to-caret
+    /// mapping so the two can never disagree.
+    fn layout(&self, area: Rect) -> (Rect, usize, Vec<(usize, usize)>, usize, usize) {
+        let block = Block::default().borders(Borders::ALL);
+        let inner = block.inner(area);
+        let reserved_height = if self.attachments.is_empty() { 2 } else { 3 };
+        let visible = area.height.saturating_sub(reserved_height).clamp(1, 6) as usize;
+        let text_width = usize::from(inner.width.saturating_sub(1)).max(1);
+        let mut visual_lines = self.visual_lines(text_width);
+        let (last_line, last_col) = self.caret_position();
+        if last_line + 1 == self.text.split('\n').count()
+            && last_col > 0
+            && last_col % text_width == 0
+            && self.caret == self.line_end(last_line)
+        {
+            visual_lines.push((self.caret, self.caret));
+        }
+        let (caret_row, _) = self.visual_caret(text_width, &visual_lines);
+        let scroll = caret_row.saturating_sub(visible.saturating_sub(1));
+        (inner, text_width, visual_lines, scroll, visible)
+    }
+
+    /// The composer card's rect from the last render, if it has been drawn.
+    pub fn input_area(&self) -> Option<Rect> {
+        self.input_area
+    }
+
+    /// Place the caret where the user clicked. `column`/`row` are terminal coordinates,
+    /// mapped through the last render's layout. A click below the text jumps to the end of
+    /// the draft. The completion menu closes: its trigger context no longer matches the
+    /// repositioned caret.
+    pub fn click_caret(&mut self, column: u16, row: u16) {
+        let Some(area) = self.input_area else {
+            return;
+        };
+        let (inner, text_width, visual_lines, scroll, _) = self.layout(area);
+        if row < inner.y || column < inner.x {
+            return;
+        }
+        let visual_row = usize::from(row - inner.y) + scroll;
+        let clicked_col = usize::from(column - inner.x)
+            .saturating_sub(1)
+            .min(text_width);
+        let byte = match visual_lines.get(visual_row) {
+            Some(&(start, end)) => {
+                let mut caret = start;
+                for _ in 0..clicked_col {
+                    match self.text[caret..end].chars().next() {
+                        Some(character) => caret += character.len_utf8(),
+                        None => break,
+                    }
+                }
+                caret
+            }
+            None => self.text.len(),
+        };
+        self.caret = byte;
+        self.menu = None;
     }
 
     fn visual_lines(&self, width: usize) -> Vec<(usize, usize)> {
@@ -1147,6 +1202,61 @@ mod tests {
         terminal
             .draw(|frame| composer.render(frame, frame.area(), Theme::detect(), &mut hitmap, 1))
             .unwrap();
+    }
+
+    #[test]
+    fn clicking_inside_the_rendered_composer_places_the_caret() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut composer = Composer::default();
+        composer.focus();
+        composer.set_text("hello world");
+        let mut hitmap = HitMap::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| composer.render(frame, frame.area(), Theme::detect(), &mut hitmap, 1))
+            .unwrap();
+
+        // Inner starts at (1, 1) and text rows carry a leading space, so the click on
+        // the 'w' of "world" lands at column 1 + 1 + 6 = 8.
+        composer.click_caret(8, 1);
+        assert_eq!(composer.caret, 6);
+
+        // A click far below the text jumps to the end of the draft.
+        composer.click_caret(8, 5);
+        assert_eq!(composer.caret, "hello world".len());
+        assert!(composer.menu.is_none());
+    }
+
+    #[test]
+    fn clicking_the_composer_closes_an_open_completion_menu() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut composer = Composer::default();
+        composer.focus();
+        composer.set_text("/");
+        composer.menu = Some(ComposerMenu {
+            trigger: '/',
+            start: 0,
+            query: String::new(),
+            items: vec![PickerItem {
+                value: "review".to_owned(),
+                label: "review".to_owned(),
+                description: None,
+                group: None,
+                emphasized: false,
+            }],
+            selected: 0,
+        });
+        let mut hitmap = HitMap::default();
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        terminal
+            .draw(|frame| composer.render(frame, frame.area(), Theme::detect(), &mut hitmap, 1))
+            .unwrap();
+        composer.click_caret(1, 1);
+        assert!(composer.menu.is_none());
     }
 
     #[test]

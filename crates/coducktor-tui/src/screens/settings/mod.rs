@@ -183,6 +183,9 @@ pub struct SettingsUi {
     /// Provider cycled by ←/→ on the Accounts screen's "+ Add account" row, before Enter
     /// opens the config-dir text prompt.
     pub add_account_provider: usize,
+
+    /// The body pane's rect from the last render, used for wheel scrolling.
+    pub body_area: Option<Rect>,
 }
 
 impl Default for SettingsUi {
@@ -212,6 +215,7 @@ impl Default for SettingsUi {
             file_highlighter: Highlighter::new(),
             file_viewport: 20,
             add_account_provider: 0,
+            body_area: None,
         }
     }
 }
@@ -929,6 +933,7 @@ fn render_nav(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let section = current_section(app);
+    app.settings_ui.body_area = Some(area);
     let rows_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -1053,6 +1058,26 @@ fn render_file_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 }
 
 // ---- input ----------------------------------------------------------------------------------
+
+/// Wheel over the body pane moves the row selection. Returns false when the cursor is
+/// outside the body pane or a text edit is open (the editor owns scrolling).
+pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
+    let contains = app
+        .settings_ui
+        .body_area
+        .is_some_and(|area| area.contains(point.into()));
+    if !contains || app.settings_ui.file_editing || app.settings_ui.edit.is_some() {
+        return false;
+    }
+    let len = rows_for(app, current_section(app)).len();
+    if len == 0 {
+        return true;
+    }
+    let delta: isize = if up { -1 } else { 1 };
+    app.settings_ui.row =
+        (app.settings_ui.row as isize + delta).clamp(0, len as isize - 1) as usize;
+    true
+}
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.settings_ui.file_editing {

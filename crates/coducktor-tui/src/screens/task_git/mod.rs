@@ -48,6 +48,9 @@ pub struct TaskGitUi {
     pub commit_diff_state: DiffViewState,
     pub commit_diff_scroll: usize,
 
+    /// The diff pane's inner rect from the last render, used for wheel scrolling.
+    pub diff_area: Option<Rect>,
+
     pub highlighter: Highlighter,
 }
 
@@ -80,6 +83,7 @@ impl Default for TaskGitUi {
             commit_detail: None,
             commit_diff_state: DiffViewState::default(),
             commit_diff_scroll: 0,
+            diff_area: None,
             highlighter: Highlighter::new(),
         }
     }
@@ -299,6 +303,7 @@ fn render_diff_pane(
     let block = Block::default().borders(Borders::ALL).title("Diff");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    app.task_git_ui.diff_area = Some(inner);
     let (lines, _actions) = diff::render_files(
         files,
         &app.task_git_ui.diff_state,
@@ -444,6 +449,7 @@ fn render_commits(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let detail_block = Block::default().borders(Borders::ALL).title("Commit diff");
     let detail_inner = detail_block.inner(cols[1]);
     frame.render_widget(detail_block, cols[1]);
+    app.task_git_ui.diff_area = Some(detail_inner);
     if let Some(commit) = app.task_git_ui.commit_detail.clone() {
         let (lines, _) = diff::render_files(
             &commit.files,
@@ -484,6 +490,32 @@ fn render_commit_dialog(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Paragraph::new(app.task_git_ui.commit_message.as_str()).wrap(Wrap { trim: false }),
         inner,
     );
+}
+
+/// Wheel over the diff pane scrolls it; the tab decides which scroll state moves.
+/// Returns false when the cursor is outside the diff pane.
+pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
+    let contains = app
+        .task_git_ui
+        .diff_area
+        .is_some_and(|area| area.contains(point.into()));
+    if !contains {
+        return false;
+    }
+    let delta: isize = if up { 3 } else { -3 };
+    match app.task_git_ui.tab {
+        TaskGitTab::Changes => {
+            app.task_git_ui.diff_scroll =
+                (app.task_git_ui.diff_scroll as isize).saturating_add(delta) as usize;
+            true
+        }
+        TaskGitTab::Commits => {
+            app.task_git_ui.commit_diff_scroll =
+                (app.task_git_ui.commit_diff_scroll as isize).saturating_add(delta) as usize;
+            true
+        }
+        TaskGitTab::Files => false,
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {

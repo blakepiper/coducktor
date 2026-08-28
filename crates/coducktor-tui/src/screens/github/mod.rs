@@ -55,6 +55,8 @@ pub struct GithubUi {
     pub ui_state: Option<coducktor_contract::UiState>,
     pub list_selected: usize,
     pub focus: GithubFocus,
+    /// The list pane's inner rect from the last render, used for wheel scrolling.
+    pub list_area: Option<Rect>,
 
     pub detail_item: Option<GithubItem>,
     pub detail_tab: GithubDetailTab,
@@ -84,6 +86,7 @@ impl Default for GithubUi {
             tab: GithubTab::Issues,
             ui_state: None,
             list_selected: 0,
+            list_area: None,
             focus: GithubFocus::Tab,
             detail_item: None,
             detail_tab: GithubDetailTab::Thread,
@@ -269,6 +272,7 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         });
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    app.github_ui.list_area = Some(inner);
     let items = items(&app.github_ui);
     if items.is_empty() {
         frame.render_widget(
@@ -772,6 +776,26 @@ fn render_handoff(frame: &mut Frame<'_>, area: Rect, thread_area: Rect, app: &mu
             );
         }
     }
+}
+
+/// Wheel over the list pane moves the selection. Returns false when the cursor is
+/// outside the list pane.
+pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
+    let contains = app
+        .github_ui
+        .list_area
+        .is_some_and(|area| area.contains(point.into()));
+    if !contains {
+        return false;
+    }
+    let count = items(&app.github_ui).len();
+    if count == 0 {
+        return true;
+    }
+    let delta: isize = if up { -1 } else { 1 };
+    let next = (app.github_ui.list_selected as isize + delta).clamp(0, count as isize - 1);
+    app.github_ui.list_selected = next as usize;
+    true
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {

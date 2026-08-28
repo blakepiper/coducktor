@@ -64,6 +64,8 @@ pub enum ThreadAction {
     CancelAutoResume,
     RemoveQueuedMessage(String),
     FocusComposer,
+    /// Click into the transcript pane: it takes keyboard focus for scrolling.
+    FocusTranscript,
     FocusReviewNotes,
     /// Tab row: Session is this screen; Changes/Files/Commits are `screens::task_git` — leaving
     /// this screen is a navigation, not a local state change.
@@ -1188,6 +1190,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     app.thread_ui.transcript_area = Some(transcript_area);
     frame.render_widget(transcript_block, rows[2]);
     if transcript_area.height > 0 {
+        // Empty transcript space focuses the pane; per-row hits sit above it.
+        app.hitmap.register(
+            transcript_area,
+            0,
+            HitAction::ThreadScreen(ThreadAction::FocusTranscript),
+        );
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
@@ -1603,6 +1611,10 @@ fn apply_conversation_action(
             app.thread_ui.focus = ThreadFocus::Composer;
             app.thread_ui.composer.focus();
         }
+        ThreadAction::FocusTranscript => {
+            app.thread_ui.composer.blur();
+            app.thread_ui.focus = ThreadFocus::Transcript;
+        }
         ThreadAction::OpenGitTab(tab) => {
             crate::screens::task_git::open(app, &project, &id, tab);
         }
@@ -1687,6 +1699,12 @@ fn render_conversation(
     app.thread_ui.transcript_area = Some(transcript_area);
     frame.render_widget(transcript_block, rows[1]);
     if transcript_area.height > 0 {
+        // Empty transcript space focuses the pane; per-row hits sit above it.
+        app.hitmap.register(
+            transcript_area,
+            0,
+            HitAction::ThreadScreen(ThreadAction::FocusTranscript),
+        );
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
@@ -2037,6 +2055,7 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
         // and no provider session to restart.
         ThreadAction::ToggleGitMode | ThreadAction::RestartSession => {}
         ThreadAction::ToggleTimelineItem(index) => {
+            app.thread_ui.focus = ThreadFocus::Transcript;
             app.thread_ui.transcript.select(index);
             app.thread_ui.transcript.toggle_selected();
         }
@@ -2048,6 +2067,10 @@ pub fn apply_hit(app: &mut App, action: ThreadAction) {
         ThreadAction::FocusComposer => {
             app.thread_ui.focus = ThreadFocus::Composer;
             app.thread_ui.composer.focus();
+        }
+        ThreadAction::FocusTranscript => {
+            app.thread_ui.composer.blur();
+            app.thread_ui.focus = ThreadFocus::Transcript;
         }
         ThreadAction::FocusReviewNotes => app.thread_ui.focus = ThreadFocus::ReviewNotes,
         ThreadAction::ReviewSendBack => apply_action(app, ThreadAction::ReviewSendBack),
@@ -2110,6 +2133,7 @@ fn apply_action(app: &mut App, action: ThreadAction) {
         | ThreadAction::CloseSubagentSheet
         | ThreadAction::ToggleStepRail
         | ThreadAction::FocusComposer
+        | ThreadAction::FocusTranscript
         | ThreadAction::FocusReviewNotes
         | ThreadAction::OpenGitTab(_) => {}
     }
@@ -2827,6 +2851,52 @@ mod tests {
             elapsed < budget,
             "12,000-event live frame took {elapsed:?}; target is <8ms in the optimized profile"
         );
+    }
+
+    #[test]
+    fn clicking_the_composer_focuses_it_and_places_the_caret() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        app.thread_ui.composer.set_text("hello world");
+        render_to_string(&mut app);
+        let Some(area) = app.thread_ui.composer.input_area() else {
+            panic!("the composer has been rendered");
+        };
+        app.thread_ui.focus = ThreadFocus::Transcript;
+        app.thread_ui.composer.blur();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            // Inner text starts one row of border and one leading space in; column 3
+            // places the caret after "hel".
+            column: area.x + 2 + 3,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.thread_ui.focus, ThreadFocus::Composer);
+        assert!(app.thread_ui.composer.focused);
+        assert_eq!(app.thread_ui.composer.caret, 3);
+    }
+
+    #[test]
+    fn clicking_the_transcript_focuses_it_and_blurs_the_composer() {
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        render_to_string(&mut app);
+        let Some(area) = app.thread_ui.transcript_area else {
+            panic!("the transcript has been rendered");
+        };
+        app.thread_ui.focus = ThreadFocus::Composer;
+        app.thread_ui.composer.focus();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 2,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.thread_ui.focus, ThreadFocus::Transcript);
+        assert!(!app.thread_ui.composer.focused);
     }
 
     #[test]

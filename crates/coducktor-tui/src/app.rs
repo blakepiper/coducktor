@@ -2742,11 +2742,26 @@ impl App {
         {
             return;
         }
+        if matches!(self.route(), Route::Terminal { .. })
+            && crate::screens::terminal::handle_mouse(self, &mouse)
+        {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.palette.open {
+                    // The palette owns the click: its rows activate, anywhere else closes it.
+                    match self.hitmap.hit(mouse.column, mouse.row) {
+                        Some(HitAction::PaletteItem(index)) => {
+                            crate::overlay::activate_index(self, index);
+                        }
+                        _ => crate::overlay::close(self),
+                    }
+                    return;
+                }
                 if let Some(action) = self.hitmap.hit(mouse.column, mouse.row) {
                     let sidebar_action = self.sidebar_row_for_hit(&action).is_some();
-                    if let Some(pane) = self.settings_mouse_pane(&action) {
+                    if let Some(pane) = self.hit_screen_pane(&action) {
                         self.set_focus_location(FocusLocation::Screen(pane));
                     }
                     if let Some(row) = self.sidebar_row_for_hit(&action)
@@ -2758,6 +2773,21 @@ impl App {
                     if action == HitAction::SidebarEdge {
                         self.sidebar_dragging = true;
                     } else {
+                        // Composer and editor clicks place the caret before the focus
+                        // action runs, so the click both positions and focuses.
+                        if matches!(
+                            action,
+                            HitAction::ThreadScreen(
+                                crate::screens::thread::ThreadAction::FocusComposer
+                            ) | HitAction::NewTaskScreen(
+                                crate::input::hitmap::NewTaskAction::Compose
+                            )
+                        ) {
+                            self.composer_click(&mouse);
+                        }
+                        if let HitAction::FocusScreenPane(pane) = &action {
+                            self.pane_background_click(*pane, &mouse);
+                        }
                         self.apply_hit_action(action);
                         if sidebar_action {
                             self.sidebar_focus = true;
@@ -2786,50 +2816,169 @@ impl App {
                     .saturating_add(1)
                     .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.ide_ui.mouse_dragging => {
+                crate::screens::ide::editor_drag(self, &mouse);
+            }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.ide_ui.mouse_dragging {
+                    crate::screens::ide::editor_release(self);
+                }
                 self.sidebar_dragging = false;
             }
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                if !self.sidebar_focus
-                    && matches!(self.route(), Route::Thread { .. })
-                    && self.thread_ui.focus == crate::screens::thread::ThreadFocus::Transcript
-                    && self
-                        .thread_ui
-                        .transcript_area
-                        .is_some_and(|area| area.contains((mouse.column, mouse.row).into())) =>
-            {
-                crate::screens::thread::handle_scroll(
-                    self,
-                    matches!(mouse.kind, MouseEventKind::ScrollUp),
-                );
-            }
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                if !self.sidebar_focus
-                    && matches!(self.route(), Route::Terminal { .. })
-                    && self
-                        .terminal_ui
-                        .last_area
-                        .is_some_and(|area| area.contains((mouse.column, mouse.row).into())) =>
-            {
-                crate::screens::terminal::scroll(
-                    self,
-                    matches!(mouse.kind, MouseEventKind::ScrollUp),
-                );
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                self.handle_wheel(up, &mouse);
             }
             _ => {}
         }
     }
 
-    fn settings_mouse_pane(&self, action: &HitAction) -> Option<usize> {
-        if !matches!(self.route(), Route::Settings { .. } | Route::GlobalSettings) {
-            return None;
+    /// Wheel routing by hover position: the pane under the cursor scrolls, independent
+    /// of keyboard focus. Vim keys keep scrolling whatever had keyboard focus.
+    fn handle_wheel(&mut self, up: bool, mouse: &crossterm::event::MouseEvent) {
+        let point = (mouse.column, mouse.row);
+        if matches!(self.route(), Route::Thread { .. })
+            && self
+                .thread_ui
+                .transcript_area
+                .is_some_and(|area| area.contains(point.into()))
+        {
+            crate::screens::thread::handle_scroll(self, up);
+            return;
         }
-        match action {
-            HitAction::FocusScreenPane(pane) => Some(*pane),
-            HitAction::SettingsSection(_) => Some(0),
-            HitAction::SettingsRow(_)
-            | HitAction::SettingsDeleteRow(_)
-            | HitAction::PickerRow(_) => Some(1),
+        if matches!(self.route(), Route::Terminal { .. })
+            && self
+                .terminal_ui
+                .last_area
+                .is_some_and(|area| area.contains(point.into()))
+        {
+            crate::screens::terminal::scroll(self, up);
+            return;
+        }
+        if matches!(self.route(), Route::Tasks { .. })
+            && self
+                .tasks_ui
+                .table
+                .last_area
+                .is_some_and(|area| area.contains(point.into()))
+        {
+            self.tasks_ui.table.move_selection(if up { -3 } else { 3 });
+            return;
+        }
+        if matches!(self.route(), Route::GlobalTasks)
+            && self
+                .global_ui
+                .table
+                .last_area
+                .is_some_and(|area| area.contains(point.into()))
+        {
+            self.global_ui.table.move_selection(if up { -3 } else { 3 });
+            return;
+        }
+        if matches!(self.route(), Route::Ide { .. }) {
+            crate::screens::ide::editor_wheel(self, up);
+            return;
+        }
+        if matches!(self.route(), Route::RepoGit { .. })
+            && crate::screens::repo_git::wheel(self, up, point)
+        {
+            return;
+        }
+        if matches!(self.route(), Route::TaskGit { .. })
+            && crate::screens::task_git::wheel(self, up, point)
+        {
+            return;
+        }
+        if matches!(self.route(), Route::Github { .. })
+            && crate::screens::github::wheel(self, up, point)
+        {
+            return;
+        }
+        if matches!(self.route(), Route::Settings { .. } | Route::GlobalSettings)
+            && crate::screens::settings::wheel(self, up, point)
+        {
+            return;
+        }
+        if matches!(self.route(), Route::Skills { .. }) {
+            crate::screens::skills::wheel(self, up);
+        }
+    }
+
+    /// Place the composer caret at the clicked position on whichever screen hosts a
+    /// composer.
+    fn composer_click(&mut self, mouse: &crossterm::event::MouseEvent) {
+        if matches!(self.route(), Route::NewTask { .. }) {
+            self.new_task_ui
+                .composer
+                .click_caret(mouse.column, mouse.row);
+        } else if matches!(self.route(), Route::Thread { .. }) {
+            self.thread_ui.composer.click_caret(mouse.column, mouse.row);
+        }
+    }
+
+    /// Extra behavior when clicking empty space in a screen pane. The pane focus itself
+    /// is applied by the `FocusScreenPane` hit action; the IDE editor additionally
+    /// places the caret and starts a drag selection.
+    fn pane_background_click(&mut self, pane: usize, mouse: &crossterm::event::MouseEvent) {
+        if matches!(self.route(), Route::Ide { .. }) && pane == 1 {
+            crate::screens::ide::editor_click(self, mouse);
+        }
+    }
+
+    /// Which screen pane a control click should focus before the action runs, so a
+    /// click anywhere works like clicking into that pane with the keyboard.
+    fn hit_screen_pane(&self, action: &HitAction) -> Option<usize> {
+        if let HitAction::FocusScreenPane(pane) = action {
+            return Some(*pane);
+        }
+        match self.route() {
+            Route::Settings { .. } | Route::GlobalSettings => match action {
+                HitAction::SettingsSection(_) => Some(0),
+                HitAction::SettingsRow(_) | HitAction::SettingsDeleteRow(_) => Some(1),
+                HitAction::PickerRow(_) => Some(1),
+                _ => None,
+            },
+            Route::Ide { .. } => match action {
+                HitAction::IdeScreen(
+                    crate::input::hitmap::IdeAction::SelectEntry(_)
+                    | crate::input::hitmap::IdeAction::GoUp,
+                ) => Some(0),
+                HitAction::IdeScreen(
+                    crate::input::hitmap::IdeAction::Save
+                    | crate::input::hitmap::IdeAction::OpenInEditor
+                    | crate::input::hitmap::IdeAction::SwitchFocus,
+                ) => Some(1),
+                _ => None,
+            },
+            Route::TaskGit { tab, .. } if !matches!(tab, TaskGitTab::Files) => match action {
+                HitAction::TaskGitScreen(
+                    crate::input::hitmap::TaskGitAction::SelectTreeRow(_)
+                    | crate::input::hitmap::TaskGitAction::FilesUp
+                    | crate::input::hitmap::TaskGitAction::OpenCommitDialog,
+                ) => Some(0),
+                HitAction::TaskGitScreen(
+                    crate::input::hitmap::TaskGitAction::SelectCommit(_)
+                    | crate::input::hitmap::TaskGitAction::ToggleMode
+                    | crate::input::hitmap::TaskGitAction::ToggleWrap
+                    | crate::input::hitmap::TaskGitAction::SubmitCommit
+                    | crate::input::hitmap::TaskGitAction::Push
+                    | crate::input::hitmap::TaskGitAction::CreatePr
+                    | crate::input::hitmap::TaskGitAction::CloseCommitDialog,
+                ) => Some(1),
+                _ => None,
+            },
+            Route::Github { .. } => match action {
+                HitAction::GithubScreen(
+                    crate::input::hitmap::GithubAction::SelectItem(_)
+                    | crate::input::hitmap::GithubAction::SwitchTab(_),
+                ) => Some(0),
+                HitAction::GithubScreen(
+                    crate::input::hitmap::GithubAction::SwitchDetailTab(_)
+                    | crate::input::hitmap::GithubAction::CycleMergeMethod
+                    | crate::input::hitmap::GithubAction::Merge,
+                ) => Some(1),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -3511,6 +3660,11 @@ impl App {
                     crate::screens::new_task::remove_attachment(self, index);
                 } else if matches!(self.route(), Route::Thread { .. }) {
                     self.thread_ui.composer.remove_attachment(index);
+                }
+            }
+            HitAction::PaletteItem(index) => {
+                if self.palette.open {
+                    crate::overlay::activate_index(self, index);
                 }
             }
             HitAction::NewTaskScreen(action) => {
@@ -4461,6 +4615,37 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(matches!(app.route(), Route::Tasks { .. }));
+    }
+
+    #[test]
+    fn the_mouse_wheel_moves_the_table_selection_under_the_cursor() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.execute_command("open /tasks");
+        assert_eq!(app.route(), &Route::GlobalTasks);
+        app.global_ui.table.rows = (0..10)
+            .map(|index| crate::widgets::table::TableRow {
+                key: format!("row-{index}"),
+                cells: Vec::new(),
+            })
+            .collect();
+        app.global_ui.table.select(Some(0));
+        app.global_ui.table.last_area = Some(Rect::new(0, 0, 80, 20));
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(app.global_ui.table.selected, Some(3));
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(app.global_ui.table.selected, Some(0));
     }
 
     #[test]

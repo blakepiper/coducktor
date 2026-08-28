@@ -57,6 +57,12 @@ pub struct IdeUi {
     /// moves against, so it always matches the screen.
     pub last_viewport: usize,
 
+    /// The editor's text rect from the last render, used for mouse caret placement.
+    pub editor_area: Option<Rect>,
+    /// True between a left-click in the editor and its release — a drag extends
+    /// the selection.
+    pub mouse_dragging: bool,
+
     pub highlighter: Highlighter,
 }
 
@@ -82,6 +88,8 @@ impl Default for IdeUi {
             editor: Editor::default(),
             dirty: false,
             last_viewport: 20,
+            editor_area: None,
+            mouse_dragging: false,
             highlighter: Highlighter::new(),
         }
     }
@@ -196,6 +204,10 @@ fn render_explorer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let block = Block::default().borders(Borders::ALL).title("Files");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Empty explorer space focuses the pane; per-entry hits sit above it.
+    if inner.width > 0 && inner.height > 0 {
+        app.hitmap.register(inner, 0, HitAction::FocusScreenPane(0));
+    }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     match app.ide_ui.entries.clone() {
@@ -291,9 +303,20 @@ fn render_editor_pane(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Empty editor space places the caret (with a file open) or just focuses the pane;
+    // the editor text occupies every row above the footer.
+    let text_rows = inner.height.saturating_sub(1);
+    app.ide_ui.editor_area = Some(Rect::new(inner.x, inner.y, inner.width, text_rows));
+    if inner.width > 0 && text_rows > 0 {
+        app.hitmap.register(
+            Rect::new(inner.x, inner.y, inner.width, text_rows),
+            0,
+            HitAction::FocusScreenPane(1),
+        );
+    }
 
     // One inner row is the footer; the editor viewport is what sits above it.
-    app.ide_ui.last_viewport = inner.height.saturating_sub(1) as usize;
+    app.ide_ui.last_viewport = text_rows.max(1) as usize;
     let Some(path) = app.ide_ui.file_path.clone() else {
         frame.render_widget(
             Paragraph::new("Choose a file from the explorer to start editing.")
@@ -343,6 +366,73 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         IdeFocus::Tree => handle_tree_key(app, key),
         IdeFocus::Editor => handle_editor_key(app, key),
     }
+}
+
+/// The editor viewport rect for mouse mapping, if a file is open and editable.
+fn mouse_viewport(app: &App) -> Option<Rect> {
+    if app.ide_ui.file_path.is_some() && app.ide_ui.file_error.is_none() {
+        app.ide_ui.editor_area
+    } else {
+        None
+    }
+}
+
+/// Place the caret where the user clicked and start a drag selection. Clicking the
+/// editor is an implicit focus switch to the editor pane.
+pub fn editor_click(app: &mut App, mouse: &crossterm::event::MouseEvent) -> bool {
+    let Some(area) = mouse_viewport(app) else {
+        return false;
+    };
+    if !area.contains((mouse.column, mouse.row).into()) {
+        return false;
+    }
+    let row = usize::from(mouse.row.saturating_sub(area.y)).min(usize::from(area.height) - 1);
+    let column = usize::from(mouse.column.saturating_sub(area.x)).min(usize::from(area.width) - 1);
+    let viewport = app.ide_ui.last_viewport;
+    app.ide_ui
+        .editor
+        .place_caret_wrapped(area.width, viewport, row, column, false);
+    app.ide_ui.editor.begin_selection();
+    app.ide_ui.mouse_dragging = true;
+    true
+}
+
+/// Extend the in-progress selection to the dragged position.
+pub fn editor_drag(app: &mut App, mouse: &crossterm::event::MouseEvent) {
+    let Some(area) = mouse_viewport(app) else {
+        return;
+    };
+    let row = usize::from(mouse.row.saturating_sub(area.y)).min(usize::from(area.height) - 1);
+    let column = usize::from(mouse.column.saturating_sub(area.x)).min(usize::from(area.width) - 1);
+    let viewport = app.ide_ui.last_viewport;
+    app.ide_ui
+        .editor
+        .place_caret_wrapped(area.width, viewport, row, column, true);
+}
+
+/// Finalize a drag selection. A click without movement leaves no selection.
+pub fn editor_release(app: &mut App) {
+    app.ide_ui.mouse_dragging = false;
+    if !app.ide_ui.editor.has_selection() {
+        app.ide_ui.editor.clear_selection();
+    }
+}
+
+/// Wheel over the editor viewport moves the caret like the scratchpad's wheel, which
+/// scrolls the viewport with it.
+pub fn editor_wheel(app: &mut App, up: bool) {
+    if mouse_viewport(app).is_none() {
+        return;
+    }
+    let viewport = app.ide_ui.last_viewport;
+    for _ in 0..3 {
+        if up {
+            app.ide_ui.editor.move_up();
+        } else {
+            app.ide_ui.editor.move_down();
+        }
+    }
+    app.ide_ui.editor.ensure_caret_visible(viewport);
 }
 
 pub(crate) fn jump_tree(app: &mut App, end: bool) {
@@ -755,6 +845,35 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert_eq!(arrows.ide_ui.directory_path, "");
+    }
+
+    #[test]
+    fn clicking_the_editor_places_the_caret_and_focuses_the_pane() {
+        let mut app = app_with_entries();
+        apply_hit(&mut app, IdeAction::SelectEntry(1));
+        app.ide_ui.editor.set_text("fn main() {}\n");
+        app.ide_ui.dirty = false;
+        render(&mut app, 120, 40);
+        let area = app
+            .ide_ui
+            .editor_area
+            .expect("the editor pane has been rendered");
+        app.ide_ui.focus = IdeFocus::Tree;
+
+        app.handle_event(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: area.x + 4,
+                row: area.y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+        ));
+
+        assert_eq!(app.ide_ui.focus, IdeFocus::Editor);
+        assert!(app.ide_ui.mouse_dragging, "a drag selection has started");
+        // Two columns are consumed by the line-number gutter and its gap.
+        assert_eq!(app.ide_ui.editor.row, 0);
+        assert_eq!(app.ide_ui.editor.col, 2);
     }
 
     #[test]

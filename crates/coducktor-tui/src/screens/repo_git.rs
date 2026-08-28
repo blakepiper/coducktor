@@ -30,6 +30,8 @@ pub struct RepoGitUi {
     pub commit_detail: Option<RepoCommitPayload>,
     pub commit_diff_state: DiffViewState,
     pub commit_diff_scroll: usize,
+    /// The diff pane's inner rect from the last render, used for wheel scrolling.
+    pub diff_area: Option<Rect>,
 
     pub branches_selected: usize,
     pub new_branch_name: String,
@@ -54,6 +56,7 @@ impl Default for RepoGitUi {
             commit_detail: None,
             commit_diff_state: DiffViewState::default(),
             commit_diff_scroll: 0,
+            diff_area: None,
             branches_selected: 0,
             new_branch_name: String::new(),
             new_branch_open: false,
@@ -219,6 +222,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         });
     let inner = block.inner(diff_area);
     frame.render_widget(block, diff_area);
+    app.repo_git_ui.diff_area = Some(inner);
     if app.repo_git_ui.changes_loading {
         frame.render_widget(
             Paragraph::new("Loading changes…")
@@ -303,6 +307,7 @@ fn render_commits(frame: &mut Frame<'_>, area: Rect, app: &mut App, log: &[LogEn
         });
     let detail_inner = detail_block.inner(cols[1]);
     frame.render_widget(detail_block, cols[1]);
+    app.repo_git_ui.diff_area = Some(detail_inner);
     if let Some(commit) = app.repo_git_ui.commit_detail.clone() {
         let (lines, _) = diff::render_files(
             &commit.files,
@@ -385,6 +390,32 @@ fn render_branches(
             Paragraph::new(app.repo_git_ui.new_branch_name.as_str()),
             dialog_inner,
         );
+    }
+}
+
+/// Wheel over the diff pane scrolls it; the tab decides which scroll state moves.
+/// Returns false when the cursor is outside the diff pane.
+pub fn wheel(app: &mut App, up: bool, point: (u16, u16)) -> bool {
+    let contains = app
+        .repo_git_ui
+        .diff_area
+        .is_some_and(|area| area.contains(point.into()));
+    if !contains {
+        return false;
+    }
+    let delta: isize = if up { 3 } else { -3 };
+    match app.repo_git_ui.tab {
+        RepoGitTab::Changes => {
+            app.repo_git_ui.diff_scroll =
+                (app.repo_git_ui.diff_scroll as isize).saturating_add(delta) as usize;
+            true
+        }
+        RepoGitTab::Commits => {
+            app.repo_git_ui.commit_diff_scroll =
+                (app.repo_git_ui.commit_diff_scroll as isize).saturating_add(delta) as usize;
+            true
+        }
+        RepoGitTab::Branches => false,
     }
 }
 

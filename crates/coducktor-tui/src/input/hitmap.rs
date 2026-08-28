@@ -107,6 +107,8 @@ pub enum HitAction {
     PickerRow(usize),
     /// Remove the pasted image at this index from the composer's image row.
     ComposerRemoveAttachment(usize),
+    /// A command palette entry — click to select and run it.
+    PaletteItem(usize),
     /// A new-task screen control (pill/button/composer) — routed by the screen.
     NewTaskScreen(NewTaskAction),
     /// A task-thread screen control — routed by the screen.

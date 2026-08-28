@@ -163,6 +163,17 @@ pub fn handle_key(app: &mut App, key: crossterm::event::KeyEvent) -> bool {
     true
 }
 
+/// Select a palette entry by click index and run it — the mouse equivalent of pressing
+/// Enter on the selected row.
+pub fn activate_index(app: &mut App, index: usize) {
+    app.palette.selected = index;
+    let entries = ranked(app);
+    if let Some(entry) = entries.get(index).cloned() {
+        close(app);
+        activate(app, entry.action);
+    }
+}
+
 fn activate(app: &mut App, action: PaletteAction) {
     match action {
         PaletteAction::Nav(nav) => app.navigate(nav),
@@ -194,6 +205,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let entries = ranked(app);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current_group = "";
+    let mut row_y = inner.y;
     for (index, entry) in entries.iter().enumerate().take(inner.height as usize) {
         if entry.group != current_group {
             current_group = entry.group;
@@ -201,12 +213,19 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
                 current_group.to_uppercase(),
                 Style::default().fg(app.theme.palette.soft_fg),
             )));
+            row_y += 1;
         }
         let mut style = Style::default().fg(app.theme.palette.fg);
         if index == app.palette.selected {
             style = style.add_modifier(Modifier::REVERSED);
         }
         lines.push(Line::from(Span::styled(format!(" {}", entry.label), style)));
+        app.hitmap.register(
+            Rect::new(inner.x, row_y, inner.width, 1),
+            10,
+            crate::input::hitmap::HitAction::PaletteItem(index),
+        );
+        row_y += 1;
     }
     if entries.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -227,6 +246,17 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn activating_a_clicked_entry_runs_it_and_closes_the_palette() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        open(&mut app);
+        assert!(!ranked(&mut app).is_empty(), "the palette lists entries");
+
+        activate_index(&mut app, 0);
+
+        assert!(!app.palette.open, "the palette closes after activation");
+    }
 
     #[test]
     fn opening_lists_views_and_actions() {

@@ -28,6 +28,14 @@ pub struct TerminalUi {
     pub scroll_offset: usize,
     /// The tab's inner rect from the last render, used to size the PTY.
     pub(crate) last_area: Option<Rect>,
+    /// Selection start in grid rows (0 = top of the live screen; scrollback rows are
+    /// negative) and column.
+    pub selection_anchor: Option<(i64, usize)>,
+    /// The selection's current end, following the drag.
+    pub selection_head: Option<(i64, usize)>,
+    /// True between a left-click in the grid and its release — a drag selects text,
+    /// and releasing copies it to the clipboard.
+    pub mouse_selecting: bool,
 }
 
 /// Open the Terminal tab for a project. The shell itself starts lazily in
@@ -110,10 +118,157 @@ fn relaunch(app: &mut App) {
     app.terminal_ui.sessions.remove(&project);
     app.terminal_ui.error = None;
     app.terminal_ui.scroll_offset = 0;
+    clear_selection(app);
+}
+
+/// Convert a click row inside the grid to a stable grid row (0 = live screen top,
+/// scrollback above it is negative). The status row is not part of the grid.
+fn grid_area(area: Rect) -> Rect {
+    Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
+}
+
+fn click_grid_row(app: &App, row: u16) -> Option<i64> {
+    let area = grid_area(app.terminal_ui.last_area?);
+    if row < area.y {
+        return None;
+    }
+    let viewport_row = i64::from(row - area.y);
+    let offset = i64::from(
+        app.terminal_ui
+            .sessions
+            .get(&app.terminal_ui.project)?
+            .scrollback() as u16,
+    );
+    // Viewport rows grow with the scrollback offset; grid rows do not.
+    Some(viewport_row - offset)
+}
+
+fn click_column(app: &App, column: u16) -> Option<usize> {
+    let area = grid_area(app.terminal_ui.last_area?);
+    if column < area.x {
+        return None;
+    }
+    Some(usize::from(column - area.x).min(usize::from(area.width.saturating_sub(1))))
+}
+
+fn clear_selection(app: &mut App) {
+    app.terminal_ui.selection_anchor = None;
+    app.terminal_ui.selection_head = None;
+    app.terminal_ui.mouse_selecting = false;
+}
+
+/// Raw mouse handling for the embedded terminal: click-drag selects grid text, and
+/// releasing a non-empty selection copies it to the clipboard. Returns true when the
+/// event was consumed inside the terminal grid.
+pub fn handle_mouse(app: &mut App, mouse: &crossterm::event::MouseEvent) -> bool {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let Some(area) = app.terminal_ui.last_area else {
+        return false;
+    };
+    let grid = grid_area(area);
+    let inside = grid.contains((mouse.column, mouse.row).into());
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) if inside => {
+            let Some(grid_row) = click_grid_row(app, mouse.row) else {
+                return false;
+            };
+            let Some(column) = click_column(app, mouse.column) else {
+                return false;
+            };
+            app.terminal_ui.selection_anchor = Some((grid_row, column));
+            app.terminal_ui.selection_head = Some((grid_row, column));
+            app.terminal_ui.mouse_selecting = true;
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.terminal_ui.mouse_selecting => {
+            if inside
+                && let (Some(grid_row), Some(column)) = (
+                    click_grid_row(app, mouse.row),
+                    click_column(app, mouse.column),
+                )
+            {
+                app.terminal_ui.selection_head = Some((grid_row, column));
+            }
+            true
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.terminal_ui.mouse_selecting => {
+            app.terminal_ui.mouse_selecting = false;
+            if !inside {
+                return true;
+            }
+            if let (Some(grid_row), Some(column)) = (
+                click_grid_row(app, mouse.row),
+                click_column(app, mouse.column),
+            ) {
+                app.terminal_ui.selection_head = Some((grid_row, column));
+            }
+            let Some(text) = selection_text(app) else {
+                return true;
+            };
+            match crate::clipboard::write_text(&text) {
+                Ok(()) => app.notice = Some("selection copied".to_owned()),
+                Err(error) => app.notice = Some(format!("could not copy: {error}")),
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The selected grid text, reading order, one trimmed line per grid row.
+fn selection_text(app: &App) -> Option<String> {
+    let (anchor, head) = match (
+        app.terminal_ui.selection_anchor,
+        app.terminal_ui.selection_head,
+    ) {
+        (Some(anchor), Some(head)) if anchor != head => (anchor, head),
+        _ => return None,
+    };
+    let area = grid_area(app.terminal_ui.last_area?);
+    let ((start_row, start_col), (end_row, end_col)) = if (anchor.0, anchor.1) <= (head.0, head.1) {
+        (anchor, head)
+    } else {
+        (head, anchor)
+    };
+    let project = app.terminal_ui.project.clone();
+    let session = app.terminal_ui.sessions.get(&project)?;
+    let parser = session.parser().lock().ok()?;
+    let screen = parser.screen();
+    let offset = i64::from(screen.scrollback() as u16);
+    let cols = usize::from(area.width);
+    let mut lines = Vec::new();
+    for grid_row in start_row..=end_row {
+        let viewport_row = grid_row + offset;
+        if viewport_row < 0 || viewport_row >= i64::from(area.height) {
+            continue;
+        }
+        let mut line = String::new();
+        for col in 0..cols {
+            let on_first = grid_row == start_row;
+            let on_last = grid_row == end_row;
+            if on_first && col < start_col {
+                continue;
+            }
+            if on_last && col > end_col {
+                break;
+            }
+            let Some(cell) = screen.cell(viewport_row as u16, col as u16) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            line.push_str(&cell.contents());
+        }
+        lines.push(line.trim_end().to_owned());
+    }
+    let text = lines.join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 /// Scroll the embedded terminal's scrollback. `up` moves toward older output.
 pub fn scroll(app: &mut App, up: bool) {
+    clear_selection(app);
     if up {
         app.terminal_ui.scroll_offset = app.terminal_ui.scroll_offset.saturating_add(3);
     } else {
@@ -127,6 +282,7 @@ pub fn scroll(app: &mut App, up: bool) {
 
 /// Deliver a bracketed-paste chunk into the shell.
 pub fn paste(app: &mut App, text: &str) {
+    clear_selection(app);
     let project = app.terminal_ui.project.clone();
     if let Some(session) = app.terminal_ui.sessions.get_mut(&project)
         && !session.exited()
@@ -200,6 +356,17 @@ fn render_message(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
+/// The selection in reading order, if any.
+fn selection_bounds(app: &App) -> Option<((i64, usize), (i64, usize))> {
+    let anchor = app.terminal_ui.selection_anchor?;
+    let head = app.terminal_ui.selection_head?;
+    Some(if (anchor.0, anchor.1) <= (head.0, head.1) {
+        (anchor, head)
+    } else {
+        (head, anchor)
+    })
+}
+
 /// Render the parser's visible grid (the scrollback offset is already applied to the
 /// parser) with per-cell colors and a reversed cursor block.
 fn render_screen(frame: &mut Frame<'_>, area: Rect, app: &App, session: &TerminalSession) {
@@ -212,9 +379,11 @@ fn render_screen(frame: &mut Frame<'_>, area: Rect, app: &App, session: &Termina
     let screen = parser.screen();
     let (cursor_row, cursor_col) = screen.cursor_position();
     let offset = screen.scrollback();
+    let selection = selection_bounds(app);
     let mut lines = Vec::with_capacity(grid_height);
     for row in 0..grid_height {
         let mut spans = Vec::new();
+        let grid_row = i64::from(row as u16) - offset as i64;
         for col in 0..cols {
             let Some(cell) = screen.cell(row as u16, col as u16) else {
                 continue;
@@ -224,9 +393,16 @@ fn render_screen(frame: &mut Frame<'_>, area: Rect, app: &App, session: &Termina
             }
             let is_cursor = row == usize::from(cursor_row).saturating_add(offset)
                 && col == usize::from(cursor_col);
+            let is_selected =
+                selection.is_some_and(|((start_row, start_col), (end_row, end_col))| {
+                    let after_start =
+                        grid_row > start_row || (grid_row == start_row && col >= start_col);
+                    let before_end = grid_row < end_row || (grid_row == end_row && col <= end_col);
+                    after_start && before_end
+                });
             let mut contents = cell.contents().to_owned();
             if contents.is_empty() {
-                if !is_cursor && cell.bgcolor() == vt100::Color::Default {
+                if !is_cursor && !is_selected && cell.bgcolor() == vt100::Color::Default {
                     continue;
                 }
                 contents.push(' ');
@@ -246,7 +422,7 @@ fn render_screen(frame: &mut Frame<'_>, area: Rect, app: &App, session: &Termina
             if cell.inverse() {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            if is_cursor {
+            if is_cursor || is_selected {
                 style = style.add_modifier(Modifier::REVERSED);
             }
             spans.push(Span::styled(contents, style));
@@ -317,6 +493,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if let Some(bytes) = encode_key(key) {
         let _ = session.write_bytes(&bytes);
     }
+    clear_selection(app);
     app.terminal_ui.scroll_offset = 0;
     true
 }
@@ -446,6 +623,78 @@ mod tests {
         app.terminal_ui.scroll_offset = 9;
         paste(&mut app, "multi\nline");
         assert_eq!(app.terminal_ui.scroll_offset, 0);
+    }
+
+    #[test]
+    fn click_drag_selects_grid_text_and_a_plain_click_selects_nothing() {
+        let mut app = app_with_terminal("main");
+        app.terminal_ui.last_area = Some(Rect::new(0, 0, 40, 10));
+        assert!(maintain(&mut app));
+        if let Some(session) = app.terminal_ui.sessions.get("main") {
+            session.feed(b"AAAAAAAAAA\r\nBBBBBBBBBB\r\nCCCCCCCCCC\r\n");
+        }
+        let mouse = |kind, column, row| crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        assert!(handle_mouse(
+            &mut app,
+            &mouse(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                0,
+                0
+            )
+        ));
+        assert!(app.terminal_ui.mouse_selecting);
+        assert!(handle_mouse(
+            &mut app,
+            &mouse(
+                crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                3,
+                2
+            )
+        ));
+        assert_eq!(
+            selection_text(&app).as_deref(),
+            Some("AAAAAAAAAA\nBBBBBBBBBB\nCCCC"),
+            "the drag spans the grid in reading order"
+        );
+
+        // A click without a drag selects nothing.
+        clear_selection(&mut app);
+        assert!(handle_mouse(
+            &mut app,
+            &mouse(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                4,
+                1
+            )
+        ));
+        assert!(handle_mouse(
+            &mut app,
+            &mouse(
+                crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                4,
+                1
+            )
+        ));
+        assert!(selection_text(&app).is_none());
+        assert!(!app.terminal_ui.mouse_selecting);
+    }
+
+    #[test]
+    fn scrolling_the_terminal_clears_the_selection() {
+        let mut app = app_with_terminal("main");
+        app.terminal_ui.last_area = Some(Rect::new(0, 0, 40, 10));
+        assert!(maintain(&mut app));
+        app.terminal_ui.selection_anchor = Some((0, 0));
+        app.terminal_ui.selection_head = Some((2, 3));
+        scroll(&mut app, true);
+        assert!(app.terminal_ui.selection_anchor.is_none());
+        assert!(app.terminal_ui.selection_head.is_none());
     }
 
     #[test]

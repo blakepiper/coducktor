@@ -248,6 +248,29 @@ fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &mut App, visible_indic
     frame.render_widget(body, body_area);
 }
 
+/// Wheel over the list moves the selection. Returns false when the detail pane has
+/// keyboard focus, matching the j/k behavior.
+pub fn wheel(app: &mut App, up: bool) -> bool {
+    if app.screen_focus() != 0 {
+        return false;
+    }
+    let visible_indices = visible(app);
+    if visible_indices.is_empty() {
+        return true;
+    }
+    let position = visible_indices
+        .iter()
+        .position(|index| *index == app.skills_ui.selected)
+        .unwrap_or(0);
+    let next = if up {
+        position.saturating_sub(1)
+    } else {
+        (position + 1).min(visible_indices.len() - 1)
+    };
+    app.skills_ui.selected = visible_indices[next];
+    true
+}
+
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
     if app.skills_ui.filter_open {
         match key.code {

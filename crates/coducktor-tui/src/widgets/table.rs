@@ -153,6 +153,8 @@ pub struct Table {
     pub sort: Option<SortState>,
     /// The header-column rectangles from the last render, for hover folding.
     pub header_hits: Vec<(ColumnId, Rect)>,
+    /// The full table rect from the last render, used to gate mouse-wheel events.
+    pub last_area: Option<Rect>,
 }
 
 impl Table {
@@ -303,6 +305,7 @@ impl Table {
         empty_hint: &str,
     ) {
         let block = Block::default().borders(Borders::ALL).title(title);
+        self.last_area = Some(area);
         let inner = block.inner(area);
         let body_height = inner.height.saturating_sub(HEADER_HEIGHT);
         let total = self.rows.len();
