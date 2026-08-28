@@ -1033,7 +1033,8 @@ pub fn open_thread(app: &mut App, key: &str) {
 }
 
 fn split_key(key: &str) -> Option<(String, String)> {
-    let (project, id) = key.split_once('/')?;
+    // Conversation cards use a project-qualified `::` key; legacy run cards use `/`.
+    let (project, id) = key.split_once("::").or_else(|| key.split_once('/'))?;
     Some((project.to_owned(), id.to_owned()))
 }
 
@@ -1268,5 +1269,20 @@ mod tests {
                 terminal.backend().buffer()
             );
         }
+    }
+
+    #[test]
+    fn split_key_resolves_conversation_and_run_cards() {
+        assert_eq!(
+            split_key("shop::conv-1"),
+            Some(("shop".to_owned(), "conv-1".to_owned())),
+            "conversation cards use the project-qualified :: key"
+        );
+        assert_eq!(
+            split_key("shop/run-1"),
+            Some(("shop".to_owned(), "run-1".to_owned())),
+            "legacy run cards keep the / key"
+        );
+        assert_eq!(split_key("no-separator"), None);
     }
 }

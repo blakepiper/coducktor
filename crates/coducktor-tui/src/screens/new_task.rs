@@ -634,15 +634,7 @@ fn toggle_worktree(app: &mut App) {
         return;
     }
     let next = !effective.worktree_on;
-    let draft = &mut app.new_task_ui.draft;
-    draft.worktree = Some(next);
-    if !next && effective.git_auto_on {
-        // Git auto commits on a managed checkout; without one it would write into the user's
-        // own working tree, so the downgrade is explicit rather than silent.
-        draft.git_auto = Some(false);
-        app.notice =
-            Some("git set to manual — automatic commits require a managed worktree".to_owned());
-    }
+    app.new_task_ui.draft.worktree = Some(next);
     write_draft(app);
 }
 
@@ -652,12 +644,7 @@ fn toggle_git_auto(app: &mut App) {
         return;
     }
     let next = !effective.git_auto_on;
-    let draft = &mut app.new_task_ui.draft;
-    draft.git_auto = Some(next);
-    if next && !effective.worktree_on {
-        draft.worktree = Some(true);
-        app.notice = Some("worktree enabled — git auto requires a managed worktree".to_owned());
-    }
+    app.new_task_ui.draft.git_auto = Some(next);
     write_draft(app);
 }
 
@@ -978,15 +965,7 @@ fn apply_pick(app: &mut App, pill: PillId, value: &str) {
         }
         PillId::GitMode => {
             if let Some(git_auto) = value.strip_prefix("git-auto:") {
-                let git_auto = git_auto == "true";
-                app.new_task_ui.draft.git_auto = Some(git_auto);
-                if git_auto
-                    && !effective_values(&app.new_task_ui.draft, &app.new_task_ui.data).worktree_on
-                {
-                    app.new_task_ui.draft.worktree = Some(true);
-                    app.notice =
-                        Some("worktree enabled — git auto requires a managed worktree".to_owned());
-                }
+                app.new_task_ui.draft.git_auto = Some(git_auto == "true");
             }
         }
     }

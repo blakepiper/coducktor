@@ -379,9 +379,8 @@ pub fn started_conversation_id(
 }
 
 /// Resolve the worktree and Git-mode pair in precedence order: hard constraints first, then
-/// the explicit draft choice, then configured defaults. Section 5.2 ties the two together —
-/// Git auto requires a managed worktree, and turning the worktree off downgrades Git to
-/// manual — so they are resolved together rather than independently.
+/// the explicit draft choice, then configured defaults. The two settings are independent —
+/// git auto may run without a managed worktree, committing into the current checkout.
 pub fn resolve_composer_git_mode(
     has_git: bool,
     explicit_worktree: Option<bool>,
@@ -394,9 +393,7 @@ pub fn resolve_composer_git_mode(
     }
     let worktree = explicit_worktree.unwrap_or(configured_worktree);
     let git_auto = explicit_git_auto.unwrap_or(configured_git_auto);
-    // Git auto is deterministic post-turn work on a managed checkout; without a worktree it
-    // would commit into the user's own working tree.
-    (worktree, git_auto && worktree)
+    (worktree, git_auto)
 }
 
 /// The config a project contributes to the composer's effective values.
@@ -782,12 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn git_auto_never_survives_without_a_managed_worktree() {
-        // Explicit worktree off downgrades an explicit git auto rather than committing into
-        // the user's own checkout.
+    fn worktree_and_git_auto_resolve_independently() {
+        // Worktree off no longer downgrades an explicit git auto.
         assert_eq!(
             resolve_composer_git_mode(true, Some(false), Some(true), true, false),
-            (false, false)
+            (false, true)
         );
         assert_eq!(
             resolve_composer_git_mode(true, Some(true), Some(true), false, false),
