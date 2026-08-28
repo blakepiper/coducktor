@@ -580,6 +580,27 @@ mod tests {
     }
 
     #[test]
+    fn omp_models_include_the_discovered_catalog() {
+        let catalog = RunnerModelCatalogResponse {
+            runner: Runner::Omp,
+            models: vec![coducktor_contract::RunnerModelOption {
+                id: "anthropic/claude-opus-4-8".to_owned(),
+                label: "Claude Opus 4.8".to_owned(),
+                description: "anthropic/claude-opus-4-8".to_owned(),
+                reasoning_efforts: Some(vec!["high".to_owned()]),
+            }],
+            source: coducktor_contract::ModelCatalogSource::Live,
+            stale: false,
+            reason: None,
+        };
+
+        let models = models_for_runner(Runner::Omp, Some(&catalog), &[]);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[1].id, "anthropic/claude-opus-4-8");
+        assert_eq!(models[1].reasoning_efforts, Some(vec!["high".to_owned()]));
+    }
+
+    #[test]
     fn model_catalog_is_never_reused_for_another_runner() {
         let catalog = RunnerModelCatalogResponse {
             runner: Runner::Codex,

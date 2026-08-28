@@ -744,15 +744,19 @@ pub enum ModelDiscoveryRunner {
     Codex,
     #[serde(rename = "opencode")]
     OpenCode,
+    Omp,
 }
 
 /// The host-discovered model runners.
-pub const MODEL_DISCOVERY_RUNNERS: [ModelDiscoveryRunner; 2] =
-    [ModelDiscoveryRunner::Codex, ModelDiscoveryRunner::OpenCode];
+pub const MODEL_DISCOVERY_RUNNERS: [ModelDiscoveryRunner; 3] = [
+    ModelDiscoveryRunner::Codex,
+    ModelDiscoveryRunner::OpenCode,
+    ModelDiscoveryRunner::Omp,
+];
 
 /// Whether a runner has a host-discovered model catalog.
 pub fn runner_discovers_models(runner: Runner) -> bool {
-    matches!(runner, Runner::Codex | Runner::OpenCode)
+    matches!(runner, Runner::Codex | Runner::OpenCode | Runner::Omp)
 }
 
 /// `RunnerModelOption` contract shape.

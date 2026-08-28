@@ -1970,16 +1970,17 @@ impl InProcessEngine {
     // ---- host model catalog -----------------------------------------------------------------
 
     /// A 5-minute-TTL-cached host-discovered model catalog for
-    /// `codex`/`opencode` (`claude`/`pi` have no discovery path and are rejected, matching
+    /// `codex`/`opencode`/`omp` (`claude`/`pi` have no discovery path and are rejected, matching
     /// `runner_discovers_models`). Live discovery shells out to the real CLI; a failure falls
     /// back to the last good cached catalog (stale-but-something beats nothing).
     pub async fn models(&self, runner: Runner) -> Result<RunnerModelCatalogResponse, EngineError> {
         let runner = match runner {
             Runner::Codex => ModelDiscoveryRunner::Codex,
             Runner::OpenCode => ModelDiscoveryRunner::OpenCode,
-            Runner::Claude | Runner::Pi | Runner::Omp => {
+            Runner::Omp => ModelDiscoveryRunner::Omp,
+            Runner::Claude | Runner::Pi => {
                 return Err(EngineError::Conflict {
-                    reason: "runner must be codex or opencode".to_owned(),
+                    reason: "runner must be codex, opencode, or omp".to_owned(),
                 });
             }
         };
@@ -2005,6 +2006,7 @@ impl InProcessEngine {
         let discovered = match runner {
             ModelDiscoveryRunner::Codex => discover_codex_models(&self.repo_root).await,
             ModelDiscoveryRunner::OpenCode => discover_opencode_models(&self.repo_root).await,
+            ModelDiscoveryRunner::Omp => discover_omp_models(&self.repo_root).await,
         };
         let (models, source, stale, reason) = match discovered {
             Ok(models) => (models, ModelCatalogSource::Live, false, None),
@@ -3653,6 +3655,7 @@ fn model_catalog_reason(runner: ModelDiscoveryRunner) -> String {
         ModelDiscoveryRunner::OpenCode => {
             "OpenCode model discovery is temporarily unavailable".to_owned()
         }
+        ModelDiscoveryRunner::Omp => "OMP model discovery is temporarily unavailable".to_owned(),
     }
 }
 
@@ -3667,6 +3670,7 @@ fn model_catalog_wire(
         runner: match runner {
             ModelDiscoveryRunner::Codex => Runner::Codex,
             ModelDiscoveryRunner::OpenCode => Runner::OpenCode,
+            ModelDiscoveryRunner::Omp => Runner::Omp,
         },
         models,
         source,
@@ -3781,6 +3785,63 @@ async fn discover_opencode_models(repo_root: &Path) -> Result<Vec<RunnerModelOpt
         return Err(());
     }
     parse_opencode_models(&String::from_utf8(stdout).map_err(|_| ())?)
+}
+
+fn parse_omp_models(stdout: &str) -> Result<Vec<RunnerModelOption>, ()> {
+    let value: Value = serde_json::from_str(stdout).map_err(|_| ())?;
+    let entries = value.get("models").and_then(Value::as_array).ok_or(())?;
+    let mut models = Vec::new();
+    let mut selectors = std::collections::BTreeSet::new();
+    for entry in entries {
+        let object = entry.as_object().ok_or(())?;
+        let selector = object
+            .get("selector")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(())?
+            .to_owned();
+        if !selectors.insert(selector.clone()) {
+            continue;
+        }
+        if models.len() >= MAX_DISCOVERED_MODELS {
+            return Err(());
+        }
+        let label = object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&selector)
+            .to_owned();
+        let reasoning_efforts =
+            parse_codex_reasoning_efforts(object.get("thinking").filter(|value| !value.is_null()))?;
+        models.push(RunnerModelOption {
+            id: selector.clone(),
+            label,
+            description: selector,
+            reasoning_efforts,
+        });
+    }
+    Ok(models)
+}
+
+async fn discover_omp_models(repo_root: &Path) -> Result<Vec<RunnerModelOption>, ()> {
+    let executable = provider_executable(Runner::Omp);
+    let mut child = tokio::process::Command::new(executable)
+        .args(["models", "--json"])
+        .current_dir(repo_root)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| ())?;
+    let (stdout, status) = read_bounded_stdout(&mut child).await?;
+    if !status.success() {
+        return Err(());
+    }
+    parse_omp_models(&String::from_utf8(stdout).map_err(|_| ())?)
 }
 
 async fn write_codex_message(
@@ -6661,6 +6722,47 @@ mod tests {
     }
 
     #[test]
+    fn omp_model_catalog_parser_preserves_selectors_names_and_thinking_levels() {
+        let models = parse_omp_models(
+            r#"{
+                "models": [
+                    {
+                        "provider": "anthropic",
+                        "id": "claude-opus-4-8",
+                        "selector": "anthropic/claude-opus-4-8",
+                        "name": "Claude Opus 4.8",
+                        "thinking": ["low", "medium", "high"]
+                    },
+                    {
+                        "provider": "openrouter",
+                        "id": "claude-opus-4-8",
+                        "selector": "openrouter/anthropic/claude-opus-4-8",
+                        "name": "Claude Opus 4.8",
+                        "thinking": null
+                    }
+                ]
+            }"#,
+        )
+        .expect("valid OMP model listing");
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "anthropic/claude-opus-4-8");
+        assert_eq!(models[0].label, "Claude Opus 4.8");
+        assert_eq!(models[0].description, "anthropic/claude-opus-4-8");
+        assert_eq!(
+            models[0].reasoning_efforts,
+            Some(vec![
+                "low".to_owned(),
+                "medium".to_owned(),
+                "high".to_owned()
+            ])
+        );
+        assert_eq!(models[1].id, "openrouter/anthropic/claude-opus-4-8");
+        assert_eq!(models[1].reasoning_efforts, None);
+        assert!(parse_omp_models(r#"{"models":[{"selector":""}]}"#).is_err());
+    }
+
+    #[test]
     fn codex_reasoning_efforts_accept_current_objects_and_legacy_strings() {
         let current = json!([
             {"reasoningEffort": "low", "description": "Fast"},
@@ -6689,7 +6791,7 @@ mod tests {
             assert_eq!(
                 error,
                 EngineError::Conflict {
-                    reason: "runner must be codex or opencode".to_owned()
+                    reason: "runner must be codex, opencode, or omp".to_owned()
                 }
             );
         }
