@@ -1,41 +1,106 @@
 # Coducktor
 
-Coducktor is a local terminal cockpit for durable coding-agent conversations. It wraps Claude
-Code, Codex, OpenCode, and pi in one Rust binary, keeps chats scoped to their repository, and
-leaves the selected harness in charge of its own agent loop.
+Coducktor is a local terminal cockpit for durable coding-agent conversations. It runs supported
+agent CLIs in your repositories, keeps their chats and worktrees organized, and leaves each agent
+in charge of its own native loop. `v0.1.0` is an early public test release, not a production-stable
+tool.
 
-One submitted message means one native harness turn. The harness reasons, calls tools, delegates,
-edits, and tests for as long as that turn needs. When it returns, Coducktor records the result and
-waits for the next message. Coducktor does not route between providers, retry by re-prompting the
-model, or run a workflow behind the conversation.
+Precompiled releases support Apple Silicon and Intel macOS, plus glibc-based x86_64 and ARM64
+Linux. Windows, musl Linux, and NixOS are not currently release targets.
 
-## Install and start
+## Install
 
-You need Rust and at least one supported agent CLI. Git is optional for in-place chats; `gh` is
-optional for the GitHub screen.
+### Recommended: precompiled binary
 
-The installer script checks for `rustup` and builds both binaries with `--locked`:
+After `v0.1.0` is published, install the matching GitHub Release binary with:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/blakepiper/coducktor/releases/latest/download/coducktor-tui-installer.sh | sh
+```
+
+The installer detects the operating system and architecture, downloads the matching release
+archive, and installs `coducktor` plus its `duck` short name under `$CARGO_HOME/bin` or
+`~/.cargo/bin`. Release archives have SHA-256 checksum files alongside them. The installer does
+not install or require Rust. Unsupported platforms and incompatible Linux glibc versions fail
+with an explanation. It may print a one-time instruction if its install directory is not already
+on `PATH`.
+
+Launch Coducktor from a repository:
+
+```sh
+cd /path/to/your/repository
+coducktor
+```
+
+`duck` launches the same application. Run `coducktor doctor` to see which local integrations are
+available.
+
+### Alternative: Homebrew
+
+Homebrew is not active yet because the external tap and its release credential do not exist.
+Once they are configured, cargo-dist can generate and publish a `coducktor` formula, and the
+intended command will be:
+
+```sh
+brew install blakepiper/tap/coducktor
+```
+
+Until then, use the precompiled installer above. Homebrew is not required for `v0.1.0`.
+To activate the tap later, the maintainer must create the public
+`blakepiper/homebrew-tap` repository, grant a narrowly scoped token write access to that repo,
+store it here as the `HOMEBREW_TAP_TOKEN` Actions secret, and then add
+`"homebrew"` to `installers` plus `tap = "blakepiper/homebrew-tap"` and
+`publish-jobs = ["homebrew"]` to
+`dist-workspace.toml`, set `formula = "coducktor"` in the package's dist metadata, and regenerate
+the release workflow.
+
+### Build from source
+
+Contributors and users who deliberately want a local build need Git and the Rust toolchain pinned
+in `rust-toolchain.toml`:
 
 ```sh
 git clone https://github.com/blakepiper/coducktor.git
 cd coducktor
 ./install.sh
-coducktor projects add --repo .
-coducktor
 ```
 
-A plain Cargo install works too:
+During development, run `cargo run -p coducktor-tui --` instead of installing. The generic Linux
+release is not compatible with NixOS's non-FHS runtime. NixOS users can currently build from a
+checkout with `./nix-start`; a first-class Nix package is future work.
 
-```sh
-cargo install --path crates/coducktor-tui
-```
+## Agent CLI integrations
 
-Either way, the installed binary is `coducktor`; `duck` is its short alias. During development,
-run it straight from the checkout instead of installing it:
+Agent CLIs are external runtime integrations; Coducktor does not bundle or silently install them.
+Install and authenticate at least one if you want to start agent conversations:
 
-```sh
-cargo run -p coducktor-tui --
-```
+| Integration | Executable | Override | Native transport |
+| --- | --- | --- | --- |
+| Claude Code | `claude` | `DUCK_CLAUDE_BIN` | streaming JSON and session resume |
+| Codex | `codex` | `DUCK_CODEX_BIN` | app-server JSON-RPC |
+| OpenCode | `opencode` | `DUCK_OPENCODE_BIN` | JSON event stream and session resume |
+| pi | `pi` | `DUCK_PI_BIN` | RPC prompt and resume |
+| oh-my-pi | `omp` | `DUCK_OMP_BIN` | RPC prompt and resume |
+
+Coducktor searches `PATH` for each executable unless its `DUCK_*_BIN` variable names another
+path. Every integration is independently optional: a missing or unauthenticated CLI is shown as
+unavailable, while Coducktor and the other integrations continue to work. Authentication and
+provider/model configuration stay with the agent's own CLI. `git` enables repository and worktree
+features; `gh` enables the optional GitHub screen and can be overridden with `DUCK_GH_BIN`.
+Coducktor never loads `.env`; export overrides in your shell. See [`.env.example`](.env.example)
+for all supported variables.
+
+## State and configuration
+
+Repository state lives under `.ai/coducktor/`. The project registry, preferences, scratchpads,
+and usage state live under `~/.coducktor/`, or `DUCK_HOME` when set. State is plain JSON, NDJSON,
+Markdown, and YAML; Coducktor has no database or background service.
+
+One submitted message means one native harness turn. The harness reasons, calls tools, delegates,
+edits, and tests for as long as that turn needs. When it returns, Coducktor records the result and
+waits for the next message. Coducktor does not route between providers, retry by re-prompting the
+model, or run a workflow behind the conversation.
 
 Startup discovers the current repository, registered projects, local skills, Git, agent CLIs, and
 provider health. A missing optional CLI, credential, network connection, Git checkout, or
@@ -66,15 +131,7 @@ conversation closes only when you archive it. Task records from older versions o
 readable, archivable, deletable, and visible to the Git inspection views, but the conversation
 runtime can no longer execute them.
 
-## Harnesses
-
-| Harness | Executable | Native transport |
-| --- | --- | --- |
-| Claude Code | `claude` | streaming JSON first turn, native session resume |
-| Codex | `codex` | app-server JSON-RPC thread and turn calls |
-| OpenCode | `opencode` | JSON event stream with native session resume |
-| pi | `pi` | RPC session with native prompt and resume |
-| oh-my-pi | `omp` | RPC session with native prompt and resume |
+## Harness behavior
 
 The harness runs autonomously under its normal non-interactive contract. Provider-specific
 session IDs are stored with the chat, so later messages, including messages sent after a
@@ -155,13 +212,11 @@ duck run --runner codex --reasoning high --worktree false --git-mode manual \
 
 Run `coducktor <command> --help` for the full generated interface.
 
-## State and configuration
+## State details
 
-Repository state lives under `.ai/coducktor/`; per-user registry, preferences, and usage state
-live under `~/.coducktor/`. Durable state is JSON, NDJSON, Markdown, and YAML: there is no
-database. Startup migrations are ordered, additive, idempotent, and non-blocking. Unknown JSON
-keys and valid siblings survive read-modify-write; a corrupt file stays in place after one warning
-while the application boots with defaults.
+Startup migrations are ordered, additive, idempotent, and non-blocking. Unknown JSON keys and
+valid siblings survive read-modify-write; a corrupt file stays in place after one warning while
+the application boots with defaults.
 
 Coducktor never loads `.env` automatically. Optional environment overrides use the `DUCK_*`
 namespace and are documented in [`.env.example`](.env.example). Project and global defaults are

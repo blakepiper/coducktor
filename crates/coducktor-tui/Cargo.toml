@@ -1,7 +1,10 @@
 [package]
 name = "coducktor-tui"
+description = "A local terminal cockpit for durable coding-agent conversations"
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -61,3 +64,6 @@ harness = false
 [[bench]]
 name = "thread_frame"
 harness = false
+
+[package.metadata.dist]
+display-name = "Coducktor"

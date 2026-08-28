@@ -1,6 +1,8 @@
-# Unreleased
+# Changelog
 
-## Rust terminal release
+## 0.1.0 - 2026-08-28
+
+First public test release of the Rust terminal application.
 
 - Coducktor is now a single Rust binary with `coducktor` and `duck` entrypoints.
 - The interactive cockpit runs in the terminal through an in-process `Engine`.

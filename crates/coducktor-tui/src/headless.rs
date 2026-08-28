@@ -347,9 +347,8 @@ fn usage_provider_label(provider: coducktor_contract::QuotaProvider) -> &'static
 
 /// Inspect the local installation without opening a TUI or a listening socket.
 ///
-/// The update row is intentionally source-first: this build has no package registry or
-/// background updater, so the honest update action is to pull the checkout and rerun
-/// `install.sh`.
+/// This build has no background updater. Point users at the same GitHub Releases page that
+/// hosts the precompiled installer without attempting a network check.
 pub async fn doctor_command(repo_root: PathBuf, json: bool) -> i32 {
     let engine = InProcessEngine::new(repo_root, env!("CARGO_PKG_VERSION"));
     let health = match engine.diagnostic_health().await {
@@ -378,7 +377,7 @@ pub async fn doctor_command(repo_root: PathBuf, json: bool) -> i32 {
             "version": health.version,
             "update": {
                 "available": false,
-                "hint": "source-first install: run git pull and ./install.sh",
+                "hint": "releases: https://github.com/blakepiper/coducktor/releases",
             },
             "repoRoot": health.repo_root,
             "checks": health.checks,
@@ -393,7 +392,7 @@ pub async fn doctor_command(repo_root: PathBuf, json: bool) -> i32 {
     } else {
         println!("coducktor doctor");
         println!("  version: {}", health.version);
-        println!("  update: source-first install — run `git pull && ./install.sh`");
+        println!("  updates: https://github.com/blakepiper/coducktor/releases");
         println!("  repo: {}", health.repo_root);
         println!("  agent CLIs: {available_agents}/{agent_count} available");
         for check in &health.checks {

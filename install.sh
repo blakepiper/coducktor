@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Build coducktor (and its `duck` alias) from this checkout and install both onto
-# PATH via `cargo install`. Source-first by design (spec "Resolved decisions"):
-# no curl-pipe-to-shell hosting, no release artifacts, no auto-update check.
-# `git pull && ./install.sh` again is the update mechanism.
+# Developer source installer: build coducktor (and its `duck` alias) from this
+# checkout and install both onto PATH via `cargo install`. Normal users should
+# use the precompiled GitHub Release installer documented in README.md.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -12,6 +12,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
+homepage = "https://github.com/blakepiper/coducktor"
 license = "MIT"
 repository = "https://github.com/blakepiper/coducktor"
 rust-version = "1.97.1"
@@ -64,3 +65,8 @@ regex = "1"
 serde_yaml_ng = "0.10"
 unicode-width = "0.2"
 sha2 = "0.10"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
