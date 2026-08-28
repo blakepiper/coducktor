@@ -5,8 +5,10 @@ Status: proposed (2026-08-28)
 Audience: the implementation agent. Work directly on `main`, preserve unrelated worktree changes,
 commit each completed phase, and push `origin main` as required by `AGENTS.md`.
 
-Scope: the *watching the agent work* surface — the conversation transcript in
-`crates/coducktor-tui`. The composer, header, routing, engine seam, durable formats, and Git/GitHub
+Scope: the two surfaces where the user watches agents work — the conversation transcript
+(`screens/thread/`, `widgets/transcript.rs`) and the chat browser that lists conversations
+(`screens/tasks.rs`, `screens/global_tasks.rs`, `widgets/task_cards.rs`), both in
+`crates/coducktor-tui`. The composer, routing, engine seam, durable formats, and Git/GitHub
 screens are untouched except where this document names an exact file and symbol.
 
 This is a presentation specification. It borrows the visual grammar of the OMP (oh-my-pi) harness,
@@ -49,7 +51,7 @@ The transcript today is a flat list of styled single lines. It reads like a log 
 a transcript of **cards**: bordered, status-tinted, semantically summarized blocks that animate
 while they are alive and go quiet when they finish.
 
-Concretely, coducktor adopts six things from OMP, in this order of value:
+Concretely, coducktor adopts seven things from OMP, in this order of value:
 
 1. **A framed card primitive** — rounded box, status-colored border, status-tinted background,
    a header row embedded in the top border, and `├─ Output ─┤` section dividers.
@@ -65,6 +67,9 @@ Concretely, coducktor adopts six things from OMP, in this order of value:
    renderer instead of a raw text dump.
 6. **A thinking indicator** — italic dim reasoning text plus an animated sparkle header carrying
    elapsed time.
+7. **One card language across both surfaces** — the chat browser's conversation list is rebuilt on
+   the same primitive, so a running chat in the list and a running tool in the transcript are
+   recognizably the same object.
 
 ### 1.1 Non-goals
 
@@ -214,7 +219,7 @@ Not available and **out of scope for this plan**: structured `diffs[]`/`location
 tool output deltas, `stopReason`, context-window usage, subagent `parent_item_id`. The typed v2
 mappers in `coducktor-runners/src/{claude,codex,opencode,pi}.rs` already produce all of these and
 are golden-tested against `fixtures/`, but no runner calls them. Wiring them is a separate
-specification; see §12.
+specification; see §18.
 
 Phase 6's edit/diff card therefore derives its diff **client-side from the tool's own arguments**
 (`old_string`/`new_string`/`content`), which is available on every backend today.
@@ -1059,7 +1064,247 @@ transcript cards are the new reference surface. Add a `CHANGELOG.md` entry.
 
 ---
 
-## 14. Performance contract
+## 14. Phase 10 — The chat browser
+
+Depends on Phase 1 (glyphs, palette tokens) and Phase 2 (the `Card` primitive). Independent of
+Phases 3–9; it may be implemented immediately after Phase 2 if the transcript work stalls.
+
+### 14.1 What is wrong today
+
+The chat list (`CHATS — <project>` and workspace All Chats) renders a fixed 6-row, square-cornered,
+untinted box per conversation. Reading the current output against `widgets/task_cards.rs`:
+
+| Defect | Cause |
+| --- | --- |
+| Every card looks identical whether idle, running, failed, or needing input | border is `accent` when selected and `border` otherwise (`task_cards.rs:130-137`); state never reaches the border, and there is no fill |
+| Status reads as ASCII noise — `=`, `*`, `?`, `-`, `x`, `/` | `tasks.rs::conversation_glyph` (:170-180) and the duplicate match in `global_tasks.rs:193-200` |
+| `Attention.tone` (`runs_util.rs:41-52`) is computed and thrown away | `TaskCard` carries only `status: &'static str`; the card renderer never colors it |
+| The title line is truncated with `…` and the body repeats the same sentence | `title` and `prompt` are both derived from the first user message (`tasks.rs:150-151`), so the card shows the prompt twice |
+| Timestamp floats mid-header after the title | `activity` is pushed as a trailing header span (`task_cards.rs:174-177`) instead of right-aligned |
+| Metadata is one grey run-on: `opencode/opencode-go/glm-5.3-flash · branch duck/chat-18c` | `metadata.join("  ·  ")` in one `soft_fg` paragraph (`task_cards.rs:196-207`); harness, model, branch, and PR are built as bare strings (`tasks.rs:126-137`) |
+| Cards waste vertical space — a 1-line prompt still costs 6 rows, leaving half the screen empty | `let height = 6.min(...)` (`task_cards.rs:127`) and `let visible = inner.height / 6` (:90) |
+| Unread is invisible in practice | `unread` only bolds the title (`task_cards.rs:143-149`) |
+| Selection is a `▶` in the content area, not a rail | `task_cards.rs:142` |
+| Group headings are bare words with no rule and no count; the `[+ New chat]` action floats over the same row | `task_cards.rs:105-120` |
+| Nothing animates except a glyph swap on Running | `task_cards.rs:150-154` |
+
+### 14.2 Target
+
+```
+── RECENT · 2 ─────────────────────────────────────────────── [+ New chat] ──
+
+▎╭─── ⣟ We need animations for "the harness is working" ────────── 13h ──╮
+▎│ seen inside the thread view and for the 'running' state when looking  │
+▎│ at all the chats either in a project or in all chat.                  │
+▎│ ❯ opencode · glm-5.3-flash   ⑂ duck/chat-18c                          │
+▎╰────────────────────────────────────────────────────────────────────────╯
+
+ ╭─── ● ⏳ We need to be able to open individual chats ─────────── 13h ──╮
+ │ from the all chats view. Also, in the composer worktree and git are    │
+ │ not independent right now.                                            │
+ │ ❯ opencode · glm-5.3-flash                                            │
+ ╰────────────────────────────────────────────────────────────────────────╯
+```
+
+- `▎` in `accent` is the selection rail, outside the box, so selection never reflows content.
+- `●` in `accent` marks unread.
+- The header icon is the state glyph, or the shared spinner frame while running.
+- The age is right-aligned inside the top border as a meta chip.
+- The prompt body no longer repeats the title.
+- Metadata is one row of typed chips, each with its own glyph and color.
+
+### 14.3 Files
+
+- `crates/coducktor-tui/src/widgets/task_cards.rs`
+- `crates/coducktor-tui/src/screens/tasks.rs`
+- `crates/coducktor-tui/src/screens/global_tasks.rs`
+- `crates/coducktor-tui/src/screens/chats_util.rs`
+- `crates/coducktor-tui/src/glyphs.rs`
+
+### 14.4 Change
+
+**14.4.1 Give `TaskCard` typed state instead of pre-rendered strings.**
+
+```rust
+/// What the card is doing. Drives border, fill, icon, and whether the icon animates — replacing
+/// the old `glyph: &'static str` + `animated: bool` + `status: &'static str` triple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardState {
+    NeedsInput,
+    Running,
+    Queued,
+    Idle,
+    Failed,
+    Cancelled,
+}
+
+/// One metadata chip. The renderer owns the glyph and color so every screen agrees.
+#[derive(Debug, Clone)]
+pub enum CardChip {
+    Harness { harness: String, model: Option<String> },
+    Branch(String),
+    Worktree(String),
+    PullRequest(u64),
+    Project(String),
+    Custom(String),
+}
+
+pub struct TaskCard {
+    pub key: String,
+    pub group: CardGroup,
+    pub state: CardState,
+    pub title: String,
+    /// The prompt with any leading duplicate of `title` already stripped — see 14.4.4.
+    pub body: String,
+    /// Relative age, e.g. `13h`. Rendered right-aligned in the top border.
+    pub age: String,
+    pub chips: Vec<CardChip>,
+    pub unread: bool,
+}
+```
+
+Delete `glyph`, `animated`, `status`, `prompt`, `activity`, `project`, and `metadata`. Both
+builders (`tasks.rs::build_conversation_cards` and the legacy-run builder below it, plus the two
+equivalents in `global_tasks.rs`) map into the new shape. `conversation_glyph` in `tasks.rs:170`
+and its copy in `global_tasks.rs:193` are deleted — state now carries that information.
+
+**14.4.2 State styling**, a single table in `task_cards.rs` so both screens cannot drift:
+
+| `CardState` | Icon | Border | Fill | Badge |
+| --- | --- | --- | --- | --- |
+| `NeedsInput` | `glyphs().pending` (`◌`) | `waiting` | `card_pending_bg` | `⟦needs you⟧` in `waiting` |
+| `Running` | `spinner::status_frame(tick)` | `accent` | `card_pending_bg` | none |
+| `Queued` | `glyphs().collapsed` (`▸`) | `queued` | none | `⟦queued⟧` in `queued` |
+| `Idle` | `glyphs().bullet` (`•`) | `card_quiet_border` | none | none |
+| `Failed` | `glyphs().error` (`✘`) | `failed` | `card_error_bg` | `⟦failed⟧` in `failed` |
+| `Cancelled` | `glyphs().warning` (`⚠`) | `cancelled` | none | `⟦cancelled⟧` in `cancelled` |
+
+`Idle` deliberately has no badge and no fill: most cards are idle, and a list where every card
+shouts is a list where nothing does. The word `idle` disappears entirely.
+
+`Attention` (`runs_util.rs:41`) stops being a display type for cards; `chats_util::attention` is
+still used by the thread header and stays as it is. Add
+`chats_util::card_state(&ConversationIndexEntry) -> CardState` next to `group()`, as the single
+pure mapping from `ConversationState`, and unit-test it against every `ConversationState` variant.
+
+**14.4.3 Chip rendering.** Chips join with two spaces (not ` · `), each as `glyph + " " + text`:
+
+| Chip | Glyph | Color |
+| --- | --- | --- |
+| `Harness` | `glyphs::tool_icon(ToolKind::Execute)` (`❯`) | harness name in `accent`, ` · ` in `dim`, model in `soft_fg` |
+| `Branch` | `⑂` (ASCII `br`) | `soft_fg` |
+| `Worktree` | `⌂` (ASCII `wt`) | `soft_fg` |
+| `PullRequest` | `⇅` (ASCII `PR`) | `review` |
+| `Project` | `▸` | `accent` |
+| `Custom` | none | `soft_fg` |
+
+Splitting harness from model fixes the unreadable `opencode/opencode-go/glm-5.3-flash` in the
+current output — that string is `harness + "/" + model` where the model itself already contains a
+slash. Never re-join them with `/`.
+
+Chips are dropped from the right when the row would overflow, and a trailing dim `+N` is appended
+for the dropped ones. Never truncate a chip mid-word.
+
+**14.4.4 Kill the title/body duplication.** The title and the prompt preview both come from the
+first user message, so today the card prints the same sentence twice. Add to `task_cards.rs`:
+
+```rust
+/// The body text for a card whose `title` was derived from the same prompt: the remainder after
+/// the title's own text, or nothing when the prompt adds nothing. Comparison is on trimmed,
+/// whitespace-collapsed text so a re-wrapped preview still matches.
+pub fn body_after_title(title: &str, prompt: &str) -> String;
+```
+
+Rules: strip a trailing `…`/`...` from `title` before comparing; if the normalized prompt starts
+with the normalized title, return the remainder with leading punctuation and whitespace trimmed;
+if the remainder is under 3 characters, return an empty string. Both builders call this instead of
+assigning `prompt` directly. Unit-test the exact case from the current screenshot.
+
+**14.4.5 Variable card height.** Replace the fixed 6 with a measured height:
+
+```rust
+/// Rows this card needs at `width`: 2 border + up to `BODY_MAX_ROWS` wrapped body rows +
+/// 1 chip row when it has chips. A card with neither body nor chips is 2 rows — a title strip.
+pub fn card_height(card: &TaskCard, width: u16) -> u16;
+
+pub const BODY_MAX_ROWS: u16 = 3;
+```
+
+Scroll math (`task_cards.rs:86-95`) currently divides by the constant 6. Rewrite it to walk
+measured heights: keep `scroll` a card index, and advance it until the selected card's measured
+bottom fits inside `inner.height`. Write a test that a selected card at the end of a long list is
+fully visible at heights 10, 24, and 60.
+
+Insert one blank row between cards. The current layout has none, which is why the list reads as a
+single ruled block rather than a set of cards.
+
+**14.4.6 Group headings become rules.** Replace the bare label
+(`task_cards.rs:105-113`) with a full-width rule carrying the count, matching the transcript's
+run-end banner grammar (`widgets/run_end.rs::banner_line`):
+
+```
+── RECENT · 2 ───────────────────────────────────────────── [+ New chat] ──
+```
+
+The label is bold `soft_fg`; the count is dim; the rule uses `glyphs().horizontal` in
+`card_quiet_border`. `render_header_action` keeps its current right-aligned placement and hitmap
+registration (`task_cards.rs:213-238`) but now overlays the rule instead of empty space, so
+reserve its width before drawing the right-hand run of horizontals.
+
+`CardGroup::Working` and `CardGroup::NeedsYou` headings additionally show a live count that
+animates nothing — the per-card spinners already carry motion. Do not animate the heading.
+
+**14.4.7 Selection and unread.**
+
+- Selection: a `▎` rail in `accent` painted in column `inner.x` for the card's full height, and
+  the card box shifted one column right. Drop the `▶` marker at `task_cards.rs:142`.
+- Unread: `glyphs().bullet` (`●`) in `accent` immediately before the title, plus the existing bold
+  title. Reading a chat clears it through the existing `seen_at` path — no new state.
+
+**14.4.8 Empty state.** `task_cards.rs:76-84` renders the hint flush at the top-left. Center it
+vertically, style it `soft_fg`, and render a focusable `[+ New chat]` beneath it so the empty
+project is not a dead end.
+
+**14.4.9 Screen chrome.** In `tasks.rs::render` (:485) the block title is `CHATS — {project}`,
+which renders jammed against the corner. Pad and style it: ` CHATS · {project} ` with `CHATS` bold
+in `soft_fg` and the project in `accent`. Same treatment for the All Chats title in
+`global_tasks.rs`.
+
+### 14.5 Acceptance
+
+- A running chat's card has an accent border, a tinted fill, and an animating braille icon in
+  phase with the transcript's spinner.
+- A failed chat is red-bordered with a `⟦failed⟧` badge; an idle chat is quiet with no status word.
+- No card prints the same sentence in its title and its body.
+- Harness and model are separate, readable chips; branch and PR have their own glyphs.
+- Cards are 2–6 rows tall depending on content; ten short chats fit where four fit today.
+- The selected card shows a left rail and stays fully visible when it is the last in the list.
+- `LANG=C` renders the same layout with ASCII chrome and identical row counts.
+
+### 14.6 Verify
+
+```
+cargo test -p coducktor-tui --lib widgets::task_cards
+cargo test -p coducktor-tui --lib screens::tasks
+cargo test -p coducktor-tui --lib screens::global_tasks
+cargo test -p coducktor-tui --lib screens::chats_util
+cargo insta review
+```
+
+Snapshots that will churn and must be reviewed line by line:
+
+```
+crates/coducktor-tui/src/screens/snapshots/coducktor_tui__screens__tasks__tests__tasks_table_{80x24,120x40,200x60}.snap
+crates/coducktor-tui/src/screens/snapshots/coducktor_tui__screens__global_tasks__tests__global_tasks_{80x24,120x40,200x60}.snap
+crates/coducktor-tui/src/snapshots/coducktor_tui__app__tests__tasks_{80x24,120x40,200x60}.snap
+```
+
+Review each for: no `idle` text, no duplicated prompt, a right-aligned age, one blank row between
+cards, and no card taller than its content needs.
+
+---
+
+## 15. Performance contract
 
 The transcript re-paints its visible window every frame; that is unchanged and is what makes
 animation free. The risks this plan introduces, and their mitigations:
@@ -1080,14 +1325,15 @@ blocks the phase.
 
 ---
 
-## 15. Test plan
+## 16. Test plan
 
 Per phase, in addition to the phase's own `Verify` block:
 
 1. **Unit** — every new pure function (`Card::height`, glyph fallback, body renderers, tier
    selection) gets a direct test. Bodies get a malformed-input test.
 2. **Height/paint agreement** — a property-style test over widths `[20, 40, 80, 120, 200]` and
-   every `TranscriptItem` variant asserting `height(w)` equals the number of rows `paint` writes.
+   every `TranscriptItem` variant asserting `height(w)` equals the number of rows `paint` writes,
+   and the same property for `task_cards::card_height` against every `CardState`.
 3. **Snapshots** — the three existing transcript snapshot tests are extended, not replaced. Add
    the new fixtures (running bash card, failed card, edit card with diff, todo card) to
    `snapshot_fixture` (`transcript.rs:1402`) so all three widths and both themes cover them.
@@ -1096,6 +1342,8 @@ Per phase, in addition to the phase's own `Verify` block:
    `docs/tui/terminals.md`. Headless snapshots are **not** evidence for an interactive terminal
    (`AGENTS.md`). At minimum confirm: rounded corners render, the background tint does not bleed
    past the card, italic reasoning is legible, and the ASCII fallback is exercised with `LANG=C`.
+   Check both surfaces: the transcript and the chat browser (Phase 10), including a project with
+   a running chat so the two spinners can be seen to be in phase.
 
 Final gate before each commit:
 
@@ -1110,7 +1358,7 @@ cargo fmt --all --check
 
 ---
 
-## 16. Acceptance checklist
+## 17. Acceptance checklist
 
 The work is done when all of these are true in a real terminal:
 
@@ -1125,6 +1373,11 @@ The work is done when all of these are true in a real terminal:
 - [ ] One activity line above the composer shows the current tool, elapsed time, and `esc to stop`;
       the transcript title no longer duplicates it.
 - [ ] Three simultaneous running cards in a 10-row viewport fold instead of pushing the composer.
+- [ ] The chat browser shows state on the card border and icon; the word `idle` is gone.
+- [ ] No chat card prints the same sentence as both its title and its body.
+- [ ] Chat cards are content-sized, separated by one blank row, and group headings are counted
+      rules.
+- [ ] Harness and model are separate chips; branch and PR carry their own glyphs.
 - [ ] `LANG=C` produces a readable ASCII transcript with identical row counts.
 - [ ] A 16-color terminal produces a readable, tint-free transcript.
 - [ ] The 12k-event frame test passes and `thread_frame` has not regressed more than 25 %.
@@ -1132,7 +1385,7 @@ The work is done when all of these are true in a real terminal:
 
 ---
 
-## 17. Deliberately out of scope
+## 18. Deliberately out of scope
 
 These are real gaps, but they are data-plumbing projects, not UI polish, and each deserves its own
 specification:
