@@ -189,20 +189,30 @@ fn parse_workspace_event(event: EngineEvent, fallback_project: &str) -> Option<W
 }
 
 /// Apply one bounded workspace receiver batch. Repeated whole-record updates for the same run
-/// are last-update-wins within a frame; lifecycle deletes and other event kinds retain their
-/// ordering by flushing the pending records before they apply.
+/// and status are last-update-wins within a frame. Status transitions retain their ordering so
+/// fast runs still trigger transition-driven notifications; lifecycle deletes and other event
+/// kinds flush the pending records before they apply.
 fn apply_workspace_event_batch(
     app: &mut App,
     events: impl IntoIterator<Item = WorkspaceEvent>,
 ) -> usize {
-    let mut pending_runs = BTreeMap::<(String, String), ApiRun>::new();
+    let mut pending_runs = BTreeMap::<(String, String), Vec<ApiRun>>::new();
     let mut coalesced = 0;
     for event in events {
         match event {
             WorkspaceEvent::Run { project, run } => {
                 let key = (project, run.record.id.clone());
-                if pending_runs.insert(key, run).is_some() {
+                let updates = pending_runs.entry(key).or_default();
+                if updates
+                    .last()
+                    .is_some_and(|pending| pending.record.status == run.record.status)
+                {
+                    if let Some(pending) = updates.last_mut() {
+                        *pending = run;
+                    }
                     coalesced += 1;
+                } else {
+                    updates.push(run);
                 }
             }
             event => {
@@ -218,10 +228,15 @@ fn apply_workspace_event_batch(
 
 fn flush_workspace_run_updates(
     app: &mut App,
-    pending_runs: &mut BTreeMap<(String, String), ApiRun>,
+    pending_runs: &mut BTreeMap<(String, String), Vec<ApiRun>>,
 ) {
-    for ((project, _), run) in std::mem::take(pending_runs) {
-        app.apply_workspace_event(WorkspaceEvent::Run { project, run });
+    for ((project, _), runs) in std::mem::take(pending_runs) {
+        for run in runs {
+            app.apply_workspace_event(WorkspaceEvent::Run {
+                project: project.clone(),
+                run,
+            });
+        }
     }
 }
 
@@ -3514,7 +3529,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_workspace_run_updates_are_coalesced_per_frame() {
+    fn repeated_workspace_run_updates_coalesce_without_losing_completion_notifications() {
         let mut app = App::new("main", Theme::detect(), Keymap::default());
         let run = |status| ApiRun {
             record: coducktor_contract::RunRecord {
@@ -3539,17 +3554,25 @@ mod tests {
                 },
                 WorkspaceEvent::Run {
                     project: "main".to_owned(),
+                    run: run(coducktor_contract::RunStatus::Running),
+                },
+                WorkspaceEvent::Run {
+                    project: "main".to_owned(),
                     run: run(coducktor_contract::RunStatus::Done),
                 },
             ],
         );
 
-        assert_eq!(coalesced, 2);
-        assert_eq!(app.runtime_metrics().coalesced_workspace_run_updates, 2);
+        assert_eq!(coalesced, 1);
+        assert_eq!(app.runtime_metrics().coalesced_workspace_run_updates, 1);
         assert_eq!(app.tasks.len(), 1);
         assert_eq!(
             app.tasks[0].record.status,
             coducktor_contract::RunStatus::Done
+        );
+        assert_eq!(
+            app.take_pending_notifications(),
+            vec![("Task finished".to_owned(), "Stream safely".to_owned())]
         );
     }
 
