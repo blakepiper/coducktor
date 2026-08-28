@@ -109,6 +109,15 @@ event inside the composer immediately restored `INSERT · COMPOSER`; typing
 The same sidebar-to-composer transition on an existing chat is covered by the focused mouse
 regression test.
 
+## OMP model catalog smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 120×40 PTY with a disposable
+`DUCK_HOME` and throwaway Git repository against OMP 18.0.9. Selecting the `omp` harness loaded
+the native `omp models --json` catalog into the Model picker: provider-qualified Anthropic,
+OpenAI Codex, and OpenCode Go entries were visible with their display names, and keyboard
+navigation reached and selected the final `opencode-go/qwen3.8-max` entry. The native command
+reported 67 available models, all represented in the picker after the `auto` row.
+
 ## Reproduction shape
 
 The real sessions followed this sequence:
