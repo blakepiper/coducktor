@@ -1,5 +1,6 @@
 ---
 source: crates/coducktor-tui/src/screens/skills.rs
+assertion_line: 415
 expression: terminal.backend().buffer()
 ---
 Buffer {

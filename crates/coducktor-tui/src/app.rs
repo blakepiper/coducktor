@@ -8,7 +8,7 @@ use coducktor_contract::{
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
@@ -405,6 +405,7 @@ enum CommandId {
     Theme,
     New,
     ClearScratchpad,
+    YankScratchpad,
     Help,
     Sidebar,
     Stop,
@@ -414,13 +415,14 @@ enum CommandId {
 }
 
 impl CommandId {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
         Self::Open,
         Self::Back,
         Self::Forward,
         Self::Theme,
         Self::New,
         Self::ClearScratchpad,
+        Self::YankScratchpad,
         Self::Help,
         Self::Sidebar,
         Self::Stop,
@@ -437,6 +439,7 @@ impl CommandId {
             "theme" => Some(Self::Theme),
             "new" => Some(Self::New),
             "clear-scratchpad" => Some(Self::ClearScratchpad),
+            "%y" | "%yank" => Some(Self::YankScratchpad),
             "help" => Some(Self::Help),
             "sidebar" => Some(Self::Sidebar),
             "stop" => Some(Self::Stop),
@@ -455,6 +458,7 @@ impl CommandId {
             Self::Theme => ":theme <dark|lazyvim|lakes>",
             Self::New => ":new",
             Self::ClearScratchpad => ":clear-scratchpad",
+            Self::YankScratchpad => ":%y",
             Self::Help => ":help",
             Self::Sidebar => ":sidebar",
             Self::Stop => ":stop",
@@ -472,6 +476,7 @@ impl CommandId {
             Self::Theme => "switch theme",
             Self::New => "new chat",
             Self::ClearScratchpad => "clear the current scratchpad",
+            Self::YankScratchpad => "copy the entire current scratchpad",
             Self::Help => "open this help",
             Self::Sidebar => "toggle sidebar",
             Self::Stop => "stop the current chat turn",
@@ -2212,6 +2217,7 @@ impl App {
                 self.boot_animation = None;
             } else {
                 boot_animation.render(frame, area, &self.theme, self.animation_tick);
+                paint_unset_background(frame, self.theme.palette.bg);
                 return;
             }
         }
@@ -2229,6 +2235,7 @@ impl App {
         self.render_body(frame, vertical[1]);
         self.render_status(frame, vertical[2]);
         self.render_overlays(frame, area);
+        paint_unset_background(frame, self.theme.palette.bg);
     }
 
     fn render_header(&mut self, frame: &mut Frame<'_>, area: Rect) {
@@ -3498,6 +3505,7 @@ impl App {
             }
             CommandId::New => self.navigate(NavItem::NewTask),
             CommandId::ClearScratchpad => crate::screens::scratchpad::request_clear(self),
+            CommandId::YankScratchpad => crate::screens::scratchpad::copy_all(self),
             CommandId::Help => self.help_open = true,
             CommandId::Sidebar => self.toggle_sidebar(),
             CommandId::Stop => self.apply_thread_command(
@@ -4445,6 +4453,15 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+/// Explicitly paint otherwise-default cells so transparent terminals render the cockpit opaque.
+fn paint_unset_background(frame: &mut Frame<'_>, background: Color) {
+    for cell in &mut frame.buffer_mut().content {
+        if cell.bg == Color::Reset {
+            cell.set_bg(background);
+        }
+    }
+}
+
 trait UppercaseTitle {
     fn uppercase_title(self) -> &'static str;
 }
@@ -4515,6 +4532,24 @@ mod tests {
         assert!(status.contains("PROJ 4.6ms"), "got: {status}");
         assert!(status.contains("REDUCED 256"), "got: {status}");
         assert!(status.contains("DROPPED 3"), "got: {status}");
+    }
+
+    #[test]
+    fn every_rendered_cell_has_an_explicit_background() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.help_open = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| cell.bg != Color::Reset)
+        );
     }
 
     #[test]

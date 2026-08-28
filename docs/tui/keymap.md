@@ -59,6 +59,7 @@ paste, and mouse click/drag remain available for conventional editing.
 | `:archive` | Archive the current eligible chat or legacy record |
 | `:delete` | Delete the current removable record or settings row after confirmation |
 | `:theme <dark\|lazyvim\|lakes>` | Switch theme |
+| `:%y` | Copy the entire open scratchpad to the system clipboard |
 | `:clear-scratchpad` | Clear the current scratchpad after confirmation |
 | `:sidebar` | Toggle the sidebar |
 | `:help` | Open the key and command reference |

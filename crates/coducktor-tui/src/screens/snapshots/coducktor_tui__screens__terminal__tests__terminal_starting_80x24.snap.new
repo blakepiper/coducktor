@@ -1,5 +1,6 @@
 ---
 source: crates/coducktor-tui/src/screens/terminal.rs
+assertion_line: 717
 expression: terminal.backend().buffer()
 ---
 Buffer {

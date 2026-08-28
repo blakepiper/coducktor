@@ -78,6 +78,21 @@ pub fn request_clear(app: &mut App) {
     });
 }
 
+pub fn copy_all(app: &mut App) {
+    copy_all_with(app, clipboard::write_text);
+}
+
+fn copy_all_with(app: &mut App, write_text: impl FnOnce(&str) -> Result<(), String>) {
+    if !matches!(app.route(), Route::Scratchpad { .. }) {
+        app.notice = Some("open the scratchpad before copying it".to_owned());
+        return;
+    }
+    app.notice = Some(match write_text(&app.scratchpad_ui.editor.text) {
+        Ok(()) => "copied scratchpad to clipboard".to_owned(),
+        Err(error) => error,
+    });
+}
+
 pub(crate) fn clear_after_confirmation(app: &mut App, project: &str) {
     if app.scratchpad_ui.project != project {
         return;
@@ -548,6 +563,37 @@ mod tests {
             PendingAction::SaveScratchpad { project, content }
                 if project == "main" && content.is_empty()
         )));
+    }
+
+    #[test]
+    fn percent_y_copies_the_entire_open_scratchpad() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        open(&mut app, "main");
+        app.scratchpad_ui.editor.set_text("alpha\nbeta");
+        let mut copied = String::new();
+
+        copy_all_with(&mut app, |text| {
+            copied = text.to_owned();
+            Ok(())
+        });
+
+        assert_eq!(copied, "alpha\nbeta");
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("copied scratchpad to clipboard")
+        );
+    }
+
+    #[test]
+    fn percent_y_requires_an_open_scratchpad() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+
+        app.execute_command("%y");
+
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("open the scratchpad before copying it")
+        );
     }
 
     #[test]
