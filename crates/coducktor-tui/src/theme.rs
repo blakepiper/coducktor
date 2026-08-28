@@ -93,6 +93,14 @@ pub struct ThemePalette {
     pub done: Color,
     pub failed: Color,
     pub cancelled: Color,
+    /// Card fill while a tool is pending or running.
+    pub card_pending_bg: Color,
+    /// Card fill for a finished, successful tool.
+    pub card_success_bg: Color,
+    /// Card fill for a failed tool.
+    pub card_error_bg: Color,
+    /// Border for a finished card, kept quieter than live-card borders.
+    pub card_quiet_border: Color,
 }
 
 /// A named palette plus the capability used to quantize it.
@@ -156,6 +164,14 @@ fn lakes_palette(capability: ColorCapability) -> ThemePalette {
         done: capability.color((101, 62, 0), 58, 2),
         failed: capability.color((86, 43, 0), 52, 1),
         cancelled: capability.color((127, 121, 116), 243, 8),
+        card_pending_bg: card_color(capability, blend((245, 228, 216), (128, 95, 54), 0.06), 254),
+        card_success_bg: card_color(capability, (246, 231, 220), 254),
+        card_error_bg: card_color(capability, blend((245, 228, 216), (86, 43, 0), 0.08), 224),
+        card_quiet_border: card_color(
+            capability,
+            blend((245, 228, 216), (184, 171, 162), 0.65),
+            250,
+        ),
     }
 }
 
@@ -184,6 +200,26 @@ fn palette(
         done: capability.color((120, 205, 135), 78, 2),
         failed: capability.color((245, 105, 105), 203, 1),
         cancelled: capability.color((125, 130, 140), 243, 8),
+        card_pending_bg: card_color(capability, blend(bg, accent, 0.10), 236),
+        card_success_bg: card_color(capability, surface, 236),
+        card_error_bg: card_color(capability, blend(bg, (240, 110, 110), 0.14), 52),
+        card_quiet_border: card_color(capability, blend(bg, border, 0.65), 238),
+    }
+}
+
+/// Mix `top` into `base` at `alpha`.
+fn blend(base: (u8, u8, u8), top: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
+    let mix = |base: u8, top: u8| {
+        (f32::from(base) + (f32::from(top) - f32::from(base)) * alpha).round() as u8
+    };
+    (mix(base.0, top.0), mix(base.1, top.1), mix(base.2, top.2))
+}
+
+fn card_color(capability: ColorCapability, rgb: (u8, u8, u8), indexed: u8) -> Color {
+    match capability {
+        ColorCapability::TrueColor => Color::Rgb(rgb.0, rgb.1, rgb.2),
+        ColorCapability::Ansi256 => Color::Indexed(indexed),
+        ColorCapability::Ansi16 => Color::Reset,
     }
 }
 

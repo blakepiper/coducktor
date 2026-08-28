@@ -5,8 +5,7 @@
 //! scrolling back through a multi-turn thread shows where each run terminated). Both go through
 //! [`banner_line`] so the two markers stay one visual language.
 
-use std::env;
-use std::sync::OnceLock;
+use crate::glyphs::unicode_supported;
 
 use coducktor_contract::RunStatus;
 use ratatui::style::{Modifier, Style};
@@ -74,18 +73,6 @@ impl RunOutcome {
             Self::Review => theme.palette.review,
         }
     }
-}
-
-/// Whether the terminal's locale advertises UTF-8. Only the box-drawing and geometric glyphs
-/// (`─ ✓ × ⊘ ◆`) degrade on a `false`; the `·` separator is Latin-1 and stays either way.
-fn unicode_supported() -> bool {
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(|| {
-        ["LC_ALL", "LC_CTYPE", "LANG"]
-            .iter()
-            .find_map(|key| env::var(key).ok().filter(|value| !value.is_empty()))
-            .is_some_and(|value| value.to_ascii_lowercase().contains("utf"))
-    })
 }
 
 /// `───── ✓ RUN COMPLETE · 4m12s · 18.2k tok ─────`, centered in `width`.

@@ -9,6 +9,7 @@ pub mod boot_animation;
 pub mod cli;
 pub mod clipboard;
 pub mod diff;
+pub mod glyphs;
 pub mod headless;
 pub mod image;
 pub mod input;
