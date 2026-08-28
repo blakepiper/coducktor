@@ -32,6 +32,9 @@
 - Chats and All Chats now use state-colored variable-height cards with typed metadata chips,
   unread and selection rails, grouped counts, measured scrolling, and centered empty-state
   creation.
+- Stock composer defaults are now `worktree: off` and `git: auto`, so a fresh install runs in
+  the current checkout and commits at each checkpoint. Existing project or global
+  `composerDefaults` values still win; only the unset case changed.
 
 Any future compatibility change belongs in this section with its migration or
 degradation path. Retired release notes and one-time implementation plans are

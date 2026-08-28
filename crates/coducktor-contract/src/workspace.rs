@@ -38,8 +38,9 @@ pub struct ComposerDefaults {
     pub worktree: Option<bool>,
     pub inherited_autonomous: InheritedAutonomous,
     pub inherited_worktree: bool,
-    /// `true` commits and pushes at each natural checkpoint without asking; `false`/`None`
-    /// (the hard default) leaves git actions to the user via the Task Git screen.
+    /// `true` (the stock default) commits and pushes at each natural checkpoint without
+    /// asking; `false` leaves git actions to the user via the Task Git screen. `None` means
+    /// unset, so the composer applies the stock default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_auto: Option<bool>,
 }

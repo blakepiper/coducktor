@@ -227,11 +227,11 @@ pub fn effective_values(draft: &NewTaskDraft, data: &NewTaskData) -> Effective {
             workspace_defaults
                 .map(|defaults| defaults.worktree.unwrap_or(defaults.inherited_worktree))
         })
-        .unwrap_or(true);
+        .unwrap_or(new_task_form::STOCK_WORKTREE);
     let configured_git_auto = project_defaults
         .and_then(|defaults| defaults.git_auto)
         .or_else(|| workspace_defaults.and_then(|defaults| defaults.git_auto))
-        .unwrap_or(false);
+        .unwrap_or(new_task_form::STOCK_GIT_AUTO);
     let (worktree_on, git_auto_on) = new_task_form::resolve_composer_git_mode(
         has_git,
         draft.worktree,
@@ -1435,7 +1435,9 @@ mod tests {
             app.new_task_ui.composer_focused,
             "hero auto-focuses the composer"
         );
-        assert!(effective_values(&app.new_task_ui.draft, &app.new_task_ui.data).worktree_on);
+        let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
+        assert!(!effective.worktree_on);
+        assert!(effective.git_auto_on);
         for character in "ship the shell".chars() {
             app.handle_event(crossterm::event::Event::Key(key(character)));
         }
@@ -1460,8 +1462,8 @@ mod tests {
                 "text": "ship the shell",
                 "harness": "claude",
                 "baseBranch": "main",
-                "worktree": true,
-                "gitMode": "manual",
+                "worktree": false,
+                "gitMode": "auto",
             })
         );
         // The text is spent; the harness affinity is remembered for the next visit.
@@ -1929,8 +1931,12 @@ mod tests {
         assert_eq!(effective.model, "", "untouched model resolves to auto");
         assert!(effective.has_git);
         assert!(
-            effective.worktree_on,
-            "isolated worktrees are the zero-config default"
+            !effective.worktree_on,
+            "the current checkout is the zero-config default"
+        );
+        assert!(
+            effective.git_auto_on,
+            "automatic git is the zero-config default"
         );
         assert_eq!(effective.base_branch, "main");
     }

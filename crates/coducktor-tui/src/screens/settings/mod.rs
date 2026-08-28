@@ -28,6 +28,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::{App, ConfirmRequest, PendingAction, Route};
 use crate::diff::Highlighter;
+use crate::new_task_form;
 use crate::screens::runs_util::{compact_tokens, format_cost};
 use crate::theme::{Theme, ThemeName};
 use crate::widgets::editor::Editor;
@@ -329,10 +330,10 @@ fn rows_agents(app: &App) -> Vec<Row> {
     let project_composer = config.composer_defaults.as_ref();
     let worktree = composer
         .map(|defaults| defaults.worktree.unwrap_or(defaults.inherited_worktree))
-        .unwrap_or(true);
+        .unwrap_or(new_task_form::STOCK_WORKTREE);
     let git_auto = composer
         .and_then(|defaults| defaults.git_auto)
-        .unwrap_or(false);
+        .unwrap_or(new_task_form::STOCK_GIT_AUTO);
     vec![
         row("Base branch", opt_str(&config.base_branch)),
         row(
@@ -382,7 +383,7 @@ fn rows_global_agents(app: &App) -> Vec<Row> {
     let agent = &workspace.agent_defaults;
     let composer = &workspace.composer_defaults;
     let worktree = composer.worktree.unwrap_or(composer.inherited_worktree);
-    let git_auto = composer.git_auto.unwrap_or(false);
+    let git_auto = composer.git_auto.unwrap_or(new_task_form::STOCK_GIT_AUTO);
     vec![
         row(
             "Default runner",
@@ -1268,7 +1269,7 @@ fn cycle_default_worktree(app: &mut App) {
                 .worktree
                 .unwrap_or(config.composer_defaults.inherited_worktree)
         })
-        .unwrap_or(true);
+        .unwrap_or(new_task_form::STOCK_WORKTREE);
     put_composer_defaults(
         app,
         ComposerDefaultsPatch {
@@ -1284,7 +1285,7 @@ fn cycle_default_git_auto(app: &mut App) {
         .workspace_config
         .as_ref()
         .and_then(|config| config.composer_defaults.git_auto)
-        .unwrap_or(false);
+        .unwrap_or(new_task_form::STOCK_GIT_AUTO);
     put_composer_defaults(
         app,
         ComposerDefaultsPatch {

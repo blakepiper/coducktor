@@ -386,6 +386,14 @@ pub fn started_conversation_id(
     response.conversation.id.clone()
 }
 
+/// The composer's stock worktree setting when neither the project nor the workspace has an
+/// opinion: run in the checkout the user already has open.
+pub const STOCK_WORKTREE: bool = false;
+
+/// The composer's stock Git mode when neither the project nor the workspace has an opinion:
+/// commit at each natural checkpoint so work is never left uncommitted.
+pub const STOCK_GIT_AUTO: bool = true;
+
 /// Resolve the worktree and Git-mode pair in precedence order: hard constraints first, then
 /// the explicit draft choice, then configured defaults. The two settings are independent —
 /// git auto may run without a managed worktree, committing into the current checkout.
