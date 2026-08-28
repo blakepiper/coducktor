@@ -1824,15 +1824,17 @@ fn execute_pending(
                     async move { engine_for_task.create_skill(&scope, &name).await },
                     move |result| {
                         BackgroundResult::AppUpdate(Box::new(move |app| match result {
-                            Ok(file)
-                                if matches!(app.route(), app::Route::Skills { project: route_project } if route_project == &project) =>
+                            Ok(file) if matches!(app.route(), app::Route::Skills { project: route_project } if route_project == &project) =>
                             {
+                                app.skills_ui.create_pending = false;
                                 crate::screens::ide::open_created_file(app, &project, file);
                             }
                             Ok(file) => {
+                                app.skills_ui.create_pending = false;
                                 app.notice = Some(format!("created {}", file.path));
                             }
                             Err(error) => {
+                                app.skills_ui.create_pending = false;
                                 app.notice = Some(format!("create skill failed: {error}"));
                             }
                         }))

@@ -1,7 +1,6 @@
 //! The Skills screen: a master/detail browser over locally discovered skills:
 //! the list on the left with a source badge (project / global / team), the rendered body on
-//! the right, `/` to filter. Skills are files the user manages with their editor; this screen
-//! reads them.
+//! the right, `/` to filter, and `n` to create a project skill in the built-in editor.
 
 use coducktor_contract::{Skill, SkillSource};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -9,7 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::{App, PendingAction, Route};
 use crate::markdown::RenderCache;
@@ -21,6 +20,9 @@ pub struct SkillsUi {
     pub selected: usize,
     pub query: String,
     pub filter_open: bool,
+    pub create_open: bool,
+    pub create_name: String,
+    pub create_pending: bool,
     pub markdown: RenderCache,
 }
 
@@ -32,6 +34,9 @@ impl Default for SkillsUi {
             selected: 0,
             query: String::new(),
             filter_open: false,
+            create_open: false,
+            create_name: String::new(),
+            create_pending: false,
             markdown: RenderCache::new(),
         }
     }
@@ -60,6 +65,28 @@ pub fn open(app: &mut App, project: &str) {
     });
     app.pending.push(PendingAction::LoadSkills {
         project: project.to_owned(),
+    });
+}
+
+pub fn begin_create(app: &mut App) {
+    if app.skills_ui.create_pending {
+        return;
+    }
+    app.skills_ui.create_name.clear();
+    app.skills_ui.create_open = true;
+}
+
+fn submit_create(app: &mut App) {
+    let name = app.skills_ui.create_name.trim().to_owned();
+    if name.is_empty() {
+        app.notice = Some("enter a skill name".to_owned());
+        return;
+    }
+    app.skills_ui.create_open = false;
+    app.skills_ui.create_pending = true;
+    app.pending.push(PendingAction::CreateSkill {
+        project: app.skills_ui.project.clone(),
+        name,
     });
 }
 
@@ -109,36 +136,77 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
-    // The filter line — `/` opens it, matching the tasks tables' filter-mode convention.
     let filter_label = if app.skills_ui.filter_open {
         format!("/ {}", app.skills_ui.query)
     } else {
         "/ to filter skills".to_owned()
     };
+    let create_label = if app.skills_ui.create_pending {
+        "[Creating…]"
+    } else {
+        "[New skill]"
+    };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            filter_label,
-            Style::default().fg(app.theme.palette.soft_fg),
-        ))),
+        Paragraph::new(Line::from(vec![
+            Span::styled(create_label, Style::default().fg(app.theme.palette.fg)),
+            Span::raw("  "),
+            Span::styled(filter_label, Style::default().fg(app.theme.palette.soft_fg)),
+        ])),
         rows[0],
+    );
+    app.hitmap.register(
+        Rect::new(rows[0].x, rows[0].y, create_label.chars().count() as u16, 1),
+        3,
+        crate::input::hitmap::HitAction::SkillsNew,
     );
 
     if app.skills_ui.skills.is_empty() {
         frame.render_widget(
-            Paragraph::new("No skills found.")
+            Paragraph::new("No skills found. Press n to create a project skill.")
                 .style(Style::default().fg(app.theme.palette.soft_fg)),
             rows[1],
         );
-        return;
+    } else {
+        let visible_indices = visible(app);
+        let list_width = (rows[1].width / 2).clamp(30, 44);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(list_width), Constraint::Min(1)])
+            .split(rows[1]);
+        render_list(frame, cols[0], app, &visible_indices);
+        render_detail(frame, cols[1], app, &visible_indices);
     }
-    let visible_indices = visible(app);
-    let list_width = (rows[1].width / 2).clamp(30, 44);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(list_width), Constraint::Min(1)])
-        .split(rows[1]);
-    render_list(frame, cols[0], app, &visible_indices);
-    render_detail(frame, cols[1], app, &visible_indices);
+    if app.skills_ui.create_open {
+        render_create_dialog(frame, area, app);
+    }
+}
+
+fn render_create_dialog(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let width = area.width.min(60);
+    let height = area.height.min(6);
+    let dialog = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("New project skill");
+    let inner = block.inner(dialog);
+    frame.render_widget(Clear, dialog);
+    frame.render_widget(block, dialog);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(app.skills_ui.create_name.as_str()),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Enter create · Esc cancel · name becomes kebab-case",
+                Style::default().fg(app.theme.palette.soft_fg),
+            )),
+        ]),
+        inner,
+    );
 }
 
 fn render_list(frame: &mut Frame<'_>, area: Rect, app: &mut App, visible_indices: &[usize]) {
@@ -272,6 +340,20 @@ pub fn wheel(app: &mut App, up: bool) -> bool {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    if app.skills_ui.create_open {
+        match key.code {
+            KeyCode::Esc => app.skills_ui.create_open = false,
+            KeyCode::Enter => submit_create(app),
+            KeyCode::Backspace => {
+                app.skills_ui.create_name.pop();
+            }
+            KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.skills_ui.create_name.push(character);
+            }
+            _ => {}
+        }
+        return true;
+    }
     if app.skills_ui.filter_open {
         match key.code {
             KeyCode::Esc => {
@@ -290,6 +372,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
     match key.code {
+        KeyCode::Char('n') => {
+            begin_create(app);
+            true
+        }
         KeyCode::Char('j') | KeyCode::Down if app.screen_focus() == 0 => {
             let visible_indices = visible(app);
             if !visible_indices.is_empty() {
@@ -393,6 +479,81 @@ mod tests {
         app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
             KeyCode::Esc,
             KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn new_skill_dialog_queues_creation_with_the_typed_name() {
+        let mut app = app_with_skills();
+        app.execute_command("open /p/main");
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        )));
+        for character in "stale search".chars() {
+            app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            )));
+        }
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        app.execute_command("open /p/main/skills");
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::NONE,
+        )));
+        for character in "Code Review".chars() {
+            app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            )));
+        }
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.skills_ui.create_open);
+        assert!(app.skills_ui.create_pending);
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::CreateSkill { project, name }
+                if project == "main" && name == "Code Review"
+        )));
+    }
+
+    #[test]
+    fn new_skill_dialog_renders_over_an_empty_catalog() {
+        let mut app = app_with_skills();
+        app.skills_ui.skills.clear();
+        begin_create(&mut app);
+        app.skills_ui.create_name = "review".to_owned();
+        let content = render(&mut app, 80, 24);
+        assert!(content.contains("New project skill"));
+        assert!(content.contains("review"));
+    }
+
+    #[test]
+    fn returning_from_the_created_file_refreshes_the_skill_catalog() {
+        let mut app = app_with_skills();
+        app.pending.clear();
+        crate::screens::ide::open_created_file(
+            &mut app,
+            "main",
+            coducktor_contract::IdeFileResponse {
+                path: ".ai/coducktor/skills/review.md".to_owned(),
+                content: "# review\n".to_owned(),
+                size: 9,
+            },
+        );
+        app.pending.clear();
+        app.request_back();
+        assert!(matches!(app.route(), Route::Skills { project } if project == "main"));
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::LoadSkills { project } if project == "main"
         )));
     }
 

@@ -68,11 +68,8 @@ pub trait Engine: Send + Sync {
     async fn runs_index(&self) -> Result<RunsIndexResponse, EngineError>;
     async fn skills(&self, scope: &Scope) -> Result<Vec<Skill>, EngineError>;
     /// Create a project-local skill template and return it as an editable IDE file.
-    async fn create_skill(
-        &self,
-        scope: &Scope,
-        name: &str,
-    ) -> Result<IdeFileResponse, EngineError>;
+    async fn create_skill(&self, scope: &Scope, name: &str)
+    -> Result<IdeFileResponse, EngineError>;
     async fn projects(&self) -> Result<ProjectsResponse, EngineError>;
     async fn register_project(
         &self,

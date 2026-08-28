@@ -785,11 +785,10 @@ impl InProcessEngine {
         let repo_root = self.repo_root.clone();
         let name = name.to_owned();
         tokio::task::spawn_blocking(move || {
-            let path = create_project_skill(&repo_root, &name).map_err(|error| {
-                EngineError::Conflict {
+            let path =
+                create_project_skill(&repo_root, &name).map_err(|error| EngineError::Conflict {
                     reason: error.to_string(),
-                }
-            })?;
+                })?;
             let content = std::fs::read_to_string(repo_root.join(&path)).map_err(io_err)?;
             Ok(IdeFileResponse {
                 path: path.to_string_lossy().into_owned(),

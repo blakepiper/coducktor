@@ -83,6 +83,8 @@ paste, and mouse click/drag remain available for conventional editing.
   ephemeral morale only; they never alter the model, reasoning, priority, token budget, or agent
   request.
 - The IDE tree uses `h` or `Left` for the parent and `l`, `Enter`, or `Right` to open an entry.
+- On Skills, `n` opens the New skill dialog; `Enter` creates its project-local template and opens
+  it in the IDE.
 - In project and Global Settings, `l` moves into values and `h` returns to the section list.
 - Structured question cards and confirmation dialogs retain their displayed local keys.
 

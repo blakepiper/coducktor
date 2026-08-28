@@ -153,3 +153,12 @@ the chat header remained unclipped. At 120×40 the compact `<(o)> ^G PET` contro
 duck and advanced its reaction through `PAT! x1` to `FASTER! x3`; the empty composer and chat
 transcript remained unchanged. The click path is covered by the focused mouse regression test
 because this PTY driver does not emit physical pointer input.
+
+## Skills creation smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 80×24 PTY with a disposable
+`DUCK_HOME` and throwaway Git repository. Opening Skills from the sidebar and pressing `n`
+displayed the new-skill name dialog. Typing `Manual Skill` preserved every character despite the
+Normal-mode navigation grammar; Enter created `.ai/coducktor/skills/manual-skill.md` and opened
+its frontmatter and instruction template in the built-in IDE. `Ctrl-O` returned to Skills, where
+the refreshed catalog listed `manual-skill` with its project badge and rendered body.

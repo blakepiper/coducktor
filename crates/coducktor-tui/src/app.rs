@@ -3140,6 +3140,7 @@ impl App {
             Route::Github { .. } => {
                 self.github_ui.focus == crate::screens::github::GithubFocus::SkillPicker
             }
+            Route::Skills { .. } => self.skills_ui.create_open,
             Route::RepoGit { .. } => self.repo_git_ui.new_branch_open,
             Route::TaskGit { .. } => self.task_git_ui.commit_dialog_open,
             Route::Settings { .. } | Route::GlobalSettings => {
@@ -3248,6 +3249,10 @@ impl App {
     }
 
     fn repeat_search(&mut self, forward: bool) {
+        if forward && matches!(self.route(), Route::Skills { .. }) {
+            crate::screens::skills::begin_create(self);
+            return;
+        }
         if self.last_search.is_empty() {
             return;
         }
