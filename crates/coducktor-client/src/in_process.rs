@@ -67,7 +67,7 @@ use coducktor_core::paths::{
     ProcessEnv, agent_accounts_path, agent_home_paths, expand_tilde, is_absolute_config_dir,
     project_state_dir, project_state_dir_in, real_home_dir,
 };
-use coducktor_core::skills::discover_skills;
+use coducktor_core::skills::{create_project_skill, discover_skills};
 use coducktor_core::workspace::agent_accounts::{
     AgentAccount, has_control_chars, is_valid_account_id, load_agent_accounts,
     merge_write_agent_accounts, supports_profiles,
@@ -157,6 +157,10 @@ const MODEL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const CODEX_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_MODEL_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_DISCOVERED_MODELS: usize = 500;
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+const MAX_CLAUDE_CREDENTIAL_BYTES: usize = 256 * 1024;
+const MAX_CLAUDE_USAGE_BYTES: usize = 256 * 1024;
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const MAX_OPENCODE_AUTH_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_OPENCODE_USAGE_BYTES: usize = 256 * 1024;
@@ -775,6 +779,26 @@ impl InProcessEngine {
 
     pub async fn skills(&self) -> Result<Vec<Skill>, EngineError> {
         Ok(discover_skills(&self.repo_root, &ProcessEnv))
+    }
+
+    pub async fn create_skill(&self, name: &str) -> Result<IdeFileResponse, EngineError> {
+        let repo_root = self.repo_root.clone();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let path = create_project_skill(&repo_root, &name).map_err(|error| {
+                EngineError::Conflict {
+                    reason: error.to_string(),
+                }
+            })?;
+            let content = std::fs::read_to_string(repo_root.join(&path)).map_err(io_err)?;
+            Ok(IdeFileResponse {
+                path: path.to_string_lossy().into_owned(),
+                size: content.len() as u64,
+                content,
+            })
+        })
+        .await
+        .map_err(|error| EngineError::Transport(error.to_string()))?
     }
 
     // ---- ui-state --------------------------------------------------------------------------
@@ -3682,9 +3706,17 @@ fn model_catalog_wire(
 async fn read_bounded_stdout(
     child: &mut tokio::process::Child,
 ) -> Result<(Vec<u8>, std::process::ExitStatus), ()> {
+    read_bounded_stdout_with_limits(child, MODEL_DISCOVERY_TIMEOUT, MAX_MODEL_OUTPUT_BYTES).await
+}
+
+async fn read_bounded_stdout_with_limits(
+    child: &mut tokio::process::Child,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, std::process::ExitStatus), ()> {
     use tokio::io::AsyncReadExt;
     let mut stdout = child.stdout.take().ok_or(())?;
-    tokio::time::timeout(MODEL_DISCOVERY_TIMEOUT, async {
+    tokio::time::timeout(timeout, async {
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 8192];
         loop {
@@ -3692,7 +3724,7 @@ async fn read_bounded_stdout(
             if read == 0 {
                 break;
             }
-            if bytes.len() + read > MAX_MODEL_OUTPUT_BYTES {
+            if bytes.len() + read > max_bytes {
                 return Err(());
             }
             bytes.extend_from_slice(&buffer[..read]);
@@ -3893,7 +3925,7 @@ fn unknown_usage_snapshot(
             ProviderUsageHealth::Unknown,
             "limits_unknown",
             match profile.provider {
-                Runner::Claude => "Claude reports limits only after a real session observation",
+                Runner::Claude => "Claude did not return a usable rate-limit snapshot",
                 Runner::OpenCode => "configured upstreams do not expose a common quota API",
                 Runner::Codex => "Codex did not return a usable rate-limit snapshot",
                 Runner::Pi | Runner::Omp => "quota telemetry is unavailable",
@@ -4141,6 +4173,179 @@ fn parse_opencode_go_usage_snapshot(
     })
 }
 
+fn claude_used_percent(value: Option<&Value>) -> Option<f64> {
+    let value = match value? {
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => value.parse::<f64>().ok(),
+        _ => None,
+    }?;
+    value
+        .is_finite()
+        .then_some(if value <= 1.0 { value * 100.0 } else { value })
+        .map(|value| value.clamp(0.0, 100.0))
+}
+
+fn claude_window(
+    payload: &Value,
+    name: &str,
+    kind: ProviderUsageWindowKind,
+) -> Option<ProviderUsageWindow> {
+    let window = payload.get(name)?.as_object()?;
+    let used_percent = claude_used_percent(window.get("utilization"));
+    let resets_at = window
+        .get("resets_at")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if used_percent.is_none() && resets_at.is_none() {
+        return None;
+    }
+    Some(ProviderUsageWindow {
+        id: Some(format!("claude:{name}")),
+        kind,
+        used_percent,
+        resets_at,
+        hard_limit_reached: used_percent.map(|used| used >= 100.0),
+    })
+}
+
+fn parse_claude_usage_snapshot(
+    profile: &ResolvedAgentProfile,
+    payload: &Value,
+    policy: &coducktor_core::workspace::config::QuotaProviderPolicy,
+    fetched_at: &str,
+) -> Option<ProviderUsageSnapshot> {
+    let mut windows = Vec::new();
+    if let Some(window) = claude_window(payload, "five_hour", ProviderUsageWindowKind::Short) {
+        windows.push(window);
+    }
+    let weekly_name = if payload
+        .get("seven_day_oauth_apps")
+        .and_then(Value::as_object)
+        .is_some_and(|window| !window.is_empty())
+    {
+        "seven_day_oauth_apps"
+    } else {
+        "seven_day"
+    };
+    if let Some(window) = claude_window(payload, weekly_name, ProviderUsageWindowKind::Long) {
+        windows.push(window);
+    }
+    if windows.is_empty() {
+        return None;
+    }
+    let exhausted = windows
+        .iter()
+        .any(|window| window.hard_limit_reached == Some(true));
+    let reserved = windows.iter().any(|window| {
+        window.used_percent.is_some_and(|used| {
+            let stop = if window.kind == ProviderUsageWindowKind::Long {
+                policy.long_window_stop_at_percent
+            } else {
+                policy.stop_new_work_at_percent
+            };
+            used >= stop
+        })
+    });
+    Some(ProviderUsageSnapshot {
+        provider: QuotaProvider::Claude,
+        profile_id: profile.id.clone(),
+        upstream_provider: None,
+        health: if exhausted {
+            ProviderUsageHealth::HardExhausted
+        } else if reserved {
+            ProviderUsageHealth::SoftExhausted
+        } else {
+            ProviderUsageHealth::Available
+        },
+        confidence: Some(UsageConfidence::Authoritative),
+        fetched_at: fetched_at.to_owned(),
+        source: "claude_oauth_usage_api".to_owned(),
+        stale: false,
+        windows,
+        consumption: None,
+        error: None,
+        extra: Default::default(),
+    })
+}
+
+fn claude_access_token(credentials: &Value) -> Option<&str> {
+    credentials
+        .get("claudeAiOauth")?
+        .get("accessToken")?
+        .as_str()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+async fn read_claude_credentials(
+    profile: &ResolvedAgentProfile,
+    timeout: Duration,
+) -> Option<Value> {
+    if profile.is_default {
+        let mut command = tokio::process::Command::new("/usr/bin/security");
+        command
+            .args(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true);
+        if let Ok(account) = std::env::var("USER")
+            && !account.trim().is_empty()
+        {
+            command.args(["-a", account.trim()]);
+        }
+        if let Ok(mut child) = command.spawn()
+            && let Ok((stdout, status)) =
+                read_bounded_stdout_with_limits(&mut child, timeout, MAX_CLAUDE_CREDENTIAL_BYTES)
+                    .await
+            && status.success()
+            && let Ok(credentials) = serde_json::from_slice::<Value>(&stdout)
+            && claude_access_token(&credentials).is_some()
+        {
+            return Some(credentials);
+        }
+    }
+    capped_json_file(&profile.path.join(".credentials.json"))
+}
+
+async fn probe_claude_usage(
+    profile: &ResolvedAgentProfile,
+    policy: &coducktor_core::workspace::config::QuotaProviderPolicy,
+    timeout: Duration,
+    fetched_at: &str,
+) -> Option<ProviderUsageSnapshot> {
+    let credentials = read_claude_credentials(profile, timeout).await?;
+    let access_token = claude_access_token(&credentials)?;
+    let client = reqwest::Client::builder().timeout(timeout).build().ok()?;
+    let response = client
+        .get(CLAUDE_USAGE_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header(
+            reqwest::header::USER_AGENT,
+            concat!("coducktor/", env!("CARGO_PKG_VERSION")),
+        )
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_CLAUDE_USAGE_BYTES as u64)
+    {
+        return None;
+    }
+    let body = response.bytes().await.ok()?;
+    if body.len() > MAX_CLAUDE_USAGE_BYTES {
+        return None;
+    }
+    let payload = serde_json::from_slice::<Value>(&body).ok()?;
+    parse_claude_usage_snapshot(profile, &payload, policy, fetched_at)
+}
+
 async fn probe_opencode_go_usage(
     profile: &ResolvedAgentProfile,
     api_key: &str,
@@ -4245,6 +4450,19 @@ async fn collect_workspace_usage(
     let mut providers = Vec::new();
     for profile in profiles {
         let status = provider_status_for_profile(&profile).status;
+        if profile.provider == Runner::Claude
+            && status == ProviderConnectionState::Connected
+            && let Some(snapshot) = probe_claude_usage(
+                &profile,
+                &config.quota_routing.claude,
+                Duration::from_secs(config.quota_routing.request_timeout_seconds),
+                &fetched_at,
+            )
+            .await
+        {
+            providers.push(snapshot);
+            continue;
+        }
         if profile.provider == Runner::Codex
             && status == ProviderConnectionState::Connected
             && let Some(snapshot) = probe_codex_usage(
@@ -4598,6 +4816,41 @@ mod tests {
     }
 
     #[test]
+    fn claude_usage_payload_normalizes_session_and_oauth_weekly_windows() {
+        let profile = default_agent_profile(Runner::Claude);
+        let payload = json!({
+            "five_hour": {
+                "utilization": 1.0,
+                "resets_at": "2030-01-02T03:04:05Z"
+            },
+            "seven_day": { "utilization": 0.9 },
+            "seven_day_oauth_apps": {
+                "utilization": "0.26",
+                "resets_at": "2030-01-08T00:00:00Z"
+            }
+        });
+        let snapshot = parse_claude_usage_snapshot(
+            &profile,
+            &payload,
+            &coducktor_core::workspace::config::QuotaRouting::default().claude,
+            "2026-08-28T00:00:00.000Z",
+        )
+        .unwrap();
+        assert_eq!(snapshot.provider, QuotaProvider::Claude);
+        assert_eq!(snapshot.confidence, Some(UsageConfidence::Authoritative));
+        assert_eq!(snapshot.health, ProviderUsageHealth::HardExhausted);
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].used_percent, Some(100.0));
+        assert_eq!(snapshot.windows[0].kind, ProviderUsageWindowKind::Short);
+        assert_eq!(snapshot.windows[1].used_percent, Some(26.0));
+        assert_eq!(snapshot.windows[1].kind, ProviderUsageWindowKind::Long);
+        assert_eq!(
+            snapshot.windows[1].resets_at.as_deref(),
+            Some("2030-01-08T00:00:00Z")
+        );
+    }
+
+    #[test]
     fn codex_rate_limit_payload_is_normalized_and_reserved_at_the_weekly_threshold() {
         let profile = default_agent_profile(Runner::Codex);
         let result = json!({
@@ -4846,6 +5099,24 @@ mod tests {
         // `discover_skills` also reads global, host-level locations, so this asserts only that
         // the call succeeds rather than that the (sandbox-dependent) count is zero.
         engine.skills().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_skill_returns_an_editable_project_file() {
+        let dir = TempDir::new().unwrap();
+        let engine = engine(&dir);
+        let file = engine.create_skill("Code Review").await.unwrap();
+        assert_eq!(file.path, ".ai/coducktor/skills/code-review.md");
+        assert_eq!(file.size, file.content.len() as u64);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(&file.path)).unwrap(),
+            file.content
+        );
+
+        assert!(matches!(
+            engine.create_skill("Code Review").await.unwrap_err(),
+            EngineError::Conflict { .. }
+        ));
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@
 //! `App::request_navigate`/`request_back`,
 //! which turns any navigation away from a dirty file into a confirm dialog.
 
-use coducktor_contract::{IdeDirectoryResponse, IdeEntry, IdeEntryType};
+use coducktor_contract::{IdeDirectoryResponse, IdeEntry, IdeEntryType, IdeFileResponse};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -125,6 +125,25 @@ impl IdeUi {
 /// listing queue, so this is just the route hop.
 pub fn open(app: &mut App, project: &str) {
     app.request_navigate(Route::Ide {
+        project: project.to_owned(),
+    });
+}
+
+/// Open a newly created project file directly in the built-in editor.
+pub fn open_created_file(app: &mut App, project: &str, file: IdeFileResponse) {
+    let directory_path = parent_path(&file.path);
+    let mut editor = Editor::default();
+    editor.set_text(&file.content);
+    app.ide_ui = IdeUi {
+        project: project.to_owned(),
+        directory_path,
+        file_path: Some(file.path),
+        file_size: file.size,
+        focus: IdeFocus::Editor,
+        editor,
+        ..IdeUi::default()
+    };
+    app.navigate_route(Route::Ide {
         project: project.to_owned(),
     });
 }
@@ -689,6 +708,34 @@ mod tests {
         assert!(content.contains("fn main()"));
         assert!(content.contains("Ctrl+S save"));
         assert!(content.contains("1 MB edit cap"));
+    }
+
+    #[test]
+    fn created_file_opens_in_the_editor_and_lists_its_directory() {
+        let mut app = app_with_entries();
+        app.pending.clear();
+        open_created_file(
+            &mut app,
+            "main",
+            IdeFileResponse {
+                path: ".ai/coducktor/skills/review.md".to_owned(),
+                content: "# review\n".to_owned(),
+                size: 9,
+            },
+        );
+        assert!(matches!(app.route(), Route::Ide { project } if project == "main"));
+        assert_eq!(app.ide_ui.focus, IdeFocus::Editor);
+        assert_eq!(
+            app.ide_ui.file_path.as_deref(),
+            Some(".ai/coducktor/skills/review.md")
+        );
+        assert_eq!(app.ide_ui.editor.text, "# review\n");
+        assert!(!app.ide_ui.dirty);
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::LoadIdeDirectory { project, path: Some(path) }
+                if project == "main" && path == ".ai/coducktor/skills"
+        )));
     }
 
     #[test]

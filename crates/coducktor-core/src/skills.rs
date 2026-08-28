@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use coducktor_contract::skills::{Skill, SkillSource};
@@ -45,6 +46,45 @@ repository. End after presenting the plan."#;
 /// agent-profile-aware path: a skill is CONTENT — a playbook — not identity, and a second
 /// Claude login is not a second skill library.
 const GLOBAL_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
+
+/// Create a project-local skill template without overwriting an existing file.
+/// The returned path is relative to `repo_root`, ready for the IDE seam.
+pub fn create_project_skill(repo_root: &Path, input: &str) -> io::Result<PathBuf> {
+    let mut name = String::new();
+    let mut separator = false;
+    for character in input.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator && !name.is_empty() {
+                name.push('-');
+            }
+            name.push(character.to_ascii_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if name.is_empty() || name.len() > 64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "skill name must contain letters or numbers and be at most 64 characters",
+        ));
+    }
+
+    let relative = PathBuf::from(".ai/coducktor/skills").join(format!("{name}.md"));
+    let path = repo_root.join(&relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = format!(
+        "---\nname: {name}\ndescription:\n---\n\n# {name}\n\nWrite the instructions the agent should follow when this skill is attached.\n"
+    );
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(content.as_bytes())?;
+    Ok(relative)
+}
 
 /// Discover the merged skill catalog for a repo. Name collisions resolve local-first and missing
 /// directories are fine; an empty catalog is fully supported.
@@ -344,6 +384,34 @@ mod tests {
             planning.description.as_deref(),
             Some(BUILT_IN_PLANNING_SKILL_DESCRIPTION)
         );
+    }
+
+    #[test]
+    fn creates_a_normalized_project_skill_without_overwriting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let relative = create_project_skill(dir.path(), "  Review Rust!  ").unwrap();
+        assert_eq!(
+            relative,
+            PathBuf::from(".ai/coducktor/skills/review-rust.md")
+        );
+        let content = fs::read_to_string(dir.path().join(&relative)).unwrap();
+        assert!(content.contains("name: review-rust"));
+        assert!(content.contains("# review-rust"));
+
+        let error = create_project_skill(dir.path(), "review rust").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(dir.path().join(relative)).unwrap(),
+            content
+        );
+    }
+
+    #[test]
+    fn rejects_a_skill_name_without_a_safe_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = create_project_skill(dir.path(), "!!!").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!dir.path().join(".ai").exists());
     }
 
     #[test]

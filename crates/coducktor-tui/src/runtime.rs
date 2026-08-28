@@ -1815,6 +1815,30 @@ fn execute_pending(
                     move |result| BackgroundResult::LoadSkills { project, result },
                 );
             }
+            PendingAction::CreateSkill { project, name } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move { engine_for_task.create_skill(&scope, &name).await },
+                    move |result| {
+                        BackgroundResult::AppUpdate(Box::new(move |app| match result {
+                            Ok(file)
+                                if matches!(app.route(), app::Route::Skills { project: route_project } if route_project == &project) =>
+                            {
+                                crate::screens::ide::open_created_file(app, &project, file);
+                            }
+                            Ok(file) => {
+                                app.notice = Some(format!("created {}", file.path));
+                            }
+                            Err(error) => {
+                                app.notice = Some(format!("create skill failed: {error}"));
+                            }
+                        }))
+                    },
+                );
+            }
             PendingAction::LoadSettings { project } => {
                 let generation = app.begin_settings_request();
                 let engine_for_task = engine.clone();

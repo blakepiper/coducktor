@@ -67,6 +67,12 @@ pub trait Engine: Send + Sync {
     async fn mark_all_read(&self, scope: &Scope) -> Result<MarkAllReadResponse, EngineError>;
     async fn runs_index(&self) -> Result<RunsIndexResponse, EngineError>;
     async fn skills(&self, scope: &Scope) -> Result<Vec<Skill>, EngineError>;
+    /// Create a project-local skill template and return it as an editable IDE file.
+    async fn create_skill(
+        &self,
+        scope: &Scope,
+        name: &str,
+    ) -> Result<IdeFileResponse, EngineError>;
     async fn projects(&self) -> Result<ProjectsResponse, EngineError>;
     async fn register_project(
         &self,
@@ -604,6 +610,14 @@ impl Engine for InProcessEngine {
 
     async fn skills(&self, scope: &Scope) -> Result<Vec<Skill>, EngineError> {
         self.scoped(scope)?.skills().await
+    }
+
+    async fn create_skill(
+        &self,
+        scope: &Scope,
+        name: &str,
+    ) -> Result<IdeFileResponse, EngineError> {
+        self.scoped(scope)?.create_skill(name).await
     }
 
     async fn projects(&self) -> Result<ProjectsResponse, EngineError> {

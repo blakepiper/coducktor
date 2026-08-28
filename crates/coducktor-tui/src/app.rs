@@ -891,6 +891,10 @@ pub enum PendingAction {
     LoadSkills {
         project: String,
     },
+    CreateSkill {
+        project: String,
+        name: String,
+    },
     /// Load every Settings data source for the current project and workspace.
     LoadSettings {
         project: String,
@@ -1753,6 +1757,7 @@ impl App {
             self.screen_focus = 0;
             self.sync_active_project_tasks();
             self.anchor_sidebar_selection();
+            self.refresh_returned_skills();
         }
     }
 
@@ -1775,6 +1780,15 @@ impl App {
             self.screen_focus = 0;
             self.sync_active_project_tasks();
             self.anchor_sidebar_selection();
+            self.refresh_returned_skills();
+        }
+    }
+
+    fn refresh_returned_skills(&mut self) {
+        if let Route::Skills { project } = self.route() {
+            self.pending.push(PendingAction::LoadSkills {
+                project: project.clone(),
+            });
         }
     }
 
@@ -3762,6 +3776,11 @@ impl App {
                     self.skills_ui.selected = index;
                 }
             }
+            HitAction::SkillsNew => {
+                if matches!(self.route(), Route::Skills { .. }) {
+                    crate::screens::skills::begin_create(self);
+                }
+            }
             HitAction::RepoGitScreen(action) => {
                 if matches!(self.route(), Route::RepoGit { .. }) {
                     crate::screens::repo_git::apply_hit(self, action);
@@ -4196,6 +4215,7 @@ impl App {
                 ("GITHUB LIST", "↑↓ choose item · Enter open")
             }
             Route::Github { .. } => ("GITHUB DETAIL", "j/k scroll · Ctrl-W h list · gt tabs"),
+            Route::Skills { .. } => ("SKILLS", "n new skill · / filter · j/k choose"),
             Route::Settings { .. } | Route::GlobalSettings => {
                 if self.current_screen_pane() == 0 {
                     ("SETTINGS NAV", "j/k choose section · l values")

@@ -121,6 +121,8 @@ pub enum HitAction {
     GithubScreen(GithubAction),
     /// A skills row — click to select.
     SkillsScreen(usize),
+    /// The Skills screen's project-skill creation action.
+    SkillsNew,
     /// A repo-git screen control — routed by the screen.
     RepoGitScreen(RepoGitAction),
     /// A Settings nav entry — click to switch section.
