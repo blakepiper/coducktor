@@ -7819,6 +7819,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_page_that_opens_mid_history_still_carries_its_turn_prompt() {
+        let dir = TempDir::new().unwrap();
+        let engine = engine(&dir);
+        let run_id = seed_finished_legacy_run(&engine, "first");
+        {
+            let mut manager = engine.manager.lock();
+            for turn in 0..2 {
+                for (event_type, text) in [
+                    ("user-message", format!("prompt {turn}")),
+                    ("turn.started", String::new()),
+                ] {
+                    manager
+                        .append_event(&run_id, EventInput::new(event_type).field("text", &text))
+                        .unwrap();
+                }
+                for step in 0..RUN_HISTORY_PAGE_ITEMS {
+                    manager
+                        .append_event(
+                            &run_id,
+                            EventInput::new("assistant-message")
+                                .field("text", format!("turn {turn} step {step}")),
+                        )
+                        .unwrap();
+                }
+                manager
+                    .append_event(&run_id, EventInput::new("turn.completed"))
+                    .unwrap();
+            }
+        }
+
+        let page = engine.run_history(&run_id, None).await.unwrap();
+
+        assert_eq!(
+            page.events.first().map(|event| event.event_type.as_str()),
+            Some("user-message"),
+            "a page cut inside a turn still opens on that turn's prompt"
+        );
+        assert!(page.has_older);
+    }
+
+    #[tokio::test]
     async fn run_history_rejects_a_garbage_cursor() {
         let dir = TempDir::new().unwrap();
         let engine = engine(&dir);
