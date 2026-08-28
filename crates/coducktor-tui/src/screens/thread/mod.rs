@@ -368,6 +368,10 @@ impl ThreadUi {
         self.pending_prompt_queued = false;
         self.pending_composer = None;
         self.delivery_error = false;
+        // A freshly sent prompt is the whole point of sending it. Every other coding harness
+        // jumps to the bottom on send; without this, a user who had scrolled up to review
+        // earlier output sends a follow-up that renders off-screen and looks like it vanished.
+        self.transcript.jump_to_bottom();
         self.refresh_projection(0, Duration::ZERO);
     }
 
@@ -377,6 +381,7 @@ impl ThreadUi {
         self.pending_prompt_queued = queued;
         self.pending_composer = Some(self.composer.clone());
         self.delivery_error = false;
+        self.transcript.jump_to_bottom();
         self.refresh_projection(0, Duration::ZERO);
     }
 
@@ -2373,6 +2378,31 @@ mod tests {
                 .count();
             assert_eq!(sends, 1, "one user message is exactly one queued turn");
         }
+    }
+
+    #[test]
+    fn sending_a_follow_up_after_scrolling_up_jumps_back_to_the_bottom() {
+        // Reading earlier output while the turn is idle is normal; sending a follow-up from
+        // there must still surface the new prompt instead of leaving it off-screen, looking
+        // like it was never sent (matches every other coding harness).
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        for index in 0..50 {
+            app.thread_ui.push_event(
+                index as f64,
+                event(
+                    index as f64,
+                    "text",
+                    json!({"text": format!("line {index}")}),
+                ),
+            );
+        }
+        app.thread_ui.transcript_area = Some(Rect::new(0, 0, 60, 10));
+        app.thread_ui.transcript.scroll_by(-1_000_000);
+        assert!(!app.thread_ui.transcript.sticky_bottom());
+
+        assert!(submit_composer(&mut app, "next".to_owned(), Vec::new()));
+
+        assert!(app.thread_ui.transcript.sticky_bottom());
     }
 
     #[test]

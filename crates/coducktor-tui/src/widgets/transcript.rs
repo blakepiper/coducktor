@@ -827,6 +827,10 @@ impl Transcript {
         self.scroll_offset == 0
     }
 
+    pub fn sticky_bottom(&self) -> bool {
+        self.sticky_bottom
+    }
+
     pub fn unseen_count(&self) -> usize {
         self.unseen
     }
