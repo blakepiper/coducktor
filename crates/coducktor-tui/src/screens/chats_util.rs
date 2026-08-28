@@ -193,6 +193,7 @@ mod tests {
             state,
             harness: Runner::Claude,
             model: None,
+            model_identity: None,
             reasoning: None,
             created_at: "2026-08-22T10:00:00Z".to_owned(),
             updated_at: "2026-08-22T10:00:00Z".to_owned(),

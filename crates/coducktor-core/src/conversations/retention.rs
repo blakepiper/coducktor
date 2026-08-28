@@ -128,6 +128,7 @@ mod tests {
             },
             harness: Runner::Claude,
             model: None,
+            model_identity: None,
             reasoning: None,
             provider_session_id: None,
             repository_root: "/repo".to_owned(),

@@ -158,6 +158,13 @@ pub trait AgentSession: Send {
     fn session_id(&self) -> Option<String> {
         None
     }
+
+    /// The exact harness-native model this session actually ran with, when the backend can
+    /// observe it (e.g. Claude Code's `system`/`init` frame). `None` means the backend does not
+    /// report it — never a guess at what an omitted `model` request resolved to.
+    fn model_identity(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How a finished turn ended, as read from the turn's own text.

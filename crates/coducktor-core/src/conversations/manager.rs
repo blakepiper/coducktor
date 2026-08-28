@@ -240,6 +240,7 @@ impl ConversationManager {
             initial_message: message.clone(),
             harness: input.harness,
             model: input.model,
+            model_identity: None,
             reasoning: input.reasoning,
             provider_session_id: None,
             repository_root: input.repository_root.to_string_lossy().into_owned(),
@@ -951,6 +952,7 @@ impl ConversationManager {
                     .as_ref()
                     .and_then(|session| session.provider_session_id())
             });
+        let model_identity = outcome_report(&outcome).model_identity.clone();
         let now = now_iso8601();
         let mut next = previous.clone();
         let mut turn = next
@@ -966,6 +968,10 @@ impl ConversationManager {
         }
         apply_usage(&mut next, &mut turn, outcome_report(&outcome));
         next.provider_session_id = session_id;
+        // Sticky: once a backend reports the model it actually ran with, keep showing it even
+        // if a later turn's report does not repeat it (e.g. Claude only emits this once, at
+        // session open).
+        next.model_identity = model_identity.or(next.model_identity.clone());
         next.updated_at = now.clone();
 
         let (event, park) = match outcome {
@@ -1450,6 +1456,7 @@ mod tests {
         TurnOutcome::Ended {
             report: TurnReport {
                 provider_session_id: Some("session-1".to_owned()),
+                model_identity: None,
                 tokens_used: 5.0,
                 input_tokens: Some(3.0),
                 output_tokens: Some(2.0),
@@ -1568,6 +1575,51 @@ mod tests {
                 .filter(|event| event.event_type == "user-message")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn resolved_model_identity_is_recorded_and_survives_a_turn_that_does_not_repeat_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_turn = TurnOutcome::Ended {
+            report: TurnReport {
+                provider_session_id: Some("session-1".to_owned()),
+                model_identity: Some("claude-opus-4-8-exact".to_owned()),
+                turn_text: "done".to_owned(),
+                ..TurnReport::default()
+            },
+            session_open: true,
+        };
+        // The harness reports its model once, at session open — a later turn's report omits it.
+        let second_turn = ended(true);
+        let factory = FakeFactory::new(vec![first_turn, second_turn], Vec::new());
+        let mut manager = ConversationManager::open(dir.path());
+        let created = manager
+            .create(new_conversation("first exact message"))
+            .unwrap();
+        assert_eq!(created.model_identity, None);
+
+        let first = drive_next(&mut manager, &factory);
+        assert_eq!(
+            first.model_identity.as_deref(),
+            Some("claude-opus-4-8-exact")
+        );
+
+        manager
+            .submit_message(
+                &created.id,
+                ConversationMessage {
+                    text: "second exact message".to_owned(),
+                    images: Vec::new(),
+                    skill_attachments: Vec::new(),
+                    extra: Map::new(),
+                },
+            )
+            .unwrap();
+        let second = drive_next(&mut manager, &factory);
+        assert_eq!(
+            second.model_identity.as_deref(),
+            Some("claude-opus-4-8-exact")
         );
     }
 

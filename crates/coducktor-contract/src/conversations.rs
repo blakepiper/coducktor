@@ -145,6 +145,11 @@ pub struct ConversationRecord {
     /// Exact harness-native value. Omission delegates to the harness default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// The exact model the harness reports having actually run with, when it says so. Populated
+    /// even when `model` was set explicitly; the one place this differs is an omitted `model`
+    /// (harness default), where this is the only way to know what ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     pub repository_root: String,
@@ -212,6 +217,8 @@ pub struct ConversationIndexEntry {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_identity: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

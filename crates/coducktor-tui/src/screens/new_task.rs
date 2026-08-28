@@ -1730,6 +1730,7 @@ mod tests {
             },
             harness: input.harness,
             model: input.model.clone(),
+            model_identity: None,
             reasoning: input.reasoning.clone(),
             provider_session_id: Some("sess-1".to_owned()),
             repository_root: "/repo".to_owned(),

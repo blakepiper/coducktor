@@ -87,7 +87,7 @@ pub fn render_conversation_header(
 
     let soft = Style::default().fg(theme.palette.soft_fg);
     let mut affinity = format!("{:?}", record.harness).to_ascii_lowercase();
-    if let Some(model) = record.model.as_deref() {
+    if let Some(model) = record.model.as_deref().or(record.model_identity.as_deref()) {
         affinity.push('/');
         affinity.push_str(model);
     }

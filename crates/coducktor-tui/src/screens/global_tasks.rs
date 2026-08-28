@@ -175,7 +175,7 @@ fn build_conversation_cards(
                 CardChip::Project(project_name(registry, &entry.project_id)),
                 CardChip::Harness {
                     harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
-                    model: entry.model.clone(),
+                    model: entry.model.clone().or_else(|| entry.model_identity.clone()),
                 },
             ];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
@@ -264,9 +264,9 @@ fn build_cards(
             if let Some(runner) = entry.runner {
                 chips.push(CardChip::Harness {
                     harness: format!("{runner:?}").to_ascii_lowercase(),
-                    model: entry.model.clone(),
+                    model: entry.model.clone().or_else(|| entry.model_identity.clone()),
                 });
-            } else if let Some(model) = entry.model.as_deref() {
+            } else if let Some(model) = entry.model.as_deref().or(entry.model_identity.as_deref()) {
                 chips.push(CardChip::Custom(model.to_owned()));
             }
             if !entry.workflow.is_empty() {
@@ -1196,6 +1196,7 @@ mod tests {
             state,
             harness: coducktor_contract::Runner::Claude,
             model: Some("opus".to_owned()),
+            model_identity: None,
             reasoning: None,
             created_at: "2026-08-15T00:00:00Z".to_owned(),
             updated_at: "2026-08-15T00:01:00Z".to_owned(),

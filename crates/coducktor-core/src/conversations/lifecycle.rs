@@ -35,6 +35,9 @@ pub struct ConversationTurnRequest {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TurnReport {
     pub provider_session_id: Option<String>,
+    /// The exact harness-native model the backend reports having run with, when observable.
+    /// `None` means the backend does not report it, not that the harness ran with no model.
+    pub model_identity: Option<String>,
     pub tokens_used: f64,
     pub input_tokens: Option<f64>,
     pub output_tokens: Option<f64>,

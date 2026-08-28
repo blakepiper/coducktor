@@ -606,6 +606,43 @@ fn notification_for_transition(old: RunStatus, task: &QuickTask) -> Option<(Stri
     }
 }
 
+/// A conversation's state transition worth surfacing exactly like a legacy run's: "needs you"
+/// (a provider-native question) or "finished" (idle/failed) — the first time it happens, never
+/// on a repeated event carrying the same state. `Cancelled` is deliberately silent: the user
+/// just asked for it, matching the legacy behavior above.
+fn conversation_notification_for_transition(
+    old: coducktor_contract::ConversationState,
+    entry: &coducktor_contract::ConversationIndexEntry,
+) -> Option<(String, String)> {
+    if old == entry.state {
+        return None;
+    }
+    match entry.state {
+        coducktor_contract::ConversationState::NeedsInput => {
+            Some(("Needs your answer".to_owned(), entry.title.clone()))
+        }
+        coducktor_contract::ConversationState::Idle => {
+            Some(("Task finished".to_owned(), entry.title.clone()))
+        }
+        coducktor_contract::ConversationState::Failed => {
+            Some(("Task failed".to_owned(), entry.title.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a conversation's state counts as stopped for the off-screen bell, the same way
+/// [`crate::widgets::run_end::RunOutcome`] marks a legacy run's terminal statuses: every
+/// mid-turn state and the silent `NeedsInput` question prompt are excluded.
+fn conversation_run_ended(state: coducktor_contract::ConversationState) -> bool {
+    matches!(
+        state,
+        coducktor_contract::ConversationState::Idle
+            | coducktor_contract::ConversationState::Failed
+            | coducktor_contract::ConversationState::Cancelled
+    )
+}
+
 /// A single frame of workspace news from the `/workspace/events` stream. The
 /// `Run` arm is intentionally wide — it carries a whole `ApiRun` so the table
 /// can update a row in place without a refetch.
@@ -1922,7 +1959,22 @@ impl App {
                     .iter_mut()
                     .find(|existing| existing.id == entry.id)
                 {
+                    let old_state = existing.state;
                     *existing = entry.clone();
+                    if let Some((summary, body)) =
+                        conversation_notification_for_transition(old_state, &entry)
+                    {
+                        self.pending_notifications.push((summary, body));
+                    }
+                    // Mirrors the legacy run-end rule below: the bell is the off-screen half of
+                    // "this conversation stopped" recognition, so it only fires on states that
+                    // count as stopped and only when the user is not already looking at it.
+                    if old_state != entry.state
+                        && conversation_run_ended(entry.state)
+                        && !self.is_thread_focused(&project, &entry.id)
+                    {
+                        self.pending_bell = true;
+                    }
                 } else {
                     state.conversations.insert(0, entry.clone());
                 }
@@ -4972,6 +5024,125 @@ mod tests {
             app.take_pending_notifications(),
             vec![("Needs your answer".to_owned(), "Answer plainly".to_owned())]
         );
+    }
+
+    #[test]
+    fn conversation_turn_end_notifies_and_bells_but_a_question_only_notifies() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::Running,
+        ));
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::NeedsInput,
+        ));
+        assert_eq!(
+            app.take_pending_notifications(),
+            vec![("Needs your answer".to_owned(), "Ship the shell".to_owned())]
+        );
+        assert!(
+            !app.take_pending_bell(),
+            "a question prompt notifies but does not ring the bell"
+        );
+
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::Running,
+        ));
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::Idle,
+        ));
+        assert_eq!(
+            app.take_pending_notifications(),
+            vec![("Task finished".to_owned(), "Ship the shell".to_owned())]
+        );
+        assert!(
+            app.take_pending_bell(),
+            "an off-screen finish notifies and rings the bell"
+        );
+
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::Running,
+        ));
+        app.apply_workspace_event(conversation_event(
+            "main",
+            "chat-1",
+            "Ship the shell",
+            coducktor_contract::ConversationState::Failed,
+        ));
+        assert_eq!(
+            app.take_pending_notifications(),
+            vec![("Task failed".to_owned(), "Ship the shell".to_owned())]
+        );
+        assert!(app.take_pending_bell());
+    }
+
+    fn conversation_event(
+        project: &str,
+        id: &str,
+        title: &str,
+        state: coducktor_contract::ConversationState,
+    ) -> WorkspaceEvent {
+        WorkspaceEvent::Conversation {
+            project: project.to_owned(),
+            record: Box::new(coducktor_contract::ConversationRecord {
+                record_kind: coducktor_contract::RecordKind::Conversation,
+                id: id.to_owned(),
+                project_id: project.to_owned(),
+                title: title.to_owned(),
+                initial_message: coducktor_contract::ConversationMessage {
+                    text: title.to_owned(),
+                    images: Vec::new(),
+                    skill_attachments: Vec::new(),
+                    extra: Default::default(),
+                },
+                harness: coducktor_contract::Runner::Claude,
+                model: None,
+                model_identity: None,
+                reasoning: None,
+                provider_session_id: None,
+                repository_root: "/repo".to_owned(),
+                cwd: "/repo".to_owned(),
+                base_branch: None,
+                branch: None,
+                worktree: false,
+                worktree_path: None,
+                worktree_reclaimed_at: None,
+                git_mode: coducktor_contract::ConversationGitMode::Manual,
+                state,
+                active_turn: None,
+                latest_turn: None,
+                created_at: "2026-08-22T10:00:00Z".to_owned(),
+                updated_at: "2026-08-22T10:00:00Z".to_owned(),
+                seen_at: None,
+                archived: false,
+                archived_at: None,
+                tokens_used: 0.0,
+                input_tokens: None,
+                output_tokens: None,
+                cost_usd: None,
+                last_error: None,
+                resume_failed: false,
+                session_restart: None,
+                workflow: String::new(),
+                task: String::new(),
+                steps: Vec::new(),
+                extra: Default::default(),
+            }),
+        }
     }
 
     fn run_event(

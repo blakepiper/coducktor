@@ -127,7 +127,7 @@ fn build_conversation_cards(
             let entry = &conversations[index];
             let mut chips = vec![CardChip::Harness {
                 harness: format!("{:?}", entry.harness).to_ascii_lowercase(),
-                model: entry.model.clone(),
+                model: entry.model.clone().or_else(|| entry.model_identity.clone()),
             }];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
                 chips.push(CardChip::Branch(branch.to_owned()));
@@ -200,9 +200,13 @@ fn build_cards(runs: &[ApiRun], view: TaskView, query: &str, now: i64) -> Vec<Ta
             if let Some(runner) = record.runner {
                 chips.push(CardChip::Harness {
                     harness: format!("{runner:?}").to_ascii_lowercase(),
-                    model: record.model.clone(),
+                    model: record
+                        .model
+                        .clone()
+                        .or_else(|| record.model_identity.clone()),
                 });
-            } else if let Some(model) = record.model.as_deref() {
+            } else if let Some(model) = record.model.as_deref().or(record.model_identity.as_deref())
+            {
                 chips.push(CardChip::Custom(model.to_owned()));
             }
             if !record.workflow.is_empty() {
@@ -824,6 +828,32 @@ mod tests {
                 ..RunRecord::default()
             },
             usage: None,
+        }
+    }
+
+    fn conversation_entry(
+        model: Option<&str>,
+        model_identity: Option<&str>,
+    ) -> coducktor_contract::ConversationIndexEntry {
+        coducktor_contract::ConversationIndexEntry {
+            project_id: "proj".to_owned(),
+            id: "chat-1".to_owned(),
+            title: "Ship the shell".to_owned(),
+            state: coducktor_contract::ConversationState::Idle,
+            harness: coducktor_contract::Runner::Claude,
+            model: model.map(ToOwned::to_owned),
+            model_identity: model_identity.map(ToOwned::to_owned),
+            reasoning: None,
+            created_at: "2026-08-22T10:00:00Z".to_owned(),
+            updated_at: "2026-08-22T10:00:00Z".to_owned(),
+            seen_at: None,
+            archived: false,
+            archived_at: None,
+            prompt_preview: "ship the shell".to_owned(),
+            branch: None,
+            pull_request_url: None,
+            referenced_pull_request_url: None,
+            extra: Default::default(),
         }
     }
 

@@ -418,6 +418,9 @@ impl RunState {
     fn report(&self, provider_session_id: Option<String>) -> TurnReport {
         TurnReport {
             provider_session_id,
+            // OpenCode's `run --format json` stream does not report which model actually ran;
+            // omitting `--model` truly delegates to OpenCode's own default with no signal back.
+            model_identity: None,
             tokens_used: self.tokens_used,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,

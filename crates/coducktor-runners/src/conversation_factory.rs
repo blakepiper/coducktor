@@ -83,6 +83,7 @@ impl ConversationAgentSession {
             self.pending_request.clone(),
             request.cancellation.is_requested(),
             self.inner.session_id(),
+            self.inner.model_identity(),
         )
     }
 }
@@ -137,6 +138,7 @@ impl ConversationSession for ConversationAgentSession {
             self.pending_request.clone(),
             cancellation.is_requested(),
             self.inner.session_id(),
+            self.inner.model_identity(),
         )
     }
 
@@ -235,14 +237,15 @@ fn convert_outcome(
     pending: Option<PendingRequest>,
     cancellation_requested: bool,
     session_id: Option<String>,
+    model_identity: Option<String>,
 ) -> Result<TurnOutcome, String> {
     let outcome = result?;
     let report = match &outcome {
         SessionOutcome::Completed(report)
         | SessionOutcome::Running(report)
         | SessionOutcome::Waiting(report)
-        | SessionOutcome::Cancelled(report) => turn_report(report, session_id),
-        SessionOutcome::Failed { report, .. } => turn_report(report, session_id),
+        | SessionOutcome::Cancelled(report) => turn_report(report, session_id, model_identity),
+        SessionOutcome::Failed { report, .. } => turn_report(report, session_id, model_identity),
     };
     if cancellation_requested || matches!(outcome, SessionOutcome::Cancelled(_)) {
         return Ok(TurnOutcome::Cancelled {
@@ -272,9 +275,14 @@ fn convert_outcome(
     }
 }
 
-fn turn_report(report: &SessionReport, fallback_session_id: Option<String>) -> TurnReport {
+fn turn_report(
+    report: &SessionReport,
+    fallback_session_id: Option<String>,
+    model_identity: Option<String>,
+) -> TurnReport {
     TurnReport {
         provider_session_id: report.session_id.clone().or(fallback_session_id),
+        model_identity,
         tokens_used: report.tokens_used,
         input_tokens: report.input_tokens,
         output_tokens: report.output_tokens,

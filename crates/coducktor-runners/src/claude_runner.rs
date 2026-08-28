@@ -111,6 +111,9 @@ fn wrap_spawn_error(error: &io::Error, program: &str) -> String {
 pub struct ClaudeSession {
     process: ChildProcess,
     session_id: Option<String>,
+    /// The exact model Claude reported running with, learned once from the session's
+    /// `system`/`init` frame — never repeated on follow-up turns, so it is cached here.
+    model_identity: Option<String>,
     /// Whether stdin is still open for this session.
     open: bool,
 }
@@ -143,6 +146,7 @@ pub fn open_claude_session(
     let mut session = ClaudeSession {
         process,
         session_id: spec.session_id.clone(),
+        model_identity: None,
         open: true,
     };
 
@@ -159,6 +163,9 @@ struct ClaudeMessageResult {
     events: Vec<EventInput>,
     usage_delta: f64,
     error: Option<String>,
+    /// Set only by the session's `system`/`init` frame, which carries the exact model Claude
+    /// started with — the one place this ever changes from `None`.
+    model_identity: Option<String>,
 }
 
 fn parse_raw_usage(value: Option<&Value>) -> Option<RawUsage> {
@@ -223,6 +230,7 @@ fn handle_claude_message(msg: &Value, text_chunks: &mut Vec<String>) -> ClaudeMe
                 events,
                 usage_delta: 0.0,
                 error: None,
+                model_identity: None,
             }
         }
         Some("user") => {
@@ -262,6 +270,7 @@ fn handle_claude_message(msg: &Value, text_chunks: &mut Vec<String>) -> ClaudeMe
                 events,
                 usage_delta: 0.0,
                 error: None,
+                model_identity: None,
             }
         }
         Some("result") => {
@@ -295,13 +304,30 @@ fn handle_claude_message(msg: &Value, text_chunks: &mut Vec<String>) -> ClaudeMe
                 events,
                 usage_delta,
                 error,
+                model_identity: None,
             }
         }
-        // system/init and anything else: nothing actionable.
+        Some("system") => {
+            // The one-time `init` frame at session open reports the exact model Claude
+            // actually started with — the only place this is ever observable on the wire.
+            let model_identity = msg
+                .get("model")
+                .and_then(Value::as_str)
+                .filter(|model| !model.is_empty())
+                .map(str::to_owned);
+            ClaudeMessageResult {
+                events,
+                usage_delta: 0.0,
+                error: None,
+                model_identity,
+            }
+        }
+        // Anything else: nothing actionable.
         _ => ClaudeMessageResult {
             events,
             usage_delta: 0.0,
             error: None,
+            model_identity: None,
         },
     }
 }
@@ -405,6 +431,9 @@ impl ClaudeSession {
                 }
             };
             let mapped = handle_claude_message(&msg, &mut text_chunks);
+            if let Some(model) = mapped.model_identity {
+                self.model_identity = Some(model);
+            }
             for event in mapped.events {
                 on_event(event).map_err(|error| error.to_string())?;
             }
@@ -512,6 +541,10 @@ impl AgentSession for ClaudeSession {
 
     fn session_id(&self) -> Option<String> {
         self.session_id.clone()
+    }
+
+    fn model_identity(&self) -> Option<String> {
+        self.model_identity.clone()
     }
 }
 
@@ -665,6 +698,31 @@ mod tests {
             }
             other => panic!("expected Waiting, got {other:?}"),
         }
+
+        session.finish(&mut |_| Ok(())).unwrap();
+    }
+    #[test]
+    fn model_identity_is_learned_from_the_init_frame_and_survives_a_follow_up_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = node_config(mock_script("mock-claude.mjs"));
+        let run_spec = spec_for(dir.path(), "please look into this");
+        let mut session = open_claude_session(&config, &run_spec, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            session.model_identity(),
+            None,
+            "not yet learned before the first turn"
+        );
+        run_turn(&mut session)
+            .0
+            .expect("first turn should complete");
+        assert_eq!(session.model_identity().as_deref(), Some("claude-mock-5"));
+
+        // A follow-up turn never repeats the `system`/`init` frame — the cached value must
+        // survive rather than resetting to `None`.
+        session
+            .send_message("mock:done", &[], &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(session.model_identity().as_deref(), Some("claude-mock-5"));
 
         session.finish(&mut |_| Ok(())).unwrap();
     }

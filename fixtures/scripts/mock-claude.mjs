@@ -22,7 +22,7 @@ if (process.env.DUCK_MOCK_ARGS_FILE) {
   }
 }
 
-emit({ type: 'system', subtype: 'init' });
+emit({ type: 'system', subtype: 'init', model: 'claude-mock-5' });
 
 let turn = 0;
 
