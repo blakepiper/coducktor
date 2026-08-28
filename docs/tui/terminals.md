@@ -162,3 +162,12 @@ displayed the new-skill name dialog. Typing `Manual Skill` preserved every chara
 Normal-mode navigation grammar; Enter created `.ai/coducktor/skills/manual-skill.md` and opened
 its frontmatter and instruction template in the built-in IDE. `Ctrl-O` returned to Skills, where
 the refreshed catalog listed `manual-skill` with its project badge and rendered body.
+
+## Chat browser wheel smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 120×40 broker PTY with a
+disposable `DUCK_HOME`, throwaway Git repository, and ten disposable chat records. An SGR
+wheel-down event over the card body moved the selection rail from the first card to the fourth in
+both the project Chats screen and workspace All Chats screen. This verifies that each rendered
+card viewport is registered with the existing mouse-wheel router; focused tests retain the
+one-row `j`/`k` navigation contract.

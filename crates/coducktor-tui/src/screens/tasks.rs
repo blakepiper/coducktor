@@ -467,6 +467,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     app.tasks_ui
         .table
         .select(selected.or((!cards.is_empty()).then_some(0)));
+    app.tasks_ui.table.last_area = Some(layout[1]);
     task_cards::render(
         frame,
         layout[1],
@@ -961,6 +962,29 @@ mod tests {
         let content = render(&mut app, 160, 30);
         assert!(content.contains("Task 1"));
         assert!(!content.contains("Task 2"));
+    }
+
+    #[test]
+    fn project_chat_cards_accept_mouse_wheel_navigation_after_render() {
+        let mut app = app_with_tasks(
+            (0..10)
+                .map(|index| api_run(index, RunStatus::Done, None))
+                .collect(),
+        );
+        render(&mut app, 80, 20);
+        let area = app.tasks_ui.table.last_area.expect("chat list area");
+        assert_eq!(app.tasks_ui.table.selected, Some(0));
+
+        app.handle_event(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::ScrollDown,
+                column: area.x,
+                row: area.y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+        ));
+
+        assert_eq!(app.tasks_ui.table.selected, Some(3));
     }
 
     #[test]

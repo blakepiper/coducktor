@@ -747,6 +747,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     app.global_ui
         .table
         .select(selected.or((!cards.is_empty()).then_some(0)));
+    app.global_ui.table.last_area = Some(layout[2]);
     task_cards::render(
         frame,
         layout[2],
@@ -1246,6 +1247,36 @@ mod tests {
         assert!(content.contains(crate::widgets::spinner::status_frame(0)));
         assert!(content.contains("⟦needs you⟧"));
         assert!(!content.contains(" idle "));
+    }
+
+    #[test]
+    fn all_chat_cards_accept_mouse_wheel_navigation_after_render() {
+        let mut app = app_with_index(
+            (0..10)
+                .map(|index| {
+                    entry(
+                        "shop",
+                        &index.to_string(),
+                        coducktor_contract::RunStatus::Done,
+                    )
+                })
+                .collect(),
+            vec![project("shop", Vec::new())],
+        );
+        render(&mut app, 80, 20);
+        let area = app.global_ui.table.last_area.expect("all chats area");
+        assert_eq!(app.global_ui.table.selected, Some(0));
+
+        app.handle_event(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::ScrollDown,
+                column: area.x,
+                row: area.y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+        ));
+
+        assert_eq!(app.global_ui.table.selected, Some(3));
     }
 
     #[test]
