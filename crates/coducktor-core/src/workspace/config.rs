@@ -16,6 +16,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
 
@@ -956,25 +957,25 @@ pub fn load_workspace_config(path: &Path, env: &dyn EnvSource) -> WorkspaceConfi
     WorkspaceConfig::default_for(env)
 }
 
-/// The tmp path an atomic write stages through — UNIQUE PER WRITE, never a fixed
-/// `${path}.tmp`. The `~/.coducktor/` directory is shared
-/// by every coducktor process on the machine, so two writers staging through the same tmp
-/// name would interleave (writer B's truncate can empty the file between writer A's write
-/// and rename). The pid + a random suffix gives every writer its own staging file.
+static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// The tmp path an atomic write stages through — unique per write, never a fixed
+/// `${path}.tmp`. The directory may be shared by concurrent processes and threads, so the
+/// process id, wall-clock timestamp, and monotonic process-local sequence all participate.
 pub fn atomic_tmp_path(path: &Path) -> PathBuf {
-    let random = {
+    let nanos = {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
+        SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default();
-        format!(
-            "{:08x}",
-            (nanos as u64) ^ (process::id() as u64).wrapping_mul(0x9E37_79B9)
-        )
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
     };
+    let sequence = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.{random}.tmp", process::id()));
+    name.push(format!(
+        ".{}.{nanos:032x}.{sequence:016x}.tmp",
+        process::id()
+    ));
     path.with_file_name(name)
 }
 
