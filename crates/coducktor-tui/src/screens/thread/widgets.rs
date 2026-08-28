@@ -841,22 +841,50 @@ pub fn render_run_end_banner(
     1
 }
 
-pub fn render_live_activity(frame: &mut Frame<'_>, area: Rect, text: &str, theme: &Theme) -> u16 {
-    if area.height == 0 || text.is_empty() {
+pub fn render_live_activity(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    activity: &str,
+    elapsed: &str,
+    tick: u64,
+    theme: &Theme,
+) -> u16 {
+    if area.height == 0 || area.width == 0 || activity.is_empty() {
         return 0;
     }
+    let right = "esc to stop";
+    let right_width = right.len().min(area.width as usize) as u16;
+    let left_width = area.width.saturating_sub(right_width);
+    let left = Line::from(vec![
+        Span::styled(
+            format!("{} ", crate::widgets::spinner::status_frame(tick)),
+            Style::default().fg(theme.palette.running),
+        ),
+        Span::styled(
+            activity.to_owned(),
+            Style::default()
+                .fg(theme.palette.fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" \u{b7} {elapsed}"),
+            Style::default().fg(theme.palette.soft_fg),
+        ),
+    ]);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("● ", Style::default().fg(theme.palette.running)),
-            Span::styled(
-                text.to_owned(),
-                Style::default()
-                    .fg(theme.palette.fg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])),
-        Rect::new(area.x, area.y, area.width, 1),
+        Paragraph::new(left),
+        Rect::new(area.x, area.y, left_width, 1),
     );
+    if right_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                right.to_owned(),
+                Style::default().fg(theme.palette.soft_fg),
+            ))
+            .alignment(ratatui::layout::Alignment::Right),
+            Rect::new(area.right() - right_width, area.y, right_width, 1),
+        );
+    }
     1
 }
 

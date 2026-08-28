@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use serde_json::Value;
@@ -24,8 +24,9 @@ use crate::image::{self, DecodedImage, ImageSupport};
 use crate::input::hitmap::{HitAction, HitMap};
 use crate::markdown::RenderCache;
 use crate::screens::thread::ThreadAction;
-use crate::theme::Theme;
+use crate::theme::{ColorCapability, Theme};
 use crate::widgets::run_end::{self, RunOutcome};
+use crate::widgets::spinner;
 use crate::widgets::tool_card::{self, ToolTier};
 
 /// Every image item reserves at most this many rows, regardless of its own aspect
@@ -175,7 +176,17 @@ impl TranscriptItem {
                 ("●", theme.palette.accent)
             }
             Self::Message(_) => ("▌", theme.palette.border),
-            Self::Reasoning(item) => (if item.expanded { "▾" } else { "▸" }, theme.palette.soft_fg),
+            Self::Reasoning(item) if item.is_active => {
+                (spinner::thinking_frame(ctx.tick), thinking_color(ctx))
+            }
+            Self::Reasoning(item) => (
+                if item.expanded {
+                    crate::glyphs::glyphs().expanded
+                } else {
+                    crate::glyphs::glyphs().collapsed
+                },
+                theme.palette.soft_fg,
+            ),
             Self::Tool(item) => (if item.open() { "▾" } else { "▸" }, theme.palette.soft_fg),
             Self::Note(item) => (
                 "·",
@@ -212,6 +223,8 @@ pub struct MessageItem {
     pub id: String,
     pub role: MessageRole,
     pub text: String,
+    /// True only for the last assistant message while its turn is still running.
+    pub streaming: bool,
     cache: RenderCache,
 }
 
@@ -221,6 +234,7 @@ impl MessageItem {
             id: id.into(),
             role,
             text: text.into(),
+            streaming: false,
             cache: RenderCache::new(),
         }
     }
@@ -230,6 +244,10 @@ pub struct ReasoningItem {
     pub id: String,
     pub text: String,
     pub expanded: bool,
+    /// True only for the newest reasoning item while its turn is running.
+    pub is_active: bool,
+    /// Epoch seconds for the active turn; animation-only and excluded from height revisions.
+    pub started_epoch: Option<i64>,
     cache: RenderCache,
 }
 
@@ -239,6 +257,8 @@ impl ReasoningItem {
             id: id.into(),
             text: text.into(),
             expanded: false,
+            is_active: false,
+            started_epoch: None,
             cache: RenderCache::new(),
         }
     }
@@ -433,10 +453,28 @@ fn wrapped_line_count(text: &str, width: u16) -> u16 {
 fn paint_message(item: &mut MessageItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
     let theme = ctx.theme;
     let style = Style::default().fg(theme.palette.fg);
-    Paragraph::new(item.cache.text(&item.text).clone())
-        .style(style)
-        .wrap(Wrap { trim: false })
-        .render(area, buf);
+    Paragraph::new(
+        item.cache
+            .text_highlighted(&item.text, theme.name.is_dark())
+            .clone(),
+    )
+    .style(style)
+    .wrap(Wrap { trim: false })
+    .render(area, buf);
+    if item.streaming && ctx.tick % 12 < 6 && area.width > 0 && area.height > 0 {
+        let painted_height = item.cache.height(&item.text, area.width).min(area.height);
+        if painted_height > 0 {
+            let y = area.y + painted_height - 1;
+            let last = (area.x..area.right())
+                .rev()
+                .find(|x| buf[(*x, y)].symbol() != " ");
+            let x = last.map_or(area.x, |x| x.saturating_add(1));
+            if x < area.right() {
+                Line::from(Span::styled("▌", Style::default().fg(theme.palette.accent)))
+                    .render(Rect::new(x, y, 1, 1), buf);
+            }
+        }
+    }
 }
 
 fn paint_reasoning(item: &mut ReasoningItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
@@ -447,18 +485,57 @@ fn paint_reasoning(item: &mut ReasoningItem, buf: &mut Buffer, area: Rect, ctx: 
     let soft = Style::default().fg(theme.palette.soft_fg);
     let first_line = item.text.lines().next().unwrap_or_default();
     let header = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+    let detail = if item.is_active {
+        format!(
+            " \u{b7} {}",
+            format_elapsed(item.started_epoch, ctx.now_epoch)
+        )
+    } else {
+        format!(" \u{b7} {first_line}")
+    };
     Line::from(vec![
-        Span::styled("Thinking \u{2014} ", soft),
-        Span::styled(first_line.to_owned(), soft.add_modifier(Modifier::DIM)),
+        Span::styled("Thinking", soft.add_modifier(Modifier::BOLD)),
+        Span::styled(detail, soft.add_modifier(Modifier::DIM)),
     ])
     .render(header, buf);
     if item.expanded && area.height > 1 {
         let body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
-        Paragraph::new(item.cache.text(&item.text).clone())
-            .style(soft)
-            .wrap(Wrap { trim: false })
-            .render(body, buf);
+        Paragraph::new(
+            item.cache
+                .text_highlighted(&item.text, theme.name.is_dark())
+                .clone(),
+        )
+        .style(soft.add_modifier(Modifier::ITALIC))
+        .wrap(Wrap { trim: false })
+        .render(body, buf);
     }
+}
+
+fn format_elapsed(started_epoch: Option<i64>, now_epoch: i64) -> String {
+    let seconds = started_epoch
+        .map(|started| now_epoch.saturating_sub(started).max(0))
+        .unwrap_or_default();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    }
+}
+
+fn thinking_color(ctx: FrameCtx<'_>) -> Color {
+    if ctx.theme.capability != ColorCapability::TrueColor {
+        return ctx.theme.palette.accent;
+    }
+    let (Color::Rgb(sr, sg, sb), Color::Rgb(ar, ag, ab)) =
+        (ctx.theme.palette.soft_fg, ctx.theme.palette.accent)
+    else {
+        return ctx.theme.palette.accent;
+    };
+    let amount = spinner::pulse(ctx.tick);
+    let mix = |start: u8, end: u8| {
+        (f32::from(start) + (f32::from(end) - f32::from(start)) * amount).round() as u8
+    };
+    Color::Rgb(mix(sr, ar), mix(sg, ag), mix(sb, ab))
 }
 
 fn paint_note(item: &NoteItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
@@ -1226,6 +1303,50 @@ mod tests {
         transcript.toggle_reasoning("r1");
         let expanded = render_to_string(&mut transcript, 60, 10);
         assert!(expanded.contains("second"));
+    }
+
+    #[test]
+    fn active_reasoning_sparkles_with_elapsed_time_and_italic_body() {
+        let mut reasoning = ReasoningItem::new("r1", "checking invariants");
+        reasoning.expanded = true;
+        reasoning.is_active = true;
+        reasoning.started_epoch = Some(10);
+        let mut transcript = Transcript::new();
+        transcript.push(TranscriptItem::Reasoning(reasoning));
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        let theme = theme();
+        transcript.render(
+            &mut buf,
+            area,
+            FrameCtx {
+                theme: &theme,
+                tick: 4,
+                now_epoch: 75,
+            },
+        );
+        let content: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(content.contains(spinner::thinking_frame(4)));
+        assert!(content.contains("Thinking · 1m05s"));
+        assert!(
+            buf.content
+                .iter()
+                .any(|cell| cell.modifier.contains(Modifier::ITALIC))
+        );
+    }
+
+    #[test]
+    fn streaming_caret_blinks_without_changing_message_height() {
+        let mut message = MessageItem::new("m1", MessageRole::Assistant, "streaming");
+        message.streaming = true;
+        let mut streaming = TranscriptItem::Message(message);
+        let mut settled =
+            TranscriptItem::Message(MessageItem::new("m2", MessageRole::Assistant, "streaming"));
+        assert_eq!(streaming.height(40), settled.height(40));
+        let mut transcript = Transcript::new();
+        transcript.push(streaming);
+        let content = render_to_string(&mut transcript, 40, 5);
+        assert!(content.contains("streaming▌"));
     }
 
     #[test]

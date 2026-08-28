@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use coducktor_contract::{
     ApiRun, ProcessUsage, ProjectListEntry, RunIndexEntry, RunStatus, RunsIndexResponse,
@@ -1052,6 +1053,8 @@ pub struct App {
     pub live_usage: BTreeMap<String, ProcessUsage>,
     pub now_epoch: i64,
     pub animation_tick: u64,
+    /// Previous frame cost, used to pause cosmetic animation under render pressure.
+    pub last_frame_cost: Duration,
     /// The one-shot launch animation; `None` once skipped, finished, or never started. Left
     /// `None` by `App::new` so screen snapshot tests never render it.
     boot_animation: Option<crate::boot_animation::BootAnimation>,
@@ -1172,6 +1175,7 @@ impl App {
             live_usage: BTreeMap::new(),
             now_epoch: 0,
             animation_tick: 0,
+            last_frame_cost: Duration::ZERO,
             boot_animation: None,
             tasks_ui: crate::screens::tasks::TasksUi::default(),
             global_ui: crate::screens::global_tasks::GlobalUi::default(),
@@ -1235,6 +1239,7 @@ impl App {
         projection_micros: u64,
         events_reduced: usize,
     ) {
+        self.last_frame_cost = Duration::from_micros(frame_micros);
         self.runtime_metrics.frame_micros = frame_micros;
         self.runtime_metrics.projection_micros = projection_micros;
         self.runtime_metrics.events_reduced = events_reduced;
@@ -4476,6 +4481,7 @@ mod tests {
         app.set_debug_hud(true);
         app.record_frame_metrics(12_345, 4_567, 256);
         app.record_dropped_events(3);
+        assert_eq!(app.last_frame_cost, Duration::from_micros(12_345));
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| app.render(frame)).unwrap();
 

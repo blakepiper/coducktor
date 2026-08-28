@@ -841,17 +841,33 @@ fn build_transcript_items(
             widgets::run_end_detail(&run.record),
         )));
     }
-    let mut latest_tool = None;
-    for (index, item) in items.iter_mut().enumerate() {
-        if let TranscriptItem::Tool(tool) = item {
-            tool.is_latest = false;
-            latest_tool = Some(index);
-        }
-    }
+    let latest_tool = items
+        .iter()
+        .rposition(|item| matches!(item, TranscriptItem::Tool(_)));
     if let Some(index) = latest_tool
         && let Some(TranscriptItem::Tool(item)) = items.get_mut(index)
     {
         item.is_latest = true;
+    }
+    if run.record.status == RunStatus::Running {
+        let latest_reasoning = items
+            .iter()
+            .rposition(|item| matches!(item, TranscriptItem::Reasoning(_)));
+        if let Some(index) = latest_reasoning
+            && let Some(TranscriptItem::Reasoning(item)) = items.get_mut(index)
+        {
+            item.is_active = true;
+            item.started_epoch = run
+                .record
+                .started_at
+                .as_deref()
+                .and_then(crate::screens::runs_util::parse_iso_seconds);
+        }
+        if let Some(TranscriptItem::Message(item)) = items.last_mut()
+            && item.role == coducktor_protocol::MessageRole::Assistant
+        {
+            item.streaming = true;
+        }
     }
     items
 }
@@ -862,10 +878,11 @@ fn reuse_message(
     role: coducktor_protocol::MessageRole,
     text: &str,
 ) -> TranscriptItem {
-    if let Some(TranscriptItem::Message(item)) = existing.remove(&id)
+    if let Some(TranscriptItem::Message(mut item)) = existing.remove(&id)
         && item.role == role
         && item.text == text
     {
+        item.streaming = false;
         return TranscriptItem::Message(item);
     }
     TranscriptItem::Message(MessageItem::new(id, role, text))
@@ -876,9 +893,11 @@ fn reuse_reasoning(
     id: String,
     text: &str,
 ) -> TranscriptItem {
-    if let Some(TranscriptItem::Reasoning(item)) = existing.remove(&id)
+    if let Some(TranscriptItem::Reasoning(mut item)) = existing.remove(&id)
         && item.text == text
     {
+        item.is_active = false;
+        item.started_epoch = None;
         return TranscriptItem::Reasoning(item);
     }
     TranscriptItem::Reasoning(ReasoningItem::new(id, text))
@@ -890,7 +909,7 @@ fn reuse_tool(
 ) -> TranscriptItem {
     let id = tool.id.clone();
     let display = coducktor_protocol::tool_display(&tool.name, tool.input.as_ref());
-    if let Some(TranscriptItem::Tool(item)) = existing.remove(&id)
+    if let Some(TranscriptItem::Tool(mut item)) = existing.remove(&id)
         && item.tool_kind == display.tool_kind
         && item.title == display.title
         && item.subtitle == display.subtitle
@@ -901,6 +920,7 @@ fn reuse_tool(
         && item.error.as_deref() == tool.error.as_deref()
         && item.exit_code == tool.exit_code.map(|value| value as i64)
     {
+        item.is_latest = false;
         return TranscriptItem::Tool(item);
     }
     let mut candidate = ToolItem::new(id, &tool.name, tool.input.as_ref(), tool.status);
@@ -1162,35 +1182,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         );
     }
 
-    let active = matches!(record.status, RunStatus::Queued | RunStatus::Running);
-    let throbber = crate::widgets::spinner::frame(app.animation_tick);
-    let status = if app.thread_ui.cancel_pending {
-        format!("{throbber} Stopping…")
-    } else if active {
-        let mut detail = Vec::new();
-        if let Some(started_at) = record.started_at.as_deref() {
-            let elapsed = crate::screens::runs_util::short_age(started_at, app.now_epoch);
-            if !elapsed.is_empty() {
-                detail.push(elapsed);
-            }
-        }
-        if detail.is_empty() {
-            detail.push("0s".to_owned());
-        }
-        detail.push(format!("{} tok", record.tokens_used as i64));
-        format!(
-            "{throbber} {} · {}",
-            app.thread_ui.data.view_model.current_status,
-            detail.join(" · ")
-        )
-    } else {
-        app.thread_ui.data.view_model.current_status.clone()
-    };
     let transcript_title = format!(
-        " Session  ·  {}{} ",
-        status,
+        " Session  \u{b7}  {} tok{} ",
+        record.tokens_used as i64,
         if app.thread_ui.transcript.unseen_count() > 0 {
-            format!("  ·  {} new", app.thread_ui.transcript.unseen_count())
+            format!("  \u{b7}  {} new", app.thread_ui.transcript.unseen_count())
         } else {
             String::new()
         }
@@ -1280,31 +1276,31 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             &theme,
         );
     } else if matches!(record.status, RunStatus::Queued | RunStatus::Running) {
-        let mut detail = Vec::new();
-        if let Some(started_at) = record.started_at.as_deref() {
-            let elapsed = crate::screens::runs_util::short_age(started_at, app.now_epoch);
-            if !elapsed.is_empty() {
-                detail.push(elapsed);
-            }
-        }
-        if detail.is_empty() {
-            detail.push("0s".to_owned());
-        }
-        detail.push(format!("{} tok", record.tokens_used as i64));
-        if let Some(tool) = app.thread_ui.transcript.latest_running_tool_title() {
-            detail.push(tool.to_owned());
-        }
-        let phase = if app.thread_ui.cancel_pending {
-            "Stopping…"
+        let elapsed = record
+            .started_at
+            .as_deref()
+            .map(|started| crate::screens::runs_util::short_age(started, app.now_epoch))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "0s".to_owned());
+        let activity = if app.thread_ui.cancel_pending {
+            "Stopping\u{2026}"
         } else {
-            app.thread_ui.data.view_model.current_status.as_str()
+            app.thread_ui
+                .transcript
+                .latest_running_tool_title()
+                .unwrap_or_else(|| {
+                    let status = app.thread_ui.data.view_model.current_status.trim();
+                    if status.is_empty() { "Working" } else { status }
+                })
         };
-        let activity = if detail.is_empty() {
-            phase.to_owned()
-        } else {
-            format!("{phase} · {}", detail.join(" · "))
-        };
-        widgets::render_live_activity(frame, dock_rows[5], &activity, &theme);
+        widgets::render_live_activity(
+            frame,
+            dock_rows[5],
+            activity,
+            &elapsed,
+            app.animation_tick,
+            &theme,
+        );
     }
 
     if let Some(agent_id) = app.thread_ui.subagent_sheet.clone()
@@ -1684,29 +1680,11 @@ fn render_conversation(
         app.thread_ui.header_action_focus,
     );
 
-    let throbber = crate::widgets::spinner::frame(app.animation_tick);
-    let status = if app.thread_ui.cancel_pending {
-        format!("{throbber} Stopping…")
-    } else if record.state == ConversationState::Running {
-        let elapsed = record
-            .active_turn
-            .as_ref()
-            .and_then(|turn| turn.started_at.as_deref())
-            .map(|started| crate::screens::runs_util::short_age(started, app.now_epoch))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "0s".to_owned());
-        format!(
-            "{throbber} {} · {elapsed} · {} tok",
-            app.thread_ui.data.view_model.current_status, record.tokens_used as i64
-        )
-    } else {
-        app.thread_ui.data.view_model.current_status.clone()
-    };
     let transcript_title = format!(
-        " Session  ·  {}{} ",
-        status,
+        " Session  \u{b7}  {} tok{} ",
+        record.tokens_used as i64,
         if app.thread_ui.transcript.unseen_count() > 0 {
-            format!("  ·  {} new", app.thread_ui.transcript.unseen_count())
+            format!("  \u{b7}  {} new", app.thread_ui.transcript.unseen_count())
         } else {
             String::new()
         }
@@ -1762,22 +1740,43 @@ fn render_conversation(
         );
     }
 
-    // While the harness owns the turn the hint spins, so "the harness is working" reads as
-    // live activity rather than static text.
-    let mut hint = followup_blocked_reason(app)
-        .or_else(|| session_restart_hint(app))
-        .unwrap_or("Enter · send")
-        .to_owned();
-    if matches!(
+    let active = matches!(
         app.thread_ui.data.conversation_state(),
         Some(ConversationState::Queued | ConversationState::Running)
-    ) {
-        hint = format!(
-            "{} {hint}",
-            crate::widgets::spinner::frame(app.animation_tick)
+    );
+    if active {
+        let elapsed = record
+            .active_turn
+            .as_ref()
+            .and_then(|turn| turn.started_at.as_deref())
+            .map(|started| crate::screens::runs_util::short_age(started, app.now_epoch))
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "0s".to_owned());
+        let activity = if app.thread_ui.cancel_pending {
+            "Stopping\u{2026}"
+        } else {
+            app.thread_ui
+                .transcript
+                .latest_running_tool_title()
+                .unwrap_or_else(|| {
+                    let status = app.thread_ui.data.view_model.current_status.trim();
+                    if status.is_empty() { "Working" } else { status }
+                })
+        };
+        widgets::render_live_activity(
+            frame,
+            dock_rows[1],
+            activity,
+            &elapsed,
+            app.animation_tick,
+            &theme,
         );
+    } else {
+        let hint = followup_blocked_reason(app)
+            .or_else(|| session_restart_hint(app))
+            .unwrap_or("Enter \u{b7} send");
+        widgets::render_status_hint(frame, dock_rows[1], hint, &theme);
     }
-    widgets::render_status_hint(frame, dock_rows[1], &hint, &theme);
 
     app.thread_ui
         .composer
@@ -2890,6 +2889,7 @@ mod tests {
             );
         }
 
+        let metrics_before = app.thread_ui.projection_metrics();
         let started = Instant::now();
         app.thread_ui.push_events((11_992..12_000).map(|sequence| {
             let event = realistic_v2_event(sequence);
@@ -2905,6 +2905,7 @@ mod tests {
                 now_epoch: 0,
             },
         );
+        let metrics_after = app.thread_ui.projection_metrics();
         let elapsed = started.elapsed();
         let budget = if cfg!(debug_assertions) {
             Duration::from_millis(30)
@@ -2913,7 +2914,14 @@ mod tests {
         };
         assert!(
             elapsed < budget,
-            "12,000-event live frame took {elapsed:?}; target is <8ms in the optimized profile"
+            "12,000-event live frame took {elapsed:?}; target is <8ms in the optimized profile; \
+             reduction {:?}, projection {:?}",
+            metrics_after
+                .rebuild_time
+                .saturating_sub(metrics_before.rebuild_time),
+            metrics_after
+                .projection_time
+                .saturating_sub(metrics_before.projection_time),
         );
     }
 
@@ -3144,9 +3152,8 @@ mod tests {
         );
         let content = render_to_string(&mut app);
         assert!(
-            content.contains(
-                "● Running cargo test -p coducktor-tui · 0s · 0 tok · Ran cargo test -p coducktor-tui"
-            ),
+            content.contains("Ran cargo test -p coducktor-tui · 0s")
+                && content.contains("esc to stop"),
             "rendered thread: {content}"
         );
     }
@@ -3263,8 +3270,8 @@ mod tests {
         let screen = conversation_screen(coducktor_contract::ConversationState::Running, 120, 40);
         assert!(screen.contains("Cancel"), "a live turn can be stopped");
         assert!(
-            screen.contains("Ctrl-C stops it"),
-            "the composer explains the block instead of silently ignoring Enter"
+            screen.contains("esc to stop"),
+            "the live activity line exposes the stop affordance"
         );
         assert!(
             !screen.contains("queues a follow-up"),

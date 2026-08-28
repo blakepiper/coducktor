@@ -36,6 +36,13 @@ const BACKGROUND_READ_WORKER_COUNT: usize = 6;
 const BACKGROUND_MUTATE_WORKER_COUNT: usize = 2;
 /// Native jobs can outlive a frame, but must never form an unbounded memory backlog.
 const BACKGROUND_QUEUE_CAPACITY: usize = 128;
+fn next_animation_tick(tick: u64, last_frame_cost: Duration) -> u64 {
+    if last_frame_cost <= FRAME_BUDGET / 2 {
+        tick.wrapping_add(1)
+    } else {
+        tick
+    }
+}
 /// How long a confirmed quit waits for in-flight turn/activation workers to notice their
 /// cancellation token and exit on their own before the process moves on regardless. A worker
 /// blocked in `ChildProcess::next_line` reliably notices within tens of milliseconds; this only
@@ -3105,7 +3112,7 @@ async fn run(
         let frame_started = Instant::now();
         let projection_before = app.thread_ui.projection_metrics();
         app.now_epoch = current_epoch_seconds();
-        app.animation_tick = app.animation_tick.wrapping_add(1);
+        app.animation_tick = next_animation_tick(app.animation_tick, app.last_frame_cost);
         if let Some((_, receiver)) = bootstrap.as_mut()
             && !bootstrap_applied
         {
@@ -3437,6 +3444,11 @@ fn parse_editor_command(raw: &str) -> io::Result<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn heavy_previous_frame_pauses_only_the_animation_clock() {
+        assert_eq!(next_animation_tick(7, FRAME_BUDGET / 2), 8);
+        assert_eq!(next_animation_tick(7, FRAME_BUDGET), 7);
+    }
 
     #[test]
     fn global_index_refreshes_are_queued_and_coalesced_after_mutations() {
