@@ -2,6 +2,7 @@
 ":" = "command"
 "ctrl-o" = "back"
 "ctrl-i" = "forward"
+"ctrl-g" = "pet-duck"
 "za" = "toggle-transcript-item"
 "zR" = "expand-transcript"
 "zM" = "collapse-transcript"

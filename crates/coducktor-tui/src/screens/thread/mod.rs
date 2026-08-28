@@ -68,6 +68,8 @@ pub enum ThreadAction {
     /// Click into the transcript pane: it takes keyboard focus for scrolling.
     FocusTranscript,
     FocusReviewNotes,
+    /// Animate the local placebo mascot. This never crosses the TUI/engine seam.
+    PetDuck,
     /// Tab row: Session is this screen; Changes/Files/Commits are `screens::task_git` — leaving
     /// this screen is a navigation, not a local state change.
     OpenGitTab(crate::app::TaskGitTab),
@@ -250,6 +252,41 @@ pub struct ThreadPushResult {
     pub refresh_required: bool,
 }
 
+const DUCK_COMBO_TICKS: u64 = 48;
+
+/// Ephemeral input state for the chat-header placebo. It is deliberately absent from every
+/// contract and durable record: petting the duck can only change pixels in this process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PlaceboDuck {
+    combo: u16,
+    last_pet_tick: Option<u64>,
+}
+
+impl PlaceboDuck {
+    pub(crate) fn pet(&mut self, tick: u64) {
+        self.combo = match self.last_pet_tick {
+            Some(previous) if tick.saturating_sub(previous) <= DUCK_COMBO_TICKS => {
+                self.combo.saturating_add(1)
+            }
+            _ => 1,
+        };
+        self.last_pet_tick = Some(tick);
+    }
+
+    pub(crate) fn combo_at(self, tick: u64) -> u16 {
+        match self.last_pet_tick {
+            Some(previous) if tick.saturating_sub(previous) <= DUCK_COMBO_TICKS => self.combo,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn elapsed(self, tick: u64) -> Option<u64> {
+        self.last_pet_tick
+            .map(|previous| tick.saturating_sub(previous))
+            .filter(|elapsed| *elapsed <= DUCK_COMBO_TICKS)
+    }
+}
+
 pub struct ThreadUi {
     pub data: ThreadData,
     pub transcript: Transcript,
@@ -261,6 +298,7 @@ pub struct ThreadUi {
     pub steps_collapsed: bool,
     pub focus: ThreadFocus,
     pub header_action_focus: Option<usize>,
+    pub(crate) placebo_duck: PlaceboDuck,
     /// The transcript's inner rectangle from the last render, used to keep mouse-wheel input
     /// scoped to the task activity rather than the composer and other controls.
     pub(crate) transcript_area: Option<Rect>,
@@ -288,6 +326,7 @@ impl Default for ThreadUi {
             steps_collapsed: true,
             focus: ThreadFocus::Transcript,
             header_action_focus: None,
+            placebo_duck: PlaceboDuck::default(),
             transcript_area: None,
             pending_prompt: None,
             pending_prompt_after_seq: -1.0,
@@ -341,6 +380,9 @@ impl ThreadUi {
         self.ask_focus = (0, 0);
         self.subagent_sheet = None;
         self.header_action_focus = None;
+        if !same_thread {
+            self.placebo_duck = PlaceboDuck::default();
+        }
         self.focus = if same_thread {
             self.focus
         } else {

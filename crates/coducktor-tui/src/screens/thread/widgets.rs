@@ -18,7 +18,7 @@ use crate::screens::runs_util::{attention, compact_tokens, parse_iso_seconds, ru
 use crate::theme::Theme;
 use crate::widgets::run_end::{self, RunOutcome};
 
-use super::ThreadAction;
+use super::{PlaceboDuck, ThreadAction};
 use super::actions::run_action_flags;
 use super::reducer::{ThreadAsk, ThreadEntry, ThreadState};
 
@@ -33,6 +33,9 @@ pub fn render_conversation_header(
     theme: &Theme,
     hitmap: &mut crate::input::hitmap::HitMap,
     action_focus: Option<usize>,
+    placebo_duck: &PlaceboDuck,
+    tick: u64,
+    pet_key: &str,
 ) -> u16 {
     use crate::screens::chats_util;
 
@@ -57,6 +60,15 @@ pub fn render_conversation_header(
             Style::default().fg(theme.palette.review),
         ));
     }
+    let duck = duck_layout(area);
+    let text_area = duck.map_or(area, |(duck_area, _)| {
+        Rect::new(
+            area.x,
+            area.y,
+            duck_area.x.saturating_sub(area.x).saturating_sub(1),
+            area.height,
+        )
+    });
     let mut lines = vec![Line::from(title_line)];
 
     let soft = Style::default().fg(theme.palette.soft_fg);
@@ -103,7 +115,7 @@ pub fn render_conversation_header(
     ));
     lines.push(Line::from(meta));
 
-    lines.push(Line::from(git_tab_spans(area, hitmap, theme)));
+    lines.push(Line::from(git_tab_spans(text_area, hitmap, theme)));
 
     let actions = conversation_header_actions(record);
     let mut action_spans = Vec::new();
@@ -122,16 +134,35 @@ pub fn render_conversation_header(
     let height = (lines.len() as u16).min(area.height);
     frame.render_widget(
         Paragraph::new(Text::from(lines)).style(Style::default().fg(theme.palette.fg)),
-        Rect::new(area.x, area.y, area.width, height),
+        Rect::new(text_area.x, text_area.y, text_area.width, height),
     );
+    if let Some((duck_area, full)) = duck {
+        render_placebo_duck(
+            frame,
+            duck_area,
+            full,
+            *placebo_duck,
+            tick,
+            pet_key,
+            theme,
+        );
+        hitmap.register(
+            duck_area,
+            5,
+            HitAction::ThreadScreen(ThreadAction::PetDuck),
+        );
+    }
     if let Some(action_row) = area.y.checked_add(3)
         && action_row < area.bottom()
     {
         let mut cursor = area.x;
         for (label, action) in &actions {
             let width = label.chars().count() as u16 + 3;
+            if cursor >= text_area.right() {
+                break;
+            }
             hitmap.register(
-                Rect::new(cursor, action_row, width, 1),
+                Rect::new(cursor, action_row, width.min(text_area.right() - cursor), 1),
                 4,
                 HitAction::ThreadScreen(action.clone()),
             );

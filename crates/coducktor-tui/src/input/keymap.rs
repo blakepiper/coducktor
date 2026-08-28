@@ -39,6 +39,7 @@ pub enum ActionId {
     ToggleTranscriptItem,
     ExpandTranscript,
     CollapseTranscript,
+    PetDuck,
     Noop,
 }
 
@@ -66,6 +67,7 @@ impl ActionId {
             "toggle-transcript-item" => Some(Self::ToggleTranscriptItem),
             "expand-transcript" => Some(Self::ExpandTranscript),
             "collapse-transcript" => Some(Self::CollapseTranscript),
+            "pet-duck" => Some(Self::PetDuck),
             "noop" => Some(Self::Noop),
             _ => None,
         }
@@ -249,5 +251,15 @@ mod tests {
         let keymap = Keymap::default();
         let event = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
         assert_eq!(keymap.action_for(KeyMode::Normal, &event), None);
+    }
+
+    #[test]
+    fn placebo_duck_is_bound_to_ctrl_g_by_default() {
+        let keymap = Keymap::default();
+        let event = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert_eq!(
+            keymap.action_for(KeyMode::Normal, &event),
+            Some(ActionId::PetDuck)
+        );
     }
 }
