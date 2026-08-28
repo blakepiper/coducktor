@@ -123,6 +123,8 @@ pub enum HitAction {
     SkillsScreen(usize),
     /// The Skills screen's project-skill creation action.
     SkillsNew,
+    /// The Skills screen's delete action, acting on the selected skill.
+    SkillsDelete,
     /// A repo-git screen control — routed by the screen.
     RepoGitScreen(RepoGitAction),
     /// A Settings nav entry — click to switch section.

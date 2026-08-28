@@ -1841,6 +1841,26 @@ fn execute_pending(
                     },
                 );
             }
+            PendingAction::DeleteSkill { project, name } => {
+                let scope = Scope::Project(project.clone());
+                let engine_for_task = engine.clone();
+                spawn_background(
+                    background_handle,
+                    background_sender,
+                    async move { engine_for_task.delete_skill(&scope, &name).await },
+                    move |result| {
+                        BackgroundResult::AppUpdate(Box::new(move |app| match result {
+                            Ok(path) => {
+                                app.notice = Some(format!("deleted {path}"));
+                                app.queue_pending(app::PendingAction::LoadSkills { project });
+                            }
+                            Err(error) => {
+                                app.notice = Some(format!("delete skill failed: {error}"));
+                            }
+                        }))
+                    },
+                );
+            }
             PendingAction::LoadSettings { project } => {
                 let generation = app.begin_settings_request();
                 let engine_for_task = engine.clone();

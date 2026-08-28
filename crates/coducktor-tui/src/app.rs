@@ -474,14 +474,14 @@ impl CommandId {
             Self::Back => "go back",
             Self::Forward => "go forward",
             Self::Theme => "switch theme",
-            Self::New => "new chat",
+            Self::New => "new chat, or a new skill on Skills",
             Self::ClearScratchpad => "clear the current scratchpad",
             Self::YankScratchpad => "copy the entire current scratchpad",
             Self::Help => "open this help",
             Self::Sidebar => "toggle sidebar",
             Self::Stop => "stop the current chat turn",
             Self::Archive => "archive the current chat",
-            Self::Delete => "delete the current chat",
+            Self::Delete => "delete the current chat, skill, or settings row",
             Self::Quit => "quit",
         }
     }
@@ -892,6 +892,10 @@ pub enum PendingAction {
         project: String,
     },
     CreateSkill {
+        project: String,
+        name: String,
+    },
+    DeleteSkill {
         project: String,
         name: String,
     },
@@ -3249,10 +3253,6 @@ impl App {
     }
 
     fn repeat_search(&mut self, forward: bool) {
-        if forward && matches!(self.route(), Route::Skills { .. }) {
-            crate::screens::skills::begin_create(self);
-            return;
-        }
         if self.last_search.is_empty() {
             return;
         }
@@ -3540,7 +3540,14 @@ impl App {
                     self.notice = Some("theme must be dark, lazyvim, or lakes".to_owned());
                 }
             }
-            CommandId::New => self.navigate(NavItem::NewTask),
+            // On Skills, :new names a project skill; everywhere else it opens a new chat.
+            CommandId::New => {
+                if matches!(self.route(), Route::Skills { .. }) {
+                    crate::screens::skills::begin_create(self);
+                } else {
+                    self.navigate(NavItem::NewTask);
+                }
+            }
             CommandId::ClearScratchpad => crate::screens::scratchpad::request_clear(self),
             CommandId::YankScratchpad => crate::screens::scratchpad::copy_all(self),
             CommandId::Help => self.help_open = true,
@@ -3555,7 +3562,7 @@ impl App {
             ),
             CommandId::Delete => self.apply_thread_command(
                 crate::screens::thread::ThreadAction::Delete,
-                ":delete requires an open chat or removable settings row",
+                ":delete requires an open chat, a skill, or a removable settings row",
             ),
             CommandId::Quit => self.request_quit(),
         }
@@ -3566,11 +3573,15 @@ impl App {
         action: crate::screens::thread::ThreadAction,
         unavailable: &str,
     ) {
-        if action == crate::screens::thread::ThreadAction::Delete
-            && matches!(self.route(), Route::Settings { .. } | Route::GlobalSettings)
-        {
-            crate::screens::settings::delete_selected(self);
-            return;
+        if action == crate::screens::thread::ThreadAction::Delete {
+            if matches!(self.route(), Route::Settings { .. } | Route::GlobalSettings) {
+                crate::screens::settings::delete_selected(self);
+                return;
+            }
+            if matches!(self.route(), Route::Skills { .. }) {
+                crate::screens::skills::delete_selected(self);
+                return;
+            }
         }
         if !matches!(self.route(), Route::Thread { .. } | Route::TaskGit { .. }) {
             self.notice = Some(unavailable.to_owned());
@@ -3784,6 +3795,11 @@ impl App {
             HitAction::SkillsNew => {
                 if matches!(self.route(), Route::Skills { .. }) {
                     crate::screens::skills::begin_create(self);
+                }
+            }
+            HitAction::SkillsDelete => {
+                if matches!(self.route(), Route::Skills { .. }) {
+                    crate::screens::skills::delete_selected(self);
                 }
             }
             HitAction::RepoGitScreen(action) => {
@@ -4220,7 +4236,7 @@ impl App {
                 ("GITHUB LIST", "↑↓ choose item · Enter open")
             }
             Route::Github { .. } => ("GITHUB DETAIL", "j/k scroll · Ctrl-W h list · gt tabs"),
-            Route::Skills { .. } => ("SKILLS", "n new skill · / filter · j/k choose"),
+            Route::Skills { .. } => ("SKILLS", ":new · :delete · / filter · j/k"),
             Route::Settings { .. } | Route::GlobalSettings => {
                 if self.current_screen_pane() == 0 {
                     ("SETTINGS NAV", "j/k choose section · l values")

@@ -1,6 +1,7 @@
 //! The Skills screen: a master/detail browser over locally discovered skills:
 //! the list on the left with a source badge (project / global / team), the rendered body on
-//! the right, `/` to filter, and `n` to create a project skill in the built-in editor.
+//! the right, `/` to filter, `:new` to create a project skill in the built-in editor, and
+//! `:delete` to remove the selected skill's file after a confirmation.
 
 use coducktor_contract::{Skill, SkillSource};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -10,7 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::{App, PendingAction, Route};
+use crate::app::{App, ConfirmRequest, PendingAction, Route};
 use crate::markdown::RenderCache;
 
 /// Engine-fetched state for the open Skills screen.
@@ -90,6 +91,43 @@ fn submit_create(app: &mut App) {
     });
 }
 
+/// The skill `:delete` acts on — the selection, falling back to the first visible row when the
+/// filter has moved past it, exactly like the detail pane.
+fn selected_skill(app: &App) -> Option<&Skill> {
+    let visible_indices = visible(app);
+    visible_indices
+        .iter()
+        .find(|index| **index == app.skills_ui.selected)
+        .or_else(|| visible_indices.first())
+        .and_then(|index| app.skills_ui.skills.get(*index))
+}
+
+pub(crate) fn delete_selected(app: &mut App) {
+    let Some(skill) = selected_skill(app) else {
+        app.notice = Some("no skill selected".to_owned());
+        return;
+    };
+    if skill.source == SkillSource::BuiltIn {
+        app.notice = Some(format!("{} is built in and cannot be deleted", skill.name));
+        return;
+    }
+    // The badge, not the path: the confirm dialog is two short lines wide, and the notice that
+    // follows the deletion reports the exact file that was removed.
+    let text = format!(
+        "Delete the {} skill \"{}\"?",
+        source_badge(skill.source),
+        skill.name
+    );
+    let name = skill.name.clone();
+    app.confirm = Some(ConfirmRequest {
+        text,
+        action: PendingAction::DeleteSkill {
+            project: app.skills_ui.project.clone(),
+            name,
+        },
+    });
+}
+
 fn visible(app: &App) -> Vec<usize> {
     let query = app.skills_ui.query.to_lowercase();
     app.skills_ui
@@ -146,23 +184,37 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     } else {
         "[New skill]"
     };
+    let delete_label = "[Delete skill]";
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(create_label, Style::default().fg(app.theme.palette.fg)),
+            Span::raw("  "),
+            Span::styled(delete_label, Style::default().fg(app.theme.palette.fg)),
             Span::raw("  "),
             Span::styled(filter_label, Style::default().fg(app.theme.palette.soft_fg)),
         ])),
         rows[0],
     );
+    let create_width = create_label.chars().count() as u16;
     app.hitmap.register(
-        Rect::new(rows[0].x, rows[0].y, create_label.chars().count() as u16, 1),
+        Rect::new(rows[0].x, rows[0].y, create_width, 1),
         3,
         crate::input::hitmap::HitAction::SkillsNew,
+    );
+    app.hitmap.register(
+        Rect::new(
+            rows[0].x.saturating_add(create_width + 2),
+            rows[0].y,
+            delete_label.chars().count() as u16,
+            1,
+        ),
+        3,
+        crate::input::hitmap::HitAction::SkillsDelete,
     );
 
     if app.skills_ui.skills.is_empty() {
         frame.render_widget(
-            Paragraph::new("No skills found. Press n to create a project skill.")
+            Paragraph::new("No skills found. Type :new to create a project skill.")
                 .style(Style::default().fg(app.theme.palette.soft_fg)),
             rows[1],
         );
@@ -372,10 +424,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
     match key.code {
-        KeyCode::Char('n') => {
-            begin_create(app);
-            true
-        }
         KeyCode::Char('j') | KeyCode::Down if app.screen_focus() == 0 => {
             let visible_indices = visible(app);
             if !visible_indices.is_empty() {
@@ -501,10 +549,7 @@ mod tests {
             KeyModifiers::NONE,
         )));
         app.execute_command("open /p/main/skills");
-        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
-            KeyCode::Char('n'),
-            KeyModifiers::NONE,
-        )));
+        app.execute_command("new");
         for character in "Code Review".chars() {
             app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
                 KeyCode::Char(character),
@@ -522,6 +567,78 @@ mod tests {
             PendingAction::CreateSkill { project, name }
                 if project == "main" && name == "Code Review"
         )));
+    }
+
+    #[test]
+    fn n_repeats_the_search_instead_of_opening_the_new_skill_dialog() {
+        let mut app = app_with_skills();
+        app.execute_command("open /p/main/skills");
+        let key = |app: &mut App, code: KeyCode| {
+            app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+                code,
+                KeyModifiers::NONE,
+            )));
+        };
+        key(&mut app, KeyCode::Char('/'));
+        for character in "om".chars() {
+            key(&mut app, KeyCode::Char(character));
+        }
+        // Both fixtures match "om", so Enter and then `n` walk the matches — neither creates.
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.skills_ui.create_open);
+        assert_eq!(app.skills_ui.selected, 1);
+        key(&mut app, KeyCode::Char('n'));
+        assert!(!app.skills_ui.create_open);
+        assert_eq!(app.skills_ui.selected, 0);
+    }
+
+    #[test]
+    fn delete_confirms_then_queues_removal_of_the_selected_skill() {
+        let mut app = app_with_skills();
+        app.execute_command("open /p/main/skills");
+        app.skills_ui.selected = 1;
+        app.pending.clear();
+        app.execute_command("delete");
+        let confirm = app.confirm.clone().expect("delete must confirm first");
+        assert_eq!(confirm.text, "Delete the global skill \"omarchy\"?");
+        app.handle_event(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.confirm.is_none());
+        assert!(app.pending.iter().any(|action| matches!(
+            action,
+            PendingAction::DeleteSkill { project, name }
+                if project == "main" && name == "omarchy"
+        )));
+    }
+
+    #[test]
+    fn delete_refuses_a_built_in_skill() {
+        let mut app = app_with_skills();
+        app.execute_command("open /p/main/skills");
+        app.skills_ui.skills.push(Skill {
+            name: "planning".to_owned(),
+            description: None,
+            interactive: None,
+            body: "Plan.".to_owned(),
+            path: "builtin:planning".to_owned(),
+            source: SkillSource::BuiltIn,
+        });
+        app.skills_ui.selected = 2;
+        app.pending.clear();
+        app.execute_command("delete");
+        assert!(app.confirm.is_none());
+        assert!(
+            !app.pending
+                .iter()
+                .any(|action| matches!(action, PendingAction::DeleteSkill { .. }))
+        );
+        assert!(
+            app.notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("built in"))
+        );
     }
 
     #[test]

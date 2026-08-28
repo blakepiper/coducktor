@@ -67,7 +67,7 @@ use coducktor_core::paths::{
     ProcessEnv, agent_accounts_path, agent_home_paths, expand_tilde, is_absolute_config_dir,
     project_state_dir, project_state_dir_in, real_home_dir,
 };
-use coducktor_core::skills::{create_project_skill, discover_skills};
+use coducktor_core::skills::{create_project_skill, delete_skill, discover_skills};
 use coducktor_core::workspace::agent_accounts::{
     AgentAccount, has_control_chars, is_valid_account_id, load_agent_accounts,
     merge_write_agent_accounts, supports_profiles,
@@ -795,6 +795,24 @@ impl InProcessEngine {
                 size: content.len() as u64,
                 content,
             })
+        })
+        .await
+        .map_err(|error| EngineError::Transport(error.to_string()))?
+    }
+
+    pub async fn delete_skill(&self, name: &str) -> Result<String, EngineError> {
+        let repo_root = self.repo_root.clone();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let path = delete_skill(&repo_root, &ProcessEnv, &name).map_err(|error| match error
+                .kind()
+            {
+                std::io::ErrorKind::NotFound => EngineError::NotFound,
+                _ => EngineError::Conflict {
+                    reason: error.to_string(),
+                },
+            })?;
+            Ok(path.to_string_lossy().into_owned())
         })
         .await
         .map_err(|error| EngineError::Transport(error.to_string()))?
@@ -2935,22 +2953,6 @@ impl InProcessEngine {
                 .collect(),
         };
 
-        let (page_events, first_seq, last_seq, item_count) =
-            if let (Some(first), Some(last)) = (selected.first(), selected.last()) {
-                let mut start = *first;
-                if let Some(boundary) = events[..start].iter().rposition(is_history_boundary) {
-                    start = boundary;
-                }
-                let page = events[start..=*last].to_vec();
-                (
-                    page,
-                    events[*first].seq,
-                    events[*last].seq,
-                    selected.len() as u64,
-                )
-            } else {
-                (Vec::new(), 0.0, 0.0, 0)
-            };
         let has_older = selected.first().is_some_and(|first| {
             units
                 .iter()
@@ -2961,6 +2963,34 @@ impl InProcessEngine {
                 .iter()
                 .any(|index| events[*index].seq > events[*last].seq)
         });
+        let (page_events, first_seq, last_seq, item_count) =
+            if let (Some(first), Some(last)) = (selected.first(), selected.last()) {
+                // Boundaries are page context rather than page items, so the window has to grow
+                // past them at both ends. Backwards that means the boundary that opens this
+                // page's first turn, plus the rest of its run: stopping at the nearest boundary
+                // alone drops the `user-message` sitting behind its `turn.started`.
+                let mut start = *first;
+                if let Some(boundary) = events[..start].iter().rposition(is_history_boundary) {
+                    start = boundary;
+                }
+                while start > 0 && is_history_boundary(&events[start - 1]) {
+                    start -= 1;
+                }
+                // Forwards it means the trailing boundaries the newest page ends on: a
+                // just-submitted follow-up is a `user-message` with nothing after it yet, and
+                // cutting it off makes the send look like it never happened. A page with newer
+                // items still stops at its last item — those boundaries open the next page.
+                let end = if has_newer { *last } else { events.len() - 1 };
+                let page = events[start..=end].to_vec();
+                (
+                    page,
+                    events[*first].seq,
+                    events[*last].seq,
+                    selected.len() as u64,
+                )
+            } else {
+                (Vec::new(), 0.0, 0.0, 0)
+            };
         let as_of_seq = events
             .iter()
             .map(|event| event_seq_u64(event.seq))
@@ -5115,6 +5145,22 @@ mod tests {
         assert!(matches!(
             engine.create_skill("Code Review").await.unwrap_err(),
             EngineError::Conflict { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_skill_removes_the_file_and_reports_an_unknown_name() {
+        let dir = TempDir::new().unwrap();
+        let engine = engine(&dir);
+        let file = engine.create_skill("Code Review").await.unwrap();
+
+        let removed = engine.delete_skill("code-review").await.unwrap();
+        assert!(removed.ends_with(".ai/coducktor/skills/code-review.md"));
+        assert!(!dir.path().join(&file.path).exists());
+
+        assert!(matches!(
+            engine.delete_skill("code-review").await.unwrap_err(),
+            EngineError::NotFound
         ));
     }
 
@@ -7724,6 +7770,52 @@ mod tests {
             .unwrap();
         let page = engine.run_history(&run_id, None).await.unwrap();
         assert!(!page.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_newest_page_keeps_the_boundaries_that_open_and_close_it() {
+        // `user-message` and `turn.started` are page boundaries, not page items. A follow-up
+        // that was just submitted is a trailing `user-message` with nothing after it yet, and
+        // the turn that opens the page starts with one too — trimming either made a sent prompt
+        // disappear from the transcript on the reload that follows the send.
+        let dir = TempDir::new().unwrap();
+        let engine = engine(&dir);
+        let run_id = seed_finished_legacy_run(&engine, "first");
+        {
+            let mut manager = engine.manager.lock();
+            for (event_type, text) in [
+                ("user-message", "first"),
+                ("turn.started", ""),
+                ("assistant-message", "answer one"),
+                ("turn.completed", ""),
+                ("user-message", "second"),
+            ] {
+                manager
+                    .append_event(&run_id, EventInput::new(event_type).field("text", text))
+                    .unwrap();
+            }
+        }
+
+        let page = engine.run_history(&run_id, None).await.unwrap();
+
+        let prompts: Vec<&str> = page
+            .events
+            .iter()
+            .filter(|event| event.event_type == "user-message")
+            .map(|event| {
+                event
+                    .extra
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(prompts, vec!["first", "second"]);
+        assert_eq!(
+            page.as_of_seq,
+            event_seq_u64(page.events.last().unwrap().seq),
+            "the watermark must not run ahead of the events the page returned"
+        );
     }
 
     #[tokio::test]

@@ -101,8 +101,9 @@ browser and editor with syntax highlighting, `Ctrl+S` to save, and `Ctrl+E` to h
 `$EDITOR` instead), **Terminal** (a real shell in an embedded PTY, plus an "Open in Terminal"
 action for launching your desktop's own terminal emulator), **Scratchpad** (a per-project note
 pad stored outside Git, under your Coducktor home), and **Skills**.
-From **Skills**, press `n` or choose **New skill** to name a project skill and write its generated
-template in the built-in IDE.
+From **Skills**, type `:new` or choose **New skill** to name a project skill and write its
+generated template in the built-in IDE; `:delete` or **Delete skill** removes the selected
+skill's file after a confirmation.
 
 The GitHub and Repo git screens degrade field by field when `gh` is missing or the repo isn't a
 Git checkout, rather than failing outright.

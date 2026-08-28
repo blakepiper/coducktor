@@ -1751,7 +1751,14 @@ fn render_conversation(
         })
         .unwrap_or(0);
     let hint_height = 1;
-    let composer_height = app.thread_ui.composer.height_for_width(area.width).max(3);
+    // The card wraps its text at `inner.width - 1`, and its border costs two rows. Sizing the
+    // dock from the raw width without those two rows left the composer one visible row, so a
+    // wrapped draft scrolled a single line instead of growing.
+    let composer_height = app
+        .thread_ui
+        .composer
+        .height_for_width(area.width.saturating_sub(3))
+        + 2;
     let dock_height = ask_height + hint_height + composer_height;
 
     let rows = Layout::default()
@@ -2481,6 +2488,102 @@ mod tests {
                 "the draft survives so the user can send it when the turn ends"
             );
         }
+    }
+
+    #[test]
+    fn the_composer_dock_is_tall_enough_for_its_wrapped_draft() {
+        // The card wraps at `inner.width - 1` and spends two rows on its border. Sizing the dock
+        // from the raw width without those rows left the draft's opening rows scrolled out of
+        // sight, so a long follow-up looked like it refused to wrap.
+        let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
+        app.thread_ui.focus = ThreadFocus::Composer;
+        app.thread_ui.composer.focus();
+        app.thread_ui
+            .composer
+            .set_text(&format!("START {}END", "wrap ".repeat(60)));
+
+        let screen = render_rows(&mut app, 120, 40);
+
+        assert!(
+            screen.iter().any(|row| row.contains("START")),
+            "the draft's first row stays visible: {screen:#?}"
+        );
+        assert!(
+            screen.iter().any(|row| row.contains("END")),
+            "the caret's row stays visible: {screen:#?}"
+        );
+    }
+
+    #[test]
+    fn a_follow_up_survives_the_reload_that_follows_its_send() {
+        use coducktor_contract::ConversationState;
+
+        let durable = vec![
+            event(1.0, "user-message", json!({"text": "first"})),
+            event(2.0, "turn.started", json!({"turnId": "t1"})),
+            event(3.0, "text", json!({"text": "answer one"})),
+            event(4.0, "turn.completed", json!({"turnId": "t1"})),
+        ];
+        let mut app = app_with_conversation(ConversationState::Idle);
+        app.thread_ui.load(
+            "main".to_owned(),
+            "chat-1".to_owned(),
+            ThreadSubject::Conversation(Box::new(conversation(ConversationState::Idle))),
+            durable.clone(),
+            4.0,
+            None,
+        );
+
+        assert!(submit_composer(&mut app, "second".to_owned(), Vec::new()));
+        assert!(
+            transcript_text(&app).contains("second"),
+            "the optimistic prompt shows while the send is in flight"
+        );
+
+        // The reload the runtime queues after a send returns the durable follow-up with it.
+        let mut reloaded = durable;
+        reloaded.push(event(5.0, "user-message", json!({"text": "second"})));
+        app.thread_ui.load(
+            "main".to_owned(),
+            "chat-1".to_owned(),
+            ThreadSubject::Conversation(Box::new(conversation(ConversationState::Queued))),
+            reloaded,
+            5.0,
+            None,
+        );
+
+        let items = app.thread_ui.transcript.items();
+        assert!(
+            matches!(items.last(), Some(TranscriptItem::Message(message)) if message.text == "second"),
+            "the sent prompt stays at the bottom of the transcript: {:?}",
+            items.iter().map(TranscriptItem::id).collect::<Vec<_>>()
+        );
+    }
+
+    fn transcript_text(app: &App) -> String {
+        app.thread_ui
+            .transcript
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                TranscriptItem::Message(message) => Some(message.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_rows(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     #[test]
@@ -4013,4 +4116,3 @@ mod tests {
         assert_eq!(app.thread_ui.composer.text, "first\nsecond");
     }
 }
-

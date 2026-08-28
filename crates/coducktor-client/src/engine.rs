@@ -70,6 +70,8 @@ pub trait Engine: Send + Sync {
     /// Create a project-local skill template and return it as an editable IDE file.
     async fn create_skill(&self, scope: &Scope, name: &str)
     -> Result<IdeFileResponse, EngineError>;
+    /// Delete a discovered skill's file, returning the path that was removed.
+    async fn delete_skill(&self, scope: &Scope, name: &str) -> Result<String, EngineError>;
     async fn projects(&self) -> Result<ProjectsResponse, EngineError>;
     async fn register_project(
         &self,
@@ -615,6 +617,10 @@ impl Engine for InProcessEngine {
         name: &str,
     ) -> Result<IdeFileResponse, EngineError> {
         self.scoped(scope)?.create_skill(name).await
+    }
+
+    async fn delete_skill(&self, scope: &Scope, name: &str) -> Result<String, EngineError> {
+        self.scoped(scope)?.delete_skill(name).await
     }
 
     async fn projects(&self) -> Result<ProjectsResponse, EngineError> {

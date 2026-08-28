@@ -55,10 +55,10 @@ paste, and mouse click/drag remain available for conventional editing.
 | --- | --- |
 | `:open <route>` | Navigate to a route such as `/tasks`, `/new`, or `/p/<project>/git` |
 | `:back` / `:forward` | Move through cockpit history |
-| `:new` | Open New Chat |
+| `:new` | Open New Chat, or name a new project skill on Skills |
 | `:stop` | Cancel the current live chat turn after confirmation |
 | `:archive` | Archive the current eligible chat or legacy record |
-| `:delete` | Delete the current removable record or settings row after confirmation |
+| `:delete` | Delete the current removable record, selected skill, or settings row after confirmation |
 | `:theme <dark\|lazyvim\|lakes>` | Switch theme |
 | `:%y` | Copy the entire open scratchpad to the system clipboard |
 | `:clear-scratchpad` | Clear the current scratchpad after confirmation |
@@ -83,8 +83,9 @@ paste, and mouse click/drag remain available for conventional editing.
   ephemeral morale only; they never alter the model, reasoning, priority, token budget, or agent
   request.
 - The IDE tree uses `h` or `Left` for the parent and `l`, `Enter`, or `Right` to open an entry.
-- On Skills, `n` opens the New skill dialog; `Enter` creates its project-local template and opens
-  it in the IDE.
+- On Skills, `:new` opens the New skill dialog; `Enter` creates its project-local template and
+  opens it in the IDE. `:delete` removes the selected skill's file after a confirmation that
+  names the path; built-in skills refuse. Both are also mouse-operable from the header controls.
 - In project and Global Settings, `l` moves into values and `h` returns to the section list.
 - Structured question cards and confirmation dialogs retain their displayed local keys.
 

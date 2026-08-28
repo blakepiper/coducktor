@@ -86,6 +86,58 @@ pub fn create_project_skill(repo_root: &Path, input: &str) -> io::Result<PathBuf
     Ok(relative)
 }
 
+/// Delete a discovered skill, returning the path that was removed. A `SKILL.md` entrypoint
+/// names its directory, so the directory is what goes — unless that directory is a scanned
+/// root, where a stray `SKILL.md` must not take the whole library with it.
+pub fn delete_skill(repo_root: &Path, env: &dyn EnvSource, name: &str) -> io::Result<PathBuf> {
+    let Some(skill) = discover_skills(repo_root, env)
+        .into_iter()
+        .find(|skill| skill.name == name)
+    else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no skill named {name}"),
+        ));
+    };
+    if skill.source == SkillSource::BuiltIn {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "built-in skills cannot be deleted",
+        ));
+    }
+    let path = PathBuf::from(&skill.path);
+    let directory = path
+        .file_name()
+        .and_then(|file| file.to_str())
+        .is_some_and(|file| file.eq_ignore_ascii_case("SKILL.md"))
+        .then(|| path.parent())
+        .flatten()
+        .filter(|parent| !is_skill_root(repo_root, env, parent));
+    match directory {
+        Some(directory) => {
+            fs::remove_dir_all(directory)?;
+            Ok(directory.to_path_buf())
+        }
+        None => {
+            fs::remove_file(&path)?;
+            Ok(path)
+        }
+    }
+}
+
+/// Whether `dir` is one of the scanned skill roots rather than a directory-based skill.
+fn is_skill_root(repo_root: &Path, env: &dyn EnvSource, dir: &Path) -> bool {
+    let home = crate::paths::real_home_dir(env);
+    let canonical = fs::canonicalize(dir).ok();
+    SKILL_DIRS
+        .iter()
+        .map(|(relative, _)| repo_root.join(relative))
+        .chain(GLOBAL_SKILL_DIRS.iter().map(|relative| home.join(relative)))
+        .any(|root| {
+            root == dir || (canonical.is_some() && fs::canonicalize(&root).ok() == canonical)
+        })
+}
+
 /// Discover the merged skill catalog for a repo. Name collisions resolve local-first and missing
 /// directories are fine; an empty catalog is fully supported.
 pub fn discover_skills(repo_root: &Path, env: &dyn EnvSource) -> Vec<Skill> {
@@ -403,6 +455,65 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join(relative)).unwrap(),
             content
+        );
+    }
+
+    #[test]
+    fn deletes_a_flat_skill_and_leaves_the_rest_of_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = FixedEnv::new(&[("HOME", dir.path().to_str().unwrap())]);
+        create_project_skill(dir.path(), "review").unwrap();
+        create_project_skill(dir.path(), "ship").unwrap();
+
+        let removed = delete_skill(dir.path(), &env, "review").unwrap();
+        assert_eq!(removed, dir.path().join(".ai/coducktor/skills/review.md"));
+        assert!(!removed.exists());
+        assert!(dir.path().join(".ai/coducktor/skills/ship.md").exists());
+    }
+
+    #[test]
+    fn deletes_a_directory_skill_with_its_supporting_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = FixedEnv::new(&[("HOME", dir.path().to_str().unwrap())]);
+        let skill_dir = dir.path().join(".ai/skills/research");
+        fs::create_dir_all(skill_dir.join("references")).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: research\n---\nBody").unwrap();
+        fs::write(skill_dir.join("references/notes.md"), "Notes").unwrap();
+
+        let removed = delete_skill(dir.path(), &env, "research").unwrap();
+        assert_eq!(removed, skill_dir);
+        assert!(!skill_dir.exists());
+        assert!(dir.path().join(".ai/skills").exists());
+    }
+
+    #[test]
+    fn a_skill_md_directly_in_a_scanned_root_never_takes_the_root_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = FixedEnv::new(&[("HOME", dir.path().to_str().unwrap())]);
+        let root = dir.path().join(".ai/skills");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SKILL.md"), "---\nname: rooted\n---\nBody").unwrap();
+
+        let removed = delete_skill(dir.path(), &env, "rooted").unwrap();
+        assert_eq!(removed, root.join("SKILL.md"));
+        assert!(root.exists());
+    }
+
+    #[test]
+    fn refuses_the_built_in_skill_and_unknown_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = FixedEnv::new(&[("HOME", dir.path().to_str().unwrap())]);
+        assert_eq!(
+            delete_skill(dir.path(), &env, BUILT_IN_PLANNING_SKILL_NAME)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            delete_skill(dir.path(), &env, "missing")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
         );
     }
 
