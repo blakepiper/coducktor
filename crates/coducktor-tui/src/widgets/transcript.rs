@@ -151,9 +151,14 @@ impl TranscriptItem {
         }
     }
 
-    fn paint(&mut self, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
+    fn paint(&mut self, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>, tier: ToolTier) {
         let theme = ctx.theme;
-        if area.height <= ITEM_SPACING || area.width == 0 {
+        let spacing = if tier == ToolTier::Full {
+            ITEM_SPACING
+        } else {
+            0
+        };
+        if tier == ToolTier::Hidden || area.height <= spacing || area.width == 0 {
             return;
         }
         // The one item with no gutter marker: a rule that stops short of the left edge reads as
@@ -188,12 +193,12 @@ impl TranscriptItem {
             area.x.saturating_add(ITEM_GUTTER_WIDTH),
             area.y,
             area.width.saturating_sub(ITEM_GUTTER_WIDTH),
-            area.height.saturating_sub(ITEM_SPACING),
+            area.height.saturating_sub(spacing),
         );
         match self {
             Self::Message(item) => paint_message(item, buf, content, ctx),
             Self::Reasoning(item) => paint_reasoning(item, buf, content, ctx),
-            Self::Tool(item) => tool_card::paint(item, buf, content, ctx, ToolTier::Full),
+            Self::Tool(item) => tool_card::paint(item, buf, content, ctx, tier),
             Self::Note(item) => paint_note(item, buf, content, ctx),
             Self::Image(item) => paint_image(item, buf, content, ctx),
             Self::RunEnd(_) => {}
@@ -480,6 +485,10 @@ pub struct Transcript {
     unseen: usize,
     top_anchor: Option<(String, u16)>,
     restore_anchor: bool,
+    pressure_height: u16,
+    tiers: Vec<(usize, ToolTier)>,
+    hidden_count: usize,
+    aggregate_index: Option<usize>,
 }
 
 impl Default for Transcript {
@@ -499,6 +508,10 @@ impl Transcript {
             unseen: 0,
             top_anchor: None,
             restore_anchor: false,
+            pressure_height: 0,
+            tiers: Vec::new(),
+            hidden_count: 0,
+            aggregate_index: None,
         }
     }
 
@@ -564,6 +577,7 @@ impl Transcript {
 
     pub fn push(&mut self, item: TranscriptItem) {
         self.items.push(item);
+        self.tiers.clear();
     }
 
     /// Reconcile against a freshly-built ordered item list. Existing ids retain interactive and
@@ -614,6 +628,9 @@ impl Transcript {
             }
         }
         self.items = next;
+        self.tiers.clear();
+        self.hidden_count = 0;
+        self.aggregate_index = None;
         if !self.sticky_bottom {
             self.unseen += self
                 .items
@@ -787,9 +804,13 @@ impl Transcript {
         }
     }
 
+    /// Set the row budget used to progressively fold trailing live cards.
+    pub fn set_pressure(&mut self, viewport_height: u16) {
+        self.pressure_height = viewport_height;
+    }
+
     /// Scroll position shared with the compact thread projection. The full transcript keeps
-    /// virtualized item scrolling; the projection uses the same user intent for its wrapped
-    /// summary lines.
+    /// virtualized item scrolling; the projection uses the same user intent for wrapped lines.
     pub fn projection_scroll(&mut self, total_lines: usize, viewport_height: u16) -> u16 {
         let max_scroll = total_lines.saturating_sub(usize::from(viewport_height)) as u32;
         if self.sticky_bottom {
@@ -797,6 +818,7 @@ impl Transcript {
         } else {
             self.scroll_offset = self.scroll_offset.min(max_scroll);
         }
+
         self.scroll_offset.min(u32::from(u16::MAX)) as u16
     }
 
@@ -806,6 +828,119 @@ impl Transcript {
             total += self.height_cache.get(index, &mut self.items, width) as u32;
         }
         total
+    }
+    fn tier_for(&self, index: usize) -> ToolTier {
+        self.tiers
+            .iter()
+            .find_map(|(candidate, tier)| (*candidate == index).then_some(*tier))
+            .unwrap_or(ToolTier::Full)
+    }
+
+    fn set_tier(&mut self, index: usize, tier: ToolTier) {
+        if let Some((_, current)) = self
+            .tiers
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == index)
+        {
+            *current = tier;
+        } else if tier != ToolTier::Full {
+            self.tiers.push((index, tier));
+        }
+    }
+
+    fn rebuild_pressure_tiers(&mut self, width: u16, viewport_height: u16) {
+        self.tiers.clear();
+        self.hidden_count = 0;
+        self.aggregate_index = None;
+        if self.total_height(width) <= u32::from(viewport_height) {
+            return;
+        }
+        let start = self.items.len().saturating_sub(8);
+        let candidates: Vec<usize> = (start..self.items.len())
+            .filter(|index| {
+                matches!(
+                    &self.items[*index],
+                    TranscriptItem::Tool(tool)
+                        if matches!(tool.status, ToolStatus::Running | ToolStatus::Pending)
+                )
+            })
+            .collect();
+        let live_height = candidates.iter().fold(0_u32, |total, index| {
+            total.saturating_add(u32::from(self.height_cache.get(
+                *index,
+                &mut self.items,
+                width,
+            )))
+        });
+        if live_height <= u32::from(viewport_height) {
+            return;
+        }
+
+        let mut available = viewport_height;
+        for index in candidates.iter().rev().copied() {
+            let full = self.height_cache.get(index, &mut self.items, width);
+            let tier = if full <= available {
+                ToolTier::Full
+            } else if ToolTier::Folded.rows() <= available {
+                ToolTier::Folded
+            } else if ToolTier::Summary.rows() <= available {
+                ToolTier::Summary
+            } else {
+                ToolTier::Hidden
+            };
+            available = available.saturating_sub(if tier == ToolTier::Full {
+                full
+            } else {
+                tier.rows()
+            });
+            self.set_tier(index, tier);
+        }
+
+        self.hidden_count = self
+            .tiers
+            .iter()
+            .filter(|(_, tier)| *tier == ToolTier::Hidden)
+            .count();
+        if self.hidden_count > 0 && available == 0 {
+            if let Some(index) = candidates
+                .iter()
+                .copied()
+                .find(|index| self.tier_for(*index) == ToolTier::Summary)
+            {
+                self.set_tier(index, ToolTier::Hidden);
+            } else if let Some(index) = candidates
+                .iter()
+                .copied()
+                .find(|index| self.tier_for(*index) == ToolTier::Folded)
+            {
+                self.set_tier(index, ToolTier::Summary);
+            }
+        }
+        self.hidden_count = self
+            .tiers
+            .iter()
+            .filter(|(_, tier)| *tier == ToolTier::Hidden)
+            .count();
+        self.aggregate_index = self
+            .tiers
+            .iter()
+            .filter_map(|(index, tier)| (*tier == ToolTier::Hidden).then_some(*index))
+            .min();
+        self.tiers.sort_unstable_by_key(|(index, _)| *index);
+    }
+
+    fn rendered_item_height(&mut self, index: usize, width: u16) -> u16 {
+        match self.tier_for(index) {
+            ToolTier::Full => self.height_cache.get(index, &mut self.items, width),
+            ToolTier::Hidden if self.aggregate_index == Some(index) => 1,
+            tier => tier.rows(),
+        }
+    }
+
+    fn rendered_total_height(&mut self, width: u16) -> u32 {
+        (0..self.items.len()).fold(0_u32, |total, index| {
+            total.saturating_add(u32::from(self.rendered_item_height(index, width)))
+        })
     }
 
     /// Render the visible window into `area`. Every item paints into a scratch buffer
@@ -838,20 +973,26 @@ impl Transcript {
             return;
         }
         let width = area.width;
-        let total = self.total_height(width);
-        let viewport = area.height as u32;
+        let pressure = if self.pressure_height == 0 {
+            area.height
+        } else {
+            self.pressure_height.min(area.height)
+        };
+        self.rebuild_pressure_tiers(width, pressure);
+        let total = self.rendered_total_height(width);
+        let viewport = u32::from(area.height);
         let max_scroll = total.saturating_sub(viewport);
         if self.sticky_bottom {
             self.scroll_offset = max_scroll;
             self.unseen = 0;
         } else if self.restore_anchor
-            && let Some((id, offset)) = &self.top_anchor
+            && let Some((id, offset)) = self.top_anchor.clone()
             && let Some(anchor_index) = self.items.iter().position(|item| item.id() == id)
         {
             let before: u32 = (0..anchor_index)
-                .map(|index| self.height_cache.get(index, &mut self.items, width) as u32)
+                .map(|index| u32::from(self.rendered_item_height(index, width)))
                 .sum();
-            self.scroll_offset = before.saturating_add(u32::from(*offset)).min(max_scroll);
+            self.scroll_offset = before.saturating_add(u32::from(offset)).min(max_scroll);
             self.restore_anchor = false;
         } else {
             self.scroll_offset = self.scroll_offset.min(max_scroll);
@@ -866,7 +1007,9 @@ impl Transcript {
         let mut item_top: u32 = 0;
         let mut screen_y = area.y;
         for index in 0..self.items.len() {
-            let height = self.height_cache.get(index, &mut self.items, width) as u32;
+            let tier = self.tier_for(index);
+            let aggregate = tier == ToolTier::Hidden && self.aggregate_index == Some(index);
+            let height = u32::from(self.rendered_item_height(index, width));
             let item_bottom = item_top + height;
             if height == 0 || item_bottom <= top || item_top >= bottom {
                 item_top = item_bottom;
@@ -881,14 +1024,31 @@ impl Transcript {
                     full_height: height as u16,
                     available,
                 };
-                paint_clipped(&mut self.items[index], buf, area, clip, ctx);
-                if self.selected == Some(index)
+                if aggregate {
+                    let marker = if crate::glyphs::unicode_supported() {
+                        "⋯"
+                    } else {
+                        "..."
+                    };
+                    Line::from(Span::styled(
+                        format!("{marker} {} more running", self.hidden_count),
+                        Style::default()
+                            .fg(theme.palette.soft_fg)
+                            .add_modifier(Modifier::DIM),
+                    ))
+                    .render(Rect::new(area.x, screen_y, area.width, 1), buf);
+                } else {
+                    paint_clipped(&mut self.items[index], buf, area, clip, ctx, tier);
+                }
+                if !aggregate
+                    && self.selected == Some(index)
                     && let Some(cell) = buf.cell_mut((area.x.saturating_add(1), screen_y))
                 {
                     cell.set_symbol("›");
                     cell.set_style(Style::default().fg(theme.palette.accent));
                 }
-                if let Some(hitmap) = hitmap.as_deref_mut()
+                if !aggregate
+                    && let Some(hitmap) = hitmap.as_deref_mut()
                     && matches!(
                         self.items[index],
                         TranscriptItem::Reasoning(_) | TranscriptItem::Tool(_)
@@ -932,6 +1092,7 @@ fn paint_clipped(
     area: Rect,
     clip: ClipGeometry,
     ctx: FrameCtx<'_>,
+    tier: ToolTier,
 ) {
     let ClipGeometry {
         screen_y,
@@ -943,12 +1104,12 @@ fn paint_clipped(
         // The common case — the item fits entirely within the viewport — paints
         // straight into the destination buffer, no scratch copy needed.
         let target = Rect::new(area.x, screen_y, area.width, available);
-        item.paint(dest, target, ctx);
+        item.paint(dest, target, ctx, tier);
         return;
     }
     let scratch_area = Rect::new(0, 0, area.width, full_height);
     let mut scratch = Buffer::empty(scratch_area);
-    item.paint(&mut scratch, scratch_area, ctx);
+    item.paint(&mut scratch, scratch_area, ctx, tier);
     for row in 0..available {
         for col in 0..area.width {
             if let Some(cell) = scratch.cell((col, skip_top + row)) {
@@ -1461,5 +1622,50 @@ mod tests {
             );
             assert_eq!(transcript.total_height(width), expected, "tick {tick}");
         }
+    }
+
+    fn running_pressure_tool(id: &str) -> TranscriptItem {
+        let mut tool = ToolItem::new(id, "Bash", None, ToolStatus::Running);
+        tool.output = Some("working".to_owned());
+        tool.user_expanded = Some(true);
+        TranscriptItem::Tool(tool)
+    }
+
+    #[test]
+    fn pressure_keeps_the_newest_live_card_full() {
+        let mut transcript = Transcript::new();
+        for id in ["oldest", "middle", "newest"] {
+            transcript.push(running_pressure_tool(id));
+        }
+        transcript.rebuild_pressure_tiers(80, 8);
+        assert_eq!(
+            (0..3)
+                .map(|index| transcript.tier_for(index))
+                .collect::<Vec<_>>(),
+            vec![ToolTier::Summary, ToolTier::Folded, ToolTier::Full]
+        );
+
+        transcript.set_pressure(8);
+        let rendered = render_to_string(&mut transcript, 80, 8);
+        assert!(rendered.contains("working"));
+    }
+
+    #[test]
+    fn pressure_aggregates_fully_hidden_live_cards() {
+        let mut transcript = Transcript::new();
+        for id in ["one", "two", "three", "four"] {
+            transcript.push(running_pressure_tool(id));
+        }
+        transcript.set_pressure(8);
+        let rendered = render_to_string(&mut transcript, 80, 8);
+        assert!(rendered.contains("2 more running"));
+    }
+
+    #[test]
+    fn pressure_does_nothing_without_overflow() {
+        let mut transcript = Transcript::new();
+        transcript.push(running_pressure_tool("only"));
+        transcript.rebuild_pressure_tiers(80, 20);
+        assert!(transcript.tiers.is_empty());
     }
 }

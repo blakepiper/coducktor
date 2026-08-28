@@ -1203,6 +1203,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             0,
             HitAction::ThreadScreen(ThreadAction::FocusTranscript),
         );
+        app.thread_ui
+            .transcript
+            .set_pressure(transcript_area.height);
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
@@ -1716,6 +1719,9 @@ fn render_conversation(
             0,
             HitAction::ThreadScreen(ThreadAction::FocusTranscript),
         );
+        app.thread_ui
+            .transcript
+            .set_pressure(transcript_area.height);
         app.thread_ui.transcript.render_interactive(
             frame.buffer_mut(),
             transcript_area,
