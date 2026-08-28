@@ -91,6 +91,7 @@ pub fn render_conversation_header(
         record.model.as_deref(),
         record.model_identity.as_deref(),
         record.reasoning.as_deref(),
+        record.reasoning_identity.as_deref(),
     );
     let mut meta = vec![Span::styled(format!("{affinity}  "), soft)];
     if let Some(branch) = &record.branch {
@@ -185,10 +186,11 @@ fn conversation_affinity(
     model: Option<&str>,
     model_identity: Option<&str>,
     reasoning: Option<&str>,
+    reasoning_identity: Option<&str>,
 ) -> String {
     let harness = format!("{harness:?}").to_ascii_lowercase();
     let model = model.or(model_identity).unwrap_or("auto");
-    let reasoning = reasoning.unwrap_or("auto");
+    let reasoning = reasoning.or(reasoning_identity).unwrap_or("auto");
     format!("{harness}/{model} · {reasoning}")
 }
 
@@ -1287,8 +1289,14 @@ mod tests {
     #[test]
     fn conversation_affinity_keeps_auto_visible_and_prefers_a_reported_model() {
         assert_eq!(
-            conversation_affinity(Runner::Claude, None, Some("claude-opus-4-8-exact"), None,),
-            "claude/claude-opus-4-8-exact · auto"
+            conversation_affinity(
+                Runner::Claude,
+                None,
+                Some("claude-opus-4-8-exact"),
+                None,
+                Some("high"),
+            ),
+            "claude/claude-opus-4-8-exact · high"
         );
         assert_eq!(
             conversation_affinity(
@@ -1296,6 +1304,7 @@ mod tests {
                 Some("opus"),
                 Some("claude-opus-4-8-exact"),
                 Some("high"),
+                Some("medium"),
             ),
             "claude/opus · high"
         );

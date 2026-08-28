@@ -119,6 +119,8 @@ pub struct CodexSession {
     /// Whether stdin is still open for this session.
     open: bool,
     reasoning_summary: String,
+    model_identity: Option<String>,
+    reasoning_identity: Option<String>,
 }
 
 /// Spawn a codex app-server process. Unlike claude's `open_claude_session`, this does not talk to
@@ -156,6 +158,8 @@ pub fn open_codex_session(
         pending_user_input: None,
         open: true,
         reasoning_summary,
+        model_identity: None,
+        reasoning_identity: None,
     })
 }
 
@@ -757,10 +761,28 @@ impl CodexSession {
                 )?
             };
         self.thread_id = thread_id_of(&result).or_else(|| self.spec.session_id.clone());
+        self.model_identity = result
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.model_identity.clone());
+        self.reasoning_identity = result
+            .get("reasoningEffort")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.reasoning_identity.clone());
 
         if let Some(thread_id) = self.thread_id.clone() {
-            on_event(EventInput::new("session").field("sessionId", thread_id))
-                .map_err(|error| error.to_string())?;
+            let mut event = EventInput::new("session").field("sessionId", thread_id);
+            if let Some(model) = &self.model_identity {
+                event = event.field("modelIdentity", model);
+            }
+            if let Some(reasoning) = &self.reasoning_identity {
+                event = event.field("reasoningIdentity", reasoning);
+            }
+            on_event(event).map_err(|error| error.to_string())?;
         }
 
         // The system prompt has no dedicated app-server field, so it rides along as a leading
@@ -975,6 +997,10 @@ impl AgentSession for CodexSession {
     fn session_id(&self) -> Option<String> {
         self.thread_id.clone()
     }
+
+    fn model_identity(&self) -> Option<String> {
+        self.model_identity.clone()
+    }
 }
 
 #[cfg(test)]
@@ -1108,6 +1134,25 @@ mod tests {
         assert!(event_types.contains(&"tool-result"));
         assert!(event_types.contains(&"token-usage"));
         assert!(event_types.contains(&"turn-end"));
+        let session_event = events
+            .iter()
+            .find(|event| event.event_type == "session")
+            .expect("session event");
+        assert_eq!(
+            session_event
+                .extra
+                .get("modelIdentity")
+                .and_then(Value::as_str),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            session_event
+                .extra
+                .get("reasoningIdentity")
+                .and_then(Value::as_str),
+            Some("high")
+        );
+        assert_eq!(session.model_identity().as_deref(), Some("gpt-5.6-sol"));
         assert!(events.iter().any(|event| {
             event.event_type == "tool-result"
                 && event.extra.get("exitCode").and_then(Value::as_f64) == Some(0.0)

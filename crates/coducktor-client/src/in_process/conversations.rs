@@ -831,6 +831,7 @@ pub fn conversation_index_entry(
         model: record.model.clone(),
         model_identity: record.model_identity.clone(),
         reasoning: record.reasoning.clone(),
+        reasoning_identity: record.reasoning_identity.clone(),
         created_at: record.created_at.clone(),
         updated_at: record.updated_at.clone(),
         seen_at: record.seen_at.clone(),

@@ -150,6 +150,11 @@ pub struct ConversationRecord {
     /// (harness default), where this is the only way to know what ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_identity: Option<String>,
+    /// The exact harness-native reasoning value the harness reports having actually used.
+    /// Kept separate from `reasoning`, which is the user's requested value and remains omitted
+    /// when they selected auto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     pub repository_root: String,
@@ -219,6 +224,8 @@ pub struct ConversationIndexEntry {
     pub reasoning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_identity: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

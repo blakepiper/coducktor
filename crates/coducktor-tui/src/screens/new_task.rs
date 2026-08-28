@@ -1732,6 +1732,7 @@ mod tests {
             model: input.model.clone(),
             model_identity: None,
             reasoning: input.reasoning.clone(),
+            reasoning_identity: None,
             provider_session_id: Some("sess-1".to_owned()),
             repository_root: "/repo".to_owned(),
             cwd: "/repo".to_owned(),

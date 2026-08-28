@@ -242,6 +242,7 @@ impl ConversationManager {
             model: input.model,
             model_identity: None,
             reasoning: input.reasoning,
+            reasoning_identity: None,
             provider_session_id: None,
             repository_root: input.repository_root.to_string_lossy().into_owned(),
             cwd: input.cwd.to_string_lossy().into_owned(),
@@ -440,7 +441,39 @@ impl ConversationManager {
                 "conversation turn is not in flight",
             ));
         }
+        if input.event_type == "session" {
+            self.apply_session_metadata(conversation_id, &input.extra)?;
+        }
         self.append_history_event(conversation_id, turn_id, input)
+    }
+
+    fn apply_session_metadata(
+        &mut self,
+        conversation_id: &str,
+        extra: &Map<String, Value>,
+    ) -> io::Result<()> {
+        let nonempty = |name| {
+            extra
+                .get(name)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let session_id = nonempty("sessionId");
+        let model_identity = nonempty("modelIdentity");
+        let reasoning_identity = nonempty("reasoningIdentity");
+        if session_id.is_none() && model_identity.is_none() && reasoning_identity.is_none() {
+            return Ok(());
+        }
+        let previous = self.require(conversation_id)?;
+        let mut next = previous.clone();
+        next.provider_session_id = session_id.or(next.provider_session_id);
+        next.model_identity = model_identity.or(next.model_identity);
+        next.reasoning_identity = reasoning_identity.or(next.reasoning_identity);
+        if next != previous {
+            self.commit_record(previous, next)?;
+        }
+        Ok(())
     }
 
     pub fn begin_answer(
@@ -1621,6 +1654,42 @@ mod tests {
             second.model_identity.as_deref(),
             Some("claude-opus-4-8-exact")
         );
+    }
+
+    #[test]
+    fn live_session_metadata_resolves_auto_model_and_reasoning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = ConversationManager::open(dir.path());
+        let mut input = new_conversation("use the harness defaults");
+        input.model = None;
+        input.reasoning = None;
+        let created = manager.create(input).unwrap();
+        let admitted = manager.admit_next().unwrap().expect("admitted turn");
+
+        manager
+            .apply_turn_event(
+                &created.id,
+                &admitted.request.turn_id,
+                ConversationEventInput::new("session")
+                    .field("sessionId", "thread-1")
+                    .field("modelIdentity", "gpt-5.6-sol")
+                    .field("reasoningIdentity", "high"),
+            )
+            .unwrap();
+
+        let running = manager.get(&created.id).expect("running conversation");
+        assert_eq!(running.state, ConversationState::Running);
+        assert_eq!(running.model, None);
+        assert_eq!(running.reasoning, None);
+        assert_eq!(running.model_identity.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(running.reasoning_identity.as_deref(), Some("high"));
+
+        drop(admitted);
+        drop(manager);
+        let reopened = ConversationManager::open(dir.path());
+        let recovered = reopened.get(&created.id).expect("recovered conversation");
+        assert_eq!(recovered.model_identity.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(recovered.reasoning_identity.as_deref(), Some("high"));
     }
 
     #[test]

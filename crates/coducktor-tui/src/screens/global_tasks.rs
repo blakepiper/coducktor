@@ -182,7 +182,13 @@ fn build_conversation_cards(
                             .or_else(|| entry.model_identity.clone())
                             .unwrap_or_else(|| "auto".to_owned()),
                     ),
-                    reasoning: Some(entry.reasoning.clone().unwrap_or_else(|| "auto".to_owned())),
+                    reasoning: Some(
+                        entry
+                            .reasoning
+                            .clone()
+                            .or_else(|| entry.reasoning_identity.clone())
+                            .unwrap_or_else(|| "auto".to_owned()),
+                    ),
                 },
             ];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
@@ -1209,6 +1215,7 @@ mod tests {
             model: Some("opus".to_owned()),
             model_identity: None,
             reasoning: None,
+            reasoning_identity: None,
             created_at: "2026-08-15T00:00:00Z".to_owned(),
             updated_at: "2026-08-15T00:01:00Z".to_owned(),
             seen_at: None,

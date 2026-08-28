@@ -134,7 +134,13 @@ fn build_conversation_cards(
                         .or_else(|| entry.model_identity.clone())
                         .unwrap_or_else(|| "auto".to_owned()),
                 ),
-                reasoning: Some(entry.reasoning.clone().unwrap_or_else(|| "auto".to_owned())),
+                reasoning: Some(
+                    entry
+                        .reasoning
+                        .clone()
+                        .or_else(|| entry.reasoning_identity.clone())
+                        .unwrap_or_else(|| "auto".to_owned()),
+                ),
             }];
             if let Some(branch) = entry.branch.as_deref().filter(|value| !value.is_empty()) {
                 chips.push(CardChip::Branch(branch.to_owned()));
@@ -855,6 +861,7 @@ mod tests {
             model: model.map(ToOwned::to_owned),
             model_identity: model_identity.map(ToOwned::to_owned),
             reasoning: None,
+            reasoning_identity: None,
             created_at: "2026-08-22T10:00:00Z".to_owned(),
             updated_at: "2026-08-22T10:00:00Z".to_owned(),
             seen_at: None,
@@ -1006,7 +1013,8 @@ mod tests {
 
     #[test]
     fn conversation_card_chip_shows_model_and_reasoning_selections() {
-        let auto = conversation_entry(None, Some("claude-opus-4-8-exact"));
+        let mut auto = conversation_entry(None, Some("claude-opus-4-8-exact"));
+        auto.reasoning_identity = Some("high".to_owned());
         let cards = build_conversation_cards(&[auto], TaskView::Active, "", 1_800_000_000);
         let Some(CardChip::Harness {
             model, reasoning, ..
@@ -1015,7 +1023,7 @@ mod tests {
             panic!("expected a harness chip");
         };
         assert_eq!(model.as_deref(), Some("claude-opus-4-8-exact"));
-        assert_eq!(reasoning.as_deref(), Some("auto"));
+        assert_eq!(reasoning.as_deref(), Some("high"));
 
         // An explicit pick still wins over whatever the harness reports back.
         let mut explicit = conversation_entry(Some("opus"), Some("claude-opus-4-8-exact"));

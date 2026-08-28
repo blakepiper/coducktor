@@ -2415,6 +2415,7 @@ mod tests {
             model: None,
             model_identity: None,
             reasoning: None,
+            reasoning_identity: None,
             provider_session_id: None,
             repository_root: "/repo".to_owned(),
             cwd: "/repo".to_owned(),
