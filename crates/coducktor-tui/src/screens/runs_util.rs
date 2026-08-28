@@ -565,9 +565,14 @@ pub fn clock_time(iso: &str) -> Option<String> {
     Some(format!("{hour:02}:{minute:02}"))
 }
 
-/// A lenient ISO-8601 instant parser good enough for coducktor's UTC timestamps.
-/// Handles `YYYY-MM-DDTHH:MM:SS(.sss)(Z|±HH:MM)`, returns epoch seconds.
+/// A lenient ISO-8601 instant parser good enough for coducktor's timestamps.
+/// Handles `YYYY-MM-DDTHH:MM:SS(.sss)(Z|±HH:MM)`, returning epoch seconds.
 pub fn parse_iso_seconds(iso: &str) -> Option<i64> {
+    Some(parse_iso_millis(iso)?.div_euclid(1_000))
+}
+
+/// The same instant at millisecond precision for short-lived tool durations.
+pub fn parse_iso_millis(iso: &str) -> Option<i64> {
     let (date_part, rest) = iso.split_once('T')?;
     let mut date = date_part.split('-');
     let year: i64 = date.next()?.parse().ok()?;
@@ -583,7 +588,12 @@ pub fn parse_iso_seconds(iso: &str) -> Option<i64> {
         + i64::from(minute) * 60
         + second.floor() as i64;
     epoch -= offset_seconds(offset);
-    Some(epoch)
+    let fractional_millis = (second.fract() * 1_000.0).floor() as i64;
+    Some(
+        epoch
+            .saturating_mul(1_000)
+            .saturating_add(fractional_millis),
+    )
 }
 
 fn split_offset(time: &str) -> Option<(&str, &str)> {
@@ -722,6 +732,11 @@ mod tests {
         assert_eq!(short_age("2026-08-15T00:00:00Z", epoch + 86_400), "1d");
         assert_eq!(short_age("2026-08-15T00:01:00Z", epoch + 120), "1m");
         assert_eq!(short_age("not-a-date", 0), "");
+        assert_eq!(
+            parse_iso_millis("2026-08-15T00:00:01.750Z").unwrap()
+                - parse_iso_millis("2026-08-15T00:00:00.500Z").unwrap(),
+            1_250
+        );
     }
 
     #[test]

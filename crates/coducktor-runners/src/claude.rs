@@ -197,6 +197,8 @@ fn map_assistant(message: &Map<String, Value>, state: &ClaudeUiMapperState) -> C
                 };
                 let display = tool_display(name, block.get("input"));
                 let mut item = UiToolItem {
+                    started_at: None,
+                    finished_at: None,
                     id: id.to_owned(),
                     name: name.to_owned(),
                     tool_kind: display.tool_kind,
@@ -262,6 +264,8 @@ fn map_tool_results(message: &Map<String, Value>, state: &ClaudeUiMapperState) -
         };
         let open = next.open_tools.get(tool_use_id).cloned();
         let mut item = open.clone().unwrap_or_else(|| UiToolItem {
+            started_at: None,
+            finished_at: None,
             id: tool_use_id.to_owned(),
             name: "unknown".to_owned(),
             tool_kind: coducktor_protocol::ToolKind::Other,
@@ -341,12 +345,16 @@ fn map_result(message: &Map<String, Value>, state: &ClaudeUiMapperState) -> Clau
                 .unwrap_or_else(|| next_item_id(&mut next.item_seq));
             let item = if let Some(open) = next.open_tools.remove(&id) {
                 UiToolItem {
+                    started_at: None,
+                    finished_at: None,
                     status: ToolStatus::Declined,
                     ..open
                 }
             } else {
                 let display = tool_display(tool_name, raw.get("tool_input"));
                 UiToolItem {
+                    started_at: None,
+                    finished_at: None,
                     id,
                     name: tool_name.to_owned(),
                     tool_kind: display.tool_kind,

@@ -295,6 +295,8 @@ fn map_tool_start(value: &Map<String, Value>, state: &PiUiMapperState) -> PiUiMa
     };
     let display = tool_display(name, value.get("args"));
     let mut item = UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: name.to_owned(),
         tool_kind: display.tool_kind,

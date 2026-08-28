@@ -68,6 +68,10 @@ pub struct ThreadProviderAuthRequired {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "ThreadEntry is rebuilt on every live batch; boxing each normalized item adds hot-path allocations"
+)]
 pub enum ThreadEntry {
     Item(UiItem),
     Note(ThreadNote),
@@ -421,6 +425,8 @@ pub fn reduce_thread_incremental(
                     diffs: None,
                     locations: None,
                     exit_code: None,
+                    started_at: Some(event.ts.clone()),
+                    finished_at: None,
                     parent_item_id: None,
                 });
                 let key = item_key(&event.step_id, &id);
@@ -451,6 +457,11 @@ pub fn reduce_thread_incremental(
                         } else {
                             coducktor_protocol::ToolStatus::Completed
                         };
+                        tool.finished_at = Some(event.ts.clone());
+                        tool.exit_code = extra
+                            .get("exitCode")
+                            .and_then(Value::as_f64)
+                            .or(tool.exit_code);
                         if failed {
                             tool.error = Some(result);
                         } else {
@@ -476,6 +487,8 @@ pub fn reduce_thread_incremental(
                         diffs: None,
                         locations: None,
                         exit_code: extra.get("exitCode").and_then(Value::as_f64),
+                        started_at: None,
+                        finished_at: Some(event.ts.clone()),
                         parent_item_id: None,
                     });
                     turns[turn_idx].items.push(ThreadEntry::Item(item));
@@ -691,6 +704,8 @@ pub fn reduce_thread_incremental(
                         diffs: None,
                         locations: None,
                         exit_code: Some(exit_code as f64),
+                        started_at: Some(event.ts.clone()),
+                        finished_at: Some(event.ts.clone()),
                         parent_item_id: None,
                     },
                 )));
@@ -974,7 +989,7 @@ mod tests {
             event(
                 4.0,
                 "tool-result",
-                json!({"toolCallId": "tool-1", "result": "contents", "isError": false}),
+                json!({"toolCallId": "tool-1", "result": "contents", "isError": false, "exitCode": 1}),
             ),
             event(5.0, "text", json!({"text": "The file looks good."})),
         ];
@@ -1001,6 +1016,9 @@ mod tests {
                     if tool.id == "tool-1"
                         && tool.status == coducktor_protocol::ToolStatus::Completed
                         && tool.output.as_deref() == Some("contents")
+                        && tool.exit_code == Some(1.0)
+                        && tool.started_at.as_deref() == Some("2026-08-15T00:00:00Z")
+                        && tool.finished_at.as_deref() == Some("2026-08-15T00:00:00Z")
             )
         }));
     }

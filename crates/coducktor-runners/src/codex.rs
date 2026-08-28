@@ -482,6 +482,8 @@ fn tool_item(
         "commandExecution" => {
             let display = tool_display("commandExecution", Some(&Value::Object(raw.clone())));
             let mut item = UiToolItem {
+                started_at: None,
+                finished_at: None,
                 id: id.to_owned(),
                 name: kind.to_owned(),
                 tool_kind: display.tool_kind,
@@ -513,6 +515,8 @@ fn tool_item(
             let display = tool_display("fileChange", Some(&Value::Object(raw.clone())));
             let artifacts = change_artifacts(raw.get("changes"));
             UiToolItem {
+                started_at: None,
+                finished_at: None,
                 id: id.to_owned(),
                 name: kind.to_owned(),
                 tool_kind: display.tool_kind,
@@ -532,6 +536,8 @@ fn tool_item(
             let server = as_nonempty_str(raw.get("server"));
             let tool = as_nonempty_str(raw.get("tool"));
             UiToolItem {
+                started_at: None,
+                finished_at: None,
                 id: id.to_owned(),
                 name: match (server, tool) {
                     (Some(server), Some(tool)) => format!("{server}.{tool}"),
@@ -555,6 +561,8 @@ fn tool_item(
         "webSearch" => {
             let display = tool_display("webSearch", Some(&Value::Object(raw.clone())));
             UiToolItem {
+                started_at: None,
+                finished_at: None,
                 id: id.to_owned(),
                 name: kind.to_owned(),
                 tool_kind: display.tool_kind,
@@ -572,6 +580,8 @@ fn tool_item(
         _ => {
             let display = tool_display(kind, Some(&Value::Object(raw.clone())));
             UiToolItem {
+                started_at: None,
+                finished_at: None,
                 id: id.to_owned(),
                 name: kind.to_owned(),
                 tool_kind: display.tool_kind,
@@ -668,6 +678,8 @@ fn plan_entries_of(raw: &Map<String, Value>) -> Option<Vec<PlanEntry>> {
 
 fn review_item(id: &str, name: &str, status: ToolStatus) -> UiToolItem {
     UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: name.to_owned(),
         tool_kind: ToolKind::Task,
@@ -760,6 +772,8 @@ fn map_sub_agent_activity(
         );
     }
     let item = UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: "spawnAgent".to_owned(),
         tool_kind: ToolKind::Task,
@@ -875,6 +889,8 @@ fn collab_task_item(task: &CodexCollabTask, status: ToolStatus) -> UiToolItem {
         input.insert("model".to_owned(), Value::String(model.clone()));
     }
     UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: task.item_id.clone(),
         name: "spawnAgent".to_owned(),
         tool_kind: ToolKind::Task,
@@ -1046,6 +1062,8 @@ fn synthesized_item(item_id: &str, field: DeltaField) -> UiItem {
             parent_item_id: None,
         }),
         DeltaField::Output => UiItem::Tool(UiToolItem {
+            started_at: None,
+            finished_at: None,
             id: item_id.to_owned(),
             name: "commandExecution".to_owned(),
             tool_kind: ToolKind::Execute,

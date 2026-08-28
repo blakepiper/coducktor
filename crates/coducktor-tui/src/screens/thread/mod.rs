@@ -909,6 +909,18 @@ fn reuse_tool(
 ) -> TranscriptItem {
     let id = tool.id.clone();
     let display = coducktor_protocol::tool_display(&tool.name, tool.input.as_ref());
+    let started_millis = tool
+        .started_at
+        .as_deref()
+        .and_then(crate::screens::runs_util::parse_iso_millis);
+    let finished_millis = tool
+        .finished_at
+        .as_deref()
+        .and_then(crate::screens::runs_util::parse_iso_millis);
+    let started_epoch = started_millis.map(|value| value.div_euclid(1_000));
+    let duration_ms = started_millis
+        .zip(finished_millis)
+        .map(|(started, finished)| finished.saturating_sub(started).max(0) as u64);
     if let Some(TranscriptItem::Tool(mut item)) = existing.remove(&id)
         && item.tool_kind == display.tool_kind
         && item.title == display.title
@@ -919,6 +931,8 @@ fn reuse_tool(
         && item.output.as_deref() == tool.output.as_deref()
         && item.error.as_deref() == tool.error.as_deref()
         && item.exit_code == tool.exit_code.map(|value| value as i64)
+        && item.started_epoch == started_epoch
+        && item.duration_ms == duration_ms
     {
         item.is_latest = false;
         return TranscriptItem::Tool(item);
@@ -927,6 +941,8 @@ fn reuse_tool(
     candidate.output = tool.output.clone();
     candidate.error = tool.error.clone();
     candidate.exit_code = tool.exit_code.map(|value| value as i64);
+    candidate.started_epoch = started_epoch;
+    candidate.duration_ms = duration_ms;
     TranscriptItem::Tool(candidate)
 }
 
@@ -3320,12 +3336,47 @@ mod tests {
                 app.pending
             );
         };
+
         assert_eq!(*git_mode, coducktor_contract::ConversationGitMode::Auto);
         assert!(
             app.notice
                 .as_deref()
                 .is_some_and(|n| n.contains("checkout")),
             "the user is told the commit will land in the current checkout"
+        );
+    }
+    #[test]
+    fn tool_timestamps_become_duration_without_breaking_old_items() {
+        let old: coducktor_protocol::UiToolItem = serde_json::from_value(json!({
+            "id": "old",
+            "name": "Bash",
+            "toolKind": "execute",
+            "title": "Run true",
+            "status": "completed"
+        }))
+        .unwrap();
+        assert!(old.started_at.is_none() && old.finished_at.is_none());
+
+        let timed: coducktor_protocol::UiToolItem = serde_json::from_value(json!({
+            "id": "timed",
+            "name": "Bash",
+            "toolKind": "execute",
+            "title": "Run false",
+            "status": "failed",
+            "exitCode": 1,
+            "startedAt": "2026-08-15T00:00:00.500Z",
+            "finishedAt": "2026-08-15T00:00:01.750Z"
+        }))
+        .unwrap();
+        let item = reuse_tool(&mut std::collections::HashMap::new(), &timed);
+        let TranscriptItem::Tool(tool) = item else {
+            panic!("expected a tool item");
+        };
+        assert_eq!(tool.duration_ms, Some(1_250));
+        assert_eq!(tool.exit_code, Some(1));
+        assert_eq!(
+            tool.started_epoch,
+            crate::screens::runs_util::parse_iso_seconds("2026-08-15T00:00:00.500Z")
         );
     }
 

@@ -421,6 +421,8 @@ fn map_tool(
         .unwrap_or(display.title.as_str())
         .to_owned();
     let mut item = UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: name.to_owned(),
         tool_kind: display.tool_kind,
@@ -540,6 +542,8 @@ fn map_patch(
         _ => None,
     };
     let item = UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: "patch".to_owned(),
         tool_kind: ToolKind::Edit,
@@ -658,6 +662,8 @@ fn map_subtask(
         input.insert("agent".to_owned(), Value::String(agent.to_owned()));
     }
     let item = UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: id.to_owned(),
         name: "subtask".to_owned(),
         tool_kind: display.tool_kind,
@@ -835,6 +841,8 @@ fn resolve_subtask(
 
 fn completed_subtask(scope: &SubtaskScope) -> UiToolItem {
     UiToolItem {
+        started_at: None,
+        finished_at: None,
         id: scope.id.clone(),
         name: "subtask".to_owned(),
         tool_kind: ToolKind::Task,

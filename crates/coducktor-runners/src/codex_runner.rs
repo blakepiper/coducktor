@@ -662,13 +662,14 @@ impl CodexSession {
                         .unwrap_or("")
                         .to_ascii_lowercase();
                     let is_error = status.contains("error") || status.contains("failed");
-                    on_event(
-                        EventInput::new("tool-result")
-                            .field("toolCallId", &id)
-                            .field("result", json_string(&item))
-                            .field("isError", is_error),
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let mut event = EventInput::new("tool-result")
+                        .field("toolCallId", &id)
+                        .field("result", json_string(&item))
+                        .field("isError", is_error);
+                    if let Some(exit_code) = item.get("exitCode").and_then(Value::as_f64) {
+                        event = event.field("exitCode", exit_code);
+                    }
+                    on_event(event).map_err(|error| error.to_string())?;
                 }
                 Ok(false)
             }
@@ -1107,6 +1108,10 @@ mod tests {
         assert!(event_types.contains(&"tool-result"));
         assert!(event_types.contains(&"token-usage"));
         assert!(event_types.contains(&"turn-end"));
+        assert!(events.iter().any(|event| {
+            event.event_type == "tool-result"
+                && event.extra.get("exitCode").and_then(Value::as_f64) == Some(0.0)
+        }));
 
         match outcome {
             SessionOutcome::Waiting(report) => {

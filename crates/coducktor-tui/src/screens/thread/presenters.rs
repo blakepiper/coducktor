@@ -11,7 +11,6 @@ pub struct ToolPresentation {
     pub subject: Option<String>,
     pub status: ToolStatus,
     pub preview: Option<String>,
-    pub detail: Option<String>,
     pub changed_files: usize,
     pub added_lines: usize,
     pub removed_lines: usize,
@@ -49,7 +48,6 @@ pub fn present_tool(tool: &UiToolItem, project_root: Option<&Path>) -> ToolPrese
             .as_deref()
             .or(tool.output.as_deref())
             .map(|value| sanitize_bounded(value, 240)),
-        detail: detail(tool),
         changed_files,
         added_lines,
         removed_lines,
@@ -124,26 +122,6 @@ fn status_verb(status: ToolStatus) -> &'static str {
     }
 }
 
-fn detail(tool: &UiToolItem) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(input) = &tool.input {
-        parts.push(format!(
-            "input: {}",
-            sanitize_bounded(&input.to_string(), 2_000)
-        ));
-    }
-    if let Some(output) = &tool.output {
-        parts.push(format!("output: {}", sanitize_bounded(output, 4_000)));
-    }
-    if let Some(error) = &tool.error {
-        parts.push(format!("error: {}", sanitize_bounded(error, 2_000)));
-    }
-    if let Some(exit_code) = tool.exit_code {
-        parts.push(format!("exit: {exit_code}"));
-    }
-    (!parts.is_empty()).then(|| parts.join("\n"))
-}
-
 fn diff_counts(diffs: &[coducktor_protocol::FileDiff]) -> (usize, usize, usize) {
     diffs.iter().fold((0, 0, 0), |(files, adds, dels), diff| {
         let old = diff.old_text.as_deref().unwrap_or_default().lines().count();
@@ -157,8 +135,9 @@ fn diff_counts(diffs: &[coducktor_protocol::FileDiff]) -> (usize, usize, usize) 
 }
 
 fn sanitize_bounded(value: &str, max_chars: usize) -> String {
-    let mut output = String::new();
+    let mut output = String::with_capacity(value.len().min(max_chars.saturating_add(1)));
     let mut escape = false;
+    let mut visible_chars = 0;
     for character in value.chars() {
         if escape {
             if character.is_ascii_alphabetic() {
@@ -174,7 +153,8 @@ fn sanitize_bounded(value: &str, max_chars: usize) -> String {
             continue;
         }
         output.push(character);
-        if output.chars().count() >= max_chars {
+        visible_chars += 1;
+        if visible_chars >= max_chars {
             output.push('…');
             break;
         }
@@ -189,6 +169,8 @@ mod tests {
 
     fn tool(kind: ToolKind, input: Value) -> UiToolItem {
         UiToolItem {
+            started_at: None,
+            finished_at: None,
             id: "tool-1".to_owned(),
             name: "runner".to_owned(),
             tool_kind: kind,
@@ -205,20 +187,13 @@ mod tests {
     }
 
     #[test]
-    fn execute_uses_structured_argv_and_keeps_failure_detail() {
+    fn execute_uses_structured_argv_and_sanitizes_failure_preview() {
         let mut item = tool(ToolKind::Execute, json!({"argv": ["cargo", "test"]}));
         item.status = ToolStatus::Failed;
-        item.exit_code = Some(1.0);
         item.error = Some("bad\u{1b}[31m output".to_owned());
         let presentation = present_tool(&item, None);
         assert_eq!(presentation.title, "✗ cargo test");
         assert_eq!(presentation.status, ToolStatus::Failed);
-        assert!(
-            presentation
-                .detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("exit: 1"))
-        );
         assert!(
             !presentation
                 .preview

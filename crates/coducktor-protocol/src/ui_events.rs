@@ -199,6 +199,12 @@ pub struct UiToolItem {
     pub locations: Option<Vec<ToolLocation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<f64>,
+    /// ISO-8601 timestamp of the originating tool-call event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// ISO-8601 timestamp of the matching tool-result event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_item_id: Option<String>,
 }
@@ -206,6 +212,10 @@ pub struct UiToolItem {
 /// The id-keyed item union from the v2 UI protocol.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "UiItem is the deserialized wire shape; boxing Tool would heap-allocate every tool event"
+)]
 pub enum UiItem {
     #[serde(rename = "message")]
     Message(UiMessageItem),
