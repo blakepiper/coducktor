@@ -14,6 +14,7 @@ use crate::glyphs::{glyphs, tool_icon};
 use crate::theme::{ColorCapability, Theme, ThemeName};
 use crate::widgets::card::{Card, CardSection, CardState};
 use crate::widgets::spinner;
+use crate::widgets::tool_bodies;
 use crate::widgets::transcript::{FrameCtx, ToolItem};
 
 pub const OUTPUT_CLAMP_LINES: usize = 12;
@@ -99,12 +100,13 @@ pub fn build_card<'a>(item: &'a ToolItem, width: u16, ctx: FrameCtx<'_>) -> Card
     {
         meta.push(format!("{shown} lines"));
     }
+    meta.extend(tool_bodies::meta(item));
 
     Card {
         header,
         meta,
         state,
-        sections: sections(item, width, theme),
+        sections: sections(item, width, ctx),
     }
 }
 
@@ -143,18 +145,21 @@ pub fn paint(item: &ToolItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>, t
     }
 }
 
-fn sections(item: &ToolItem, width: u16, theme: &Theme) -> Vec<CardSection<'static>> {
+fn sections(item: &ToolItem, width: u16, ctx: FrameCtx<'_>) -> Vec<CardSection<'static>> {
+    let theme = ctx.theme;
     let mut sections = Vec::new();
-    if let Some(input) = item.input.as_ref() {
-        sections.push(CardSection {
-            label: None,
-            lines: vec![Line::from(Span::styled(
+    let call = tool_bodies::call_body(item, width, ctx).or_else(|| {
+        item.input.as_ref().map(|input| {
+            vec![Line::from(Span::styled(
                 format!("{} {}", glyphs().tree_last, compact_args(input, width)),
                 Style::default()
                     .fg(theme.palette.soft_fg)
                     .add_modifier(Modifier::DIM),
-            ))],
-        });
+            ))]
+        })
+    });
+    if let Some(lines) = call.filter(|lines| !lines.is_empty()) {
+        sections.push(CardSection { label: None, lines });
     }
     if let Some(error) = item
         .error
@@ -177,21 +182,26 @@ fn sections(item: &ToolItem, width: u16, theme: &Theme) -> Vec<CardSection<'stat
                 .collect(),
         });
     }
-    if item.open()
-        && let Some(output) = item.output.as_deref().filter(|value| !value.is_empty())
-    {
-        sections.push(CardSection {
-            label: Some(Span::styled(
-                "Output",
-                Style::default().fg(theme.palette.soft_fg),
-            )),
-            lines: output_lines(item, output, theme),
-        });
+    if item.open() {
+        if let Some((label, lines)) = tool_bodies::result_body(item, width, ctx) {
+            sections.push(CardSection {
+                label: Some(label),
+                lines,
+            });
+        } else if let Some(output) = item.output.as_deref().filter(|value| !value.is_empty()) {
+            sections.push(CardSection {
+                label: Some(Span::styled(
+                    "Output",
+                    Style::default().fg(theme.palette.soft_fg),
+                )),
+                lines: output_lines(item, output, theme),
+            });
+        }
     }
     sections
 }
 
-fn output_lines(item: &ToolItem, output: &str, theme: &Theme) -> Vec<Line<'static>> {
+pub(crate) fn output_lines(item: &ToolItem, output: &str, theme: &Theme) -> Vec<Line<'static>> {
     let total = output.lines().count().max(1);
     let limit = if item.user_expanded == Some(true) {
         OUTPUT_EXPANDED_LINES
@@ -338,7 +348,7 @@ fn card_state(status: ToolStatus) -> CardState {
     }
 }
 
-fn format_ms(milliseconds: u64) -> String {
+pub(crate) fn format_ms(milliseconds: u64) -> String {
     if milliseconds < 1_000 {
         format!("{milliseconds}ms")
     } else if milliseconds < 60_000 {

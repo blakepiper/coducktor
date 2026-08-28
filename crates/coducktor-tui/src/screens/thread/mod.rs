@@ -781,14 +781,20 @@ fn build_transcript_items(
             }
         }
         if let Some(plan) = &turn.plan_entries {
-            let completed = plan
+            let input = serde_json::json!({ "todos": plan });
+            let status = if plan
                 .iter()
-                .filter(|entry| entry.status == coducktor_protocol::PlanStatus::Completed)
-                .count();
-            items.push(TranscriptItem::Note(NoteItem::new(
+                .all(|entry| entry.status == coducktor_protocol::PlanStatus::Completed)
+            {
+                coducktor_protocol::ToolStatus::Completed
+            } else {
+                coducktor_protocol::ToolStatus::Running
+            };
+            items.push(TranscriptItem::Tool(ToolItem::new(
                 format!("plan:{}", turn.id),
-                format!("Plan {completed}/{} complete", plan.len()),
-                TranscriptNoteTone::Dim,
+                "TodoWrite",
+                Some(&input),
+                status,
             )));
         }
         if let Some(projected) = projected
@@ -3332,7 +3338,7 @@ mod tests {
             event(
                 2.0,
                 "item.completed",
-                json!({"item": {"kind": "tool", "id": "t2", "name": "Read", "toolKind": "read", "title": "Read b.rs", "status": "completed", "output": "fn b() {}"}}),
+                json!({"item": {"kind": "tool", "id": "t2", "name": "Bash", "toolKind": "execute", "title": "Run cargo test", "status": "completed", "output": "latest command output"}}),
             ),
         );
 
@@ -3352,7 +3358,7 @@ mod tests {
 
         let content = render_to_string(&mut app);
         assert!(
-            content.contains("fn b() {}"),
+            content.contains("latest command output"),
             "the latest tool call's output is expanded by default"
         );
         assert!(

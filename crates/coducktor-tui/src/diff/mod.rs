@@ -9,5 +9,6 @@ pub mod word_diff;
 pub use highlight::Highlighter;
 pub use parse_patch::ContextGap;
 pub use render::{
-    DiffMode, DiffRowAction, DiffViewState, effective_mode, file_key, materialize_gap, render_files,
+    DiffMode, DiffRowAction, DiffViewState, effective_mode, file_key, materialize_gap,
+    render_compact_patch, render_files,
 };

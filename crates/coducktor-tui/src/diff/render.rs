@@ -134,6 +134,56 @@ pub fn render_files(
     (lines, actions)
 }
 
+/// Render a compact argument-derived patch for a transcript edit card. This reuses the diff
+/// engine's syntax, word-diff, gutter, and row-tint paths without file/hunk chrome.
+pub fn render_compact_patch(
+    patch: &str,
+    path: &str,
+    theme: &Theme,
+    highlighter: &Highlighter,
+    max_changed: usize,
+) -> (Vec<Line<'static>>, usize, usize) {
+    let parsed = parse_patch(patch);
+    let rows = build_unified_rows(&parsed.hunks, &[], None);
+    let cells: Vec<DiffCell> = rows
+        .into_iter()
+        .filter_map(|row| match row {
+            UnifiedRow::Line(cell) => Some(cell),
+            UnifiedRow::Hunk(_) | UnifiedRow::Gap(_) => None,
+        })
+        .collect();
+    let adds = cells
+        .iter()
+        .filter(|cell| cell.line.kind == LineKind::Add)
+        .count();
+    let dels = cells
+        .iter()
+        .filter(|cell| cell.line.kind == LineKind::Del)
+        .count();
+    let changed: Vec<usize> = cells
+        .iter()
+        .enumerate()
+        .filter_map(|(index, cell)| (cell.line.kind != LineKind::Context).then_some(index))
+        .take(max_changed)
+        .collect();
+    let list = build_line_list(&parsed.hunks, None);
+    let tokens = highlighter.highlight_lines(path, &list.texts, theme.name.is_dark());
+    let lines = cells
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| changed.iter().any(|changed| index.abs_diff(*changed) <= 2))
+        .map(|(_, cell)| {
+            unified_line(
+                cell,
+                tokens_for(&list, tokens.as_deref(), &cell.line),
+                false,
+                theme,
+            )
+        })
+        .collect();
+    (lines, adds, dels)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_file(
     file: &ChangedFile,

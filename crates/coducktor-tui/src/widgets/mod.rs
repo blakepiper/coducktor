@@ -7,5 +7,6 @@ pub mod run_end;
 pub mod spinner;
 pub mod table;
 pub mod task_cards;
+pub mod tool_bodies;
 pub mod tool_card;
 pub mod transcript;

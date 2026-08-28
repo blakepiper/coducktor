@@ -9,6 +9,8 @@
 //! Ask cards, review panels, provider-auth-required cards, and event reduction live in the
 //! thread screen and reducer.
 
+use std::sync::OnceLock;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -242,6 +244,14 @@ impl ReasoningItem {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct ToolDiffCache {
+    pub path: String,
+    pub patch: String,
+    pub adds: usize,
+    pub dels: usize,
+}
+
 /// A tool invocation with display fields precomputed once via [`tool_display`] rather than on
 /// every render.
 pub struct ToolItem {
@@ -261,6 +271,7 @@ pub struct ToolItem {
     /// Raw tool arguments retained for semantic body renderers.
     pub input: Option<Value>,
     input_len: usize,
+    pub(crate) diff_cache: OnceLock<ToolDiffCache>,
     /// `None` follows the default-open policy (`tool_default_open`); `Some` is the
     /// user's explicit toggle, which always wins once they touch the card.
     pub user_expanded: Option<bool>,
@@ -291,6 +302,7 @@ impl ToolItem {
             started_epoch: None,
             input: input.cloned(),
             input_len: input.map_or(0, |value| value.to_string().len()),
+            diff_cache: OnceLock::new(),
             user_expanded: None,
             is_latest: false,
         }
