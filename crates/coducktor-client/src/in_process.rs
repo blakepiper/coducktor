@@ -4952,7 +4952,9 @@ mod tests {
             &[project],
         )
         .unwrap();
-        assert_eq!(root, directory.path());
+        // resolve_scope_root canonicalizes, so the expectation must too — on macOS a temp
+        // directory under /var/folders canonicalizes to /private/var/folders.
+        assert_eq!(root, directory.path().canonicalize().unwrap());
     }
 
     #[tokio::test]

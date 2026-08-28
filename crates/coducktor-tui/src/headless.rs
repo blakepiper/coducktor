@@ -112,10 +112,6 @@ async fn run_command_with_engine(engine: &InProcessEngine, options: RunCommandOp
         eprintln!("usage: coducktor run [OPTIONS] \"<message>\"");
         return 1;
     }
-    if git_mode == ConversationGitMode::Auto && !worktree {
-        eprintln!("automatic Git mode requires --worktree true");
-        return 1;
-    }
 
     let scope = Scope::Workspace;
     let input = CreateConversationInput {

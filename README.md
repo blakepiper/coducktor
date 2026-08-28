@@ -114,8 +114,9 @@ Managed worktrees are the recommended default for Git repositories and let conve
 without sharing a checkout. In-place chats are serialized per repository root and cannot silently
 switch the branch you have checked out.
 
-Manual Git mode never commits or pushes at turn end. Auto mode requires a managed worktree and,
-after a successful turn, uses deterministic local Git commands to commit and push changed work.
+Manual Git mode never commits or pushes at turn end. Auto mode works with or without a managed
+worktree: after a successful turn, deterministic local Git commands commit and push changed work in
+the conversation's worktree, or in the repository's current checkout when the chat runs in place.
 It never asks a model to review changes or write a commit message. A failed or cancelled turn
 leaves changes available for manual inspection.
 

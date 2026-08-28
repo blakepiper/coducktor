@@ -1591,8 +1591,7 @@ fn apply_conversation_action(
             };
             if next == coducktor_contract::ConversationGitMode::Auto && !record.worktree {
                 app.notice =
-                    Some("git auto needs a managed worktree — this chat runs in place".to_owned());
-                return;
+                    Some("git auto will commit and push this checkout's current branch".to_owned());
             }
             app.pending.push(PendingAction::SetConversationGitMode {
                 project,
@@ -3163,7 +3162,7 @@ mod tests {
     }
 
     #[test]
-    fn git_auto_is_refused_for_an_in_place_conversation() {
+    fn git_auto_is_allowed_for_an_in_place_conversation() {
         let mut app = app_with_conversation(coducktor_contract::ConversationState::Idle);
         let mut record = conversation(coducktor_contract::ConversationState::Idle);
         record.worktree = false;
@@ -3173,12 +3172,19 @@ mod tests {
 
         apply_action(&mut app, ThreadAction::ToggleGitMode);
 
-        assert!(app.pending.is_empty());
+        let Some(PendingAction::SetConversationGitMode { git_mode, .. }) = app.pending.first()
+        else {
+            panic!(
+                "an in-place chat can still opt into automatic Git: {:?}",
+                app.pending
+            );
+        };
+        assert_eq!(*git_mode, coducktor_contract::ConversationGitMode::Auto);
         assert!(
             app.notice
                 .as_deref()
-                .is_some_and(|n| n.contains("worktree")),
-            "auto commits need a managed checkout"
+                .is_some_and(|n| n.contains("checkout")),
+            "the user is told the commit will land in the current checkout"
         );
     }
 

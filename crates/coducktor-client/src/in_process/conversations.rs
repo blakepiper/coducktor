@@ -163,21 +163,25 @@ impl ConversationDispatch {
         self.pump();
     }
 
-    /// Automatic Git runs only for a managed worktree, only after a turn that ended normally, and
-    /// never through a model: the commit subject is derived locally from the user's own message.
-    /// A Git failure is reported as turn activity and leaves the conversation idle.
+    /// Automatic Git runs after a turn that ended normally and never through a model: the commit
+    /// subject is derived locally from the user's own message. It operates in the managed worktree
+    /// when one exists, otherwise in the repository checkout itself. A Git failure is reported as
+    /// turn activity and leaves the conversation idle.
     fn apply_git_policy(&self, record: &ConversationRecord) {
         if record.git_mode != ConversationGitMode::Auto || record.state != ConversationState::Idle {
             return;
         }
-        let (Some(worktree), Some(turn)) = (record.worktree_path.as_deref(), record.latest_turn.as_ref())
-        else {
+        let Some(turn) = record.latest_turn.as_ref() else {
             return;
         };
         if turn.state != TurnState::Ended {
             return;
         }
-        let worktree = PathBuf::from(worktree);
+        let worktree = record
+            .worktree_path
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&record.repository_root));
         let turn_id = turn.id.clone();
         let message = self.turn_message(&record.id, &turn_id, record);
         for event in auto_git_after_turn(&worktree, &message) {
@@ -424,11 +428,6 @@ impl InProcessEngine {
         let base_branch = input.base_branch.clone().or_else(|| {
             coducktor_core::git::worktree::resolve_base_ref(&entry.root, "HEAD")
         });
-        if input.git_mode == ConversationGitMode::Auto && !input.worktree {
-            return Err(EngineError::Conflict {
-                reason: "automatic Git mode requires a managed worktree".to_owned(),
-            });
-        }
         let created = {
             let mut manager = entry.manager.lock();
             manager

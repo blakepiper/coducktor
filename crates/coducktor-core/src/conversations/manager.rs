@@ -210,12 +210,6 @@ impl ConversationManager {
                 "a conversation requires text or an image",
             ));
         }
-        if input.git_mode == ConversationGitMode::Auto && !input.worktree {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "automatic Git mode requires a managed worktree",
-            ));
-        }
 
         let conversation_id = new_id("chat");
         let turn_id = new_id("turn");
@@ -660,20 +654,13 @@ impl ConversationManager {
         self.commit_record(previous, next)
     }
 
-    /// Change the idle Git policy. Automatic mode is only truthful for a managed worktree, so the
-    /// same rule that guards creation guards the update.
+    /// Change the idle Git policy.
     pub fn set_git_mode(
         &mut self,
         conversation_id: &str,
         git_mode: ConversationGitMode,
     ) -> io::Result<ConversationRecord> {
         self.mutate_idle(conversation_id, "have its Git mode changed", |record| {
-            if git_mode == ConversationGitMode::Auto && !record.worktree {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "automatic Git mode requires a managed worktree",
-                ));
-            }
             record.git_mode = git_mode;
             Ok(())
         })
@@ -2082,26 +2069,30 @@ mod tests {
     }
 
     #[test]
-    fn automatic_git_mode_still_requires_a_managed_worktree_after_creation() {
+    fn automatic_git_mode_is_allowed_without_a_managed_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let factory = FakeFactory::new(vec![ended(true)], Vec::new());
         let mut manager = ConversationManager::open(dir.path());
         let mut input = new_conversation("first");
         input.worktree = false;
         input.worktree_path = None;
+        input.git_mode = ConversationGitMode::Auto;
         let created = manager.create(input).unwrap();
         drive_next(&mut manager, &factory);
 
         assert_eq!(
             manager
-                .set_git_mode(&created.id, ConversationGitMode::Auto)
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::InvalidInput
+                .set_git_mode(&created.id, ConversationGitMode::Manual)
+                .unwrap()
+                .git_mode,
+            ConversationGitMode::Manual
         );
         assert_eq!(
-            manager.get(&created.id).unwrap().git_mode,
-            ConversationGitMode::Manual
+            manager
+                .set_git_mode(&created.id, ConversationGitMode::Auto)
+                .unwrap()
+                .git_mode,
+            ConversationGitMode::Auto
         );
     }
 

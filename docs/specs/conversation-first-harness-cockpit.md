@@ -215,8 +215,9 @@ shown in the header and can be toggled while idle.
 - Worktree mode defaults on for Git projects and remains the recommended concurrent mode.
 - In-place conversations retain the existing repository-root serialization rule so two harnesses
   cannot concurrently mutate the same checkout.
-- Git auto requires a managed worktree. Selecting Git auto enables worktree mode; turning
-  worktree mode off changes Git mode to manual with an explicit explanation.
+- Worktree and Git mode are independent. Git auto commits and pushes the conversation's current
+  branch — in its managed worktree, or in the repository's current checkout when worktree mode is
+  off.
 - An unarchived conversation's managed worktree is not retention-eligible. An archived clean
   conversation may have its worktree reclaimed while its transcript and managed branch remain.
   Unarchiving must reattach or recreate that worktree from the recorded branch before enabling the
@@ -852,7 +853,8 @@ For Claude, Codex, OpenCode, and pi:
 ### 14.5 Git
 
 - Manual mode performs no Coducktor commit or push.
-- Auto mode requires a managed worktree.
+- Auto mode works with or without a managed worktree: it commits in the worktree when present,
+  otherwise in the repository's current checkout.
 - Ended turn commits once with deterministic bounded subject and pushes once.
 - Existing agent commit is not duplicated and is pushed when needed.
 - Failed/cancelled turn is not auto-committed or pushed.

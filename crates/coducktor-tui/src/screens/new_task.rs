@@ -1982,9 +1982,11 @@ mod tests {
         pick_index(&mut app, 0);
 
         let effective = effective_values(&app.new_task_ui.draft, &app.new_task_ui.data);
-        assert!(effective.worktree_on);
+        // The two settings are independent: automatic Git never forces a worktree on, and it
+        // commits into the current checkout when the task runs in place.
+        assert!(!effective.worktree_on);
         assert!(effective.git_auto_on);
-        assert_eq!(app.new_task_ui.draft.worktree, Some(true));
+        assert_eq!(app.new_task_ui.draft.worktree, Some(false));
         assert_eq!(app.new_task_ui.draft.git_auto, Some(true));
     }
 

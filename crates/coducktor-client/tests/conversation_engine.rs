@@ -439,7 +439,7 @@ async fn automatic_git_commits_and_pushes_without_another_provider_turn() {
     let worktree = created
         .worktree_path
         .clone()
-        .expect("automatic Git mode requires a managed worktree");
+        .expect("the conversation was placed in a managed worktree");
     engine.activate_conversations(&Scope::Workspace).unwrap();
     let state = wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
 
@@ -493,6 +493,61 @@ async fn automatic_git_commits_and_pushes_without_another_provider_turn() {
         ConversationState::Idle
     );
     assert_eq!(counts.turns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn automatic_git_commits_in_place_when_no_worktree_is_requested() {
+    let workspace = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    init_repo(repo.path());
+    let factory = ScriptedFactory::new().writing("agent.txt");
+    let engine = engine(&repo, &workspace, factory);
+
+    let created = engine
+        .create_conversation(
+            &Scope::Workspace,
+            create_input("Fix the login redirect", false, ConversationGitMode::Auto),
+        )
+        .await
+        .unwrap()
+        .conversation;
+    assert!(created.worktree_path.is_none());
+    engine.activate_conversations(&Scope::Workspace).unwrap();
+    wait_for_idle(&engine, &Scope::Workspace, &created.id).await;
+
+    let kinds = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let history = engine
+                .conversation_history(&Scope::Workspace, &created.id, None)
+                .await
+                .unwrap();
+            let kinds = history
+                .events
+                .iter()
+                .map(|event| event.event_type.clone())
+                .collect::<Vec<_>>();
+            if kinds.iter().any(|kind| kind == "git.failed") {
+                return kinds;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("automatic Git activity should be recorded");
+    assert!(
+        kinds.iter().any(|kind| kind == "git.committed"),
+        "{kinds:?}"
+    );
+
+    // The commit lands in the repository checkout itself, not a managed worktree.
+    assert_eq!(
+        git(repo.path(), &["log", "-1", "--pretty=format:%s"]),
+        "coducktor: Fix the login redirect"
+    );
+    assert!(
+        git(repo.path(), &["status", "--porcelain"]).is_empty(),
+        "the checkout should be clean after an automatic commit"
+    );
 }
 
 #[tokio::test]

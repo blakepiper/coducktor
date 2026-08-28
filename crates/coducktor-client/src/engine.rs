@@ -289,7 +289,8 @@ pub trait Engine: Send + Sync {
         conversation_id: &str,
         cursor: Option<&str>,
     ) -> Result<RunHistoryPage, EngineError>;
-    /// Change the idle Git policy. Automatic mode requires a managed worktree.
+    /// Change the idle Git policy. Automatic mode commits and pushes the conversation's
+    /// current branch — in its managed worktree, or in the checkout itself when none exists.
     async fn update_conversation_git_mode(
         &self,
         scope: &Scope,

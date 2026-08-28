@@ -28,8 +28,10 @@ Harness is always a concrete Claude, Codex, OpenCode, or pi selection. Model and
 offer Default when catalog discovery is absent. Skills attach additively to the current message.
 
 Harness, model, reasoning, base branch, and working directory become immutable when the chat
-starts. Git auto requires a managed worktree. Without Git, branch/worktree controls are disabled;
-with worktree off, the harness uses the repository's current checkout without switching it.
+starts. Worktree and Git mode are independent: Git auto commits in the managed worktree or, with
+worktree off, in the repository's current checkout. Without Git, branch/worktree controls are
+disabled; with worktree off, the harness uses the repository's current checkout without switching
+it.
 
 ## Conversation timeline
 

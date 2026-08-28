@@ -55,7 +55,7 @@ pub enum Command {
         /// Create a managed worktree (pass `false` to run in place).
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         worktree: bool,
-        /// Post-turn Git policy. `auto` requires a managed worktree.
+        /// Post-turn Git policy. `auto` commits and pushes the conversation's current branch.
         #[arg(long, value_enum, default_value_t = GitModeArg::Manual)]
         git_mode: GitModeArg,
     },
