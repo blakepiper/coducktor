@@ -1059,7 +1059,7 @@ pub fn open_row_menu(app: &mut App) {
             .find(|entry| entry.project_id == project && entry.id == id)
             .cloned()
     }) {
-        open_conversation_row_menu(app, &entry);
+        crate::screens::tasks::open_conversation_row_menu(app, &entry);
         return;
     }
     let Some(index) = &app.global_index else {
@@ -1114,74 +1114,6 @@ pub fn open_row_menu(app: &mut App) {
         project: entry.project_id.clone(),
         run_id: entry.id.clone(),
         title: run_title_entry(&entry),
-        items,
-        selected: 0,
-    });
-}
-
-fn open_conversation_row_menu(app: &mut App, entry: &coducktor_contract::ConversationIndexEntry) {
-    use crate::screens::chats_util;
-
-    let mut items = vec![
-        RowMenuItem {
-            label: "Open chat".to_owned(),
-            action: crate::app::MenuAction::Open,
-        },
-        RowMenuItem {
-            label: if entry.archived {
-                "Restore to active".to_owned()
-            } else {
-                "Archive".to_owned()
-            },
-            action: if entry.archived {
-                crate::app::MenuAction::Restore
-            } else {
-                crate::app::MenuAction::Archive
-            },
-        },
-    ];
-    if chats_util::can_be_unread(entry) || entry.seen_at.is_some() {
-        let unread = chats_util::is_unread(entry);
-        items.push(RowMenuItem {
-            label: if unread {
-                "Mark read".to_owned()
-            } else {
-                "Mark unread".to_owned()
-            },
-            action: if unread {
-                crate::app::MenuAction::MarkRead
-            } else {
-                crate::app::MenuAction::MarkUnread
-            },
-        });
-    }
-    if entry
-        .pull_request_url
-        .as_deref()
-        .or(entry.referenced_pull_request_url.as_deref())
-        .is_some()
-    {
-        items.push(RowMenuItem {
-            label: "Open PR/issue".to_owned(),
-            action: crate::app::MenuAction::OpenPr,
-        });
-    }
-    if !entry.branch.as_deref().is_none_or(str::is_empty) {
-        items.push(RowMenuItem {
-            label: "Copy branch".to_owned(),
-            action: crate::app::MenuAction::CopyBranch,
-        });
-    }
-    if chats_util::can_delete(entry) {
-        items.push(RowMenuItem {
-            label: "Delete".to_owned(),
-            action: crate::app::MenuAction::Delete,
-        });
-    }
-    app.row_menu = Some(RowMenu {
-        project: entry.project_id.clone(),
-        run_id: entry.id.clone(),
-        title: entry.title.clone(),
         items,
         selected: 0,
     });

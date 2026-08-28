@@ -695,7 +695,10 @@ pub fn open_row_menu(app: &mut App) {
 }
 
 /// The chat row menu. Delete is offered only for a settled chat (section 5.4).
-fn open_conversation_row_menu(app: &mut App, entry: &coducktor_contract::ConversationIndexEntry) {
+pub(crate) fn open_conversation_row_menu(
+    app: &mut App,
+    entry: &coducktor_contract::ConversationIndexEntry,
+) {
     use crate::screens::chats_util;
 
     let mut items = vec![
@@ -754,9 +757,8 @@ fn open_conversation_row_menu(app: &mut App, entry: &coducktor_contract::Convers
             action: crate::app::MenuAction::Delete,
         });
     }
-    let project = app.current_project().to_owned();
     app.row_menu = Some(RowMenu {
-        project,
+        project: entry.project_id.clone(),
         run_id: entry.id.clone(),
         title: entry.title.clone(),
         items,
