@@ -2748,6 +2748,9 @@ impl App {
         if matches!(self.route(), Route::Terminal { .. })
             && crate::screens::terminal::handle_mouse(self, &mouse)
         {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.set_focus_location(FocusLocation::Screen(0));
+            }
             return;
         }
         match mouse.kind {
@@ -4655,6 +4658,40 @@ mod tests {
             crate::screens::scratchpad::ScratchpadMode::Insert
         );
         assert_eq!(app.scratchpad_ui.editor.text, "xnote");
+    }
+
+    #[test]
+    fn terminal_body_click_moves_focus_from_sidebar_and_sends_the_next_key_to_the_shell() {
+        let mut app = App::new("main", Theme::detect(), Keymap::default());
+        app.boot_root = Some(PathBuf::from("/tmp"));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(matches!(app.route(), Route::Terminal { .. }));
+        assert!(app.sidebar_focus);
+        assert!(crate::screens::terminal::maintain(&mut app));
+        terminal.draw(|frame| app.render(frame)).unwrap();
+
+        let area = app.terminal_ui.last_area.unwrap();
+        app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+
+        assert!(!app.sidebar_focus);
+        assert!(!app.should_quit());
     }
 
     #[test]

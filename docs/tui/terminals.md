@@ -91,6 +91,16 @@ From Normal mode, `v` entered `VISUAL`, and `Esc` returned to Normal again. This
 shipped terminal's mode transitions; caret placement, drag selection, and wheel behavior remain
 covered by the focused mouse tests because this PTY driver does not emit physical pointer input.
 
+## Embedded terminal click-to-type smoke test (2026-08-28)
+
+The locally rebuilt `target/debug/coducktor` was exercised in a real 80×24 PTY with a disposable
+`DUCK_HOME` and the repository registered as a project. With the embedded shell live, `Ctrl-W h`
+moved focus to the sidebar. A left-click event inside the terminal grid immediately changed the
+status line from `NORMAL · SIDEBAR` to `INSERT · CONTENT`; typing and submitting
+`printf '__TERMINAL_CLICK_OK__\n'` without another focus command rendered
+`__TERMINAL_CLICK_OK__` in the embedded shell. This verifies that a terminal click transfers
+keyboard input while retaining the grid's click-drag selection path.
+
 ## Reproduction shape
 
 The real sessions followed this sequence:
