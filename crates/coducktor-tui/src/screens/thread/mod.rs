@@ -1147,9 +1147,8 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         );
     }
 
-    const THROBBER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
     let active = matches!(record.status, RunStatus::Queued | RunStatus::Running);
-    let throbber = THROBBER[(app.animation_tick as usize / 3) % THROBBER.len()];
+    let throbber = crate::widgets::spinner::frame(app.animation_tick);
     let status = if app.thread_ui.cancel_pending {
         format!("{throbber} Stopping…")
     } else if active {
@@ -1654,8 +1653,7 @@ fn render_conversation(
         app.thread_ui.header_action_focus,
     );
 
-    const THROBBER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-    let throbber = THROBBER[(app.animation_tick as usize / 3) % THROBBER.len()];
+    let throbber = crate::widgets::spinner::frame(app.animation_tick);
     let status = if app.thread_ui.cancel_pending {
         format!("{throbber} Stopping…")
     } else if record.state == ConversationState::Running {
@@ -1720,10 +1718,22 @@ fn render_conversation(
         );
     }
 
-    let hint = followup_blocked_reason(app)
+    // While the harness owns the turn the hint spins, so "the harness is working" reads as
+    // live activity rather than static text.
+    let mut hint = followup_blocked_reason(app)
         .or_else(|| session_restart_hint(app))
-        .unwrap_or("Enter · send");
-    widgets::render_status_hint(frame, dock_rows[1], hint, &theme);
+        .unwrap_or("Enter · send")
+        .to_owned();
+    if matches!(
+        app.thread_ui.data.conversation_state(),
+        Some(ConversationState::Queued | ConversationState::Running)
+    ) {
+        hint = format!(
+            "{} {hint}",
+            crate::widgets::spinner::frame(app.animation_tick)
+        );
+    }
+    widgets::render_status_hint(frame, dock_rows[1], &hint, &theme);
 
     app.thread_ui
         .composer

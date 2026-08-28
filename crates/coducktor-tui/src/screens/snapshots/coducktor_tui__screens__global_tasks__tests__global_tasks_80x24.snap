@@ -1,5 +1,6 @@
 ---
 source: crates/coducktor-tui/src/screens/global_tasks.rs
+assertion_line: 1269
 expression: terminal.backend().buffer()
 ---
 Buffer {
@@ -17,7 +18,7 @@ Buffer {
         "│└────────────────────────────────────────────────────────────────────────────┘│",
         "│ WORKING                                                                      │",
         "│┌────────────────────────────────────────────────────────────────────────────┐│",
-        "││  ● running  Global task 1  shop  153d                                      ││",
+        "││  ⠋ running  Global task 1  shop  153d                                      ││",
         "││  Implement global task 1 exactly — café 🦆 — and preserve project-scoped   ││", // hidden by multi-width symbols: [(44, " ")]
         "││  behavior across long wrapped prompts.                                     ││",
         "││  quick-task                                                                ││",
@@ -80,6 +81,8 @@ Buffer {
         x: 79, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 12, fg: Rgb(65, 72, 104), bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 12, fg: Rgb(192, 202, 245), bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 12, fg: Rgb(190, 130, 245), bg: Reset, underline: Reset, modifier: BOLD,
+        x: 5, y: 12, fg: Rgb(192, 202, 245), bg: Reset, underline: Reset, modifier: NONE,
         x: 28, y: 12, fg: Rgb(122, 162, 247), bg: Reset, underline: Reset, modifier: NONE,
         x: 34, y: 12, fg: Rgb(130, 139, 184), bg: Reset, underline: Reset, modifier: NONE,
         x: 40, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

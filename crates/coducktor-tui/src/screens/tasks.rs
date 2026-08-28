@@ -145,6 +145,7 @@ fn build_conversation_cards(
                     chats_util::ChatGroup::Archived => CardGroup::Archived,
                 },
                 glyph: conversation_glyph(entry.state),
+                animated: entry.state == coducktor_contract::ConversationState::Running,
                 status: attention.label,
                 title: entry.title.clone(),
                 prompt: entry.prompt_preview.clone(),
@@ -242,6 +243,7 @@ fn build_cards(runs: &[ApiRun], view: TaskView, query: &str, now: i64) -> Vec<Ta
                 key: record.id.clone(),
                 group: card_group(run, view),
                 glyph: status_glyph(record.status),
+                animated: record.status == RunStatus::Running,
                 status: status_label(record.status),
                 title: run_title(run),
                 prompt: record.task.clone(),
@@ -487,6 +489,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             "No chats match your search."
         },
         &theme,
+        app.animation_tick,
         Some(CardHeaderAction {
             label: "+ New chat",
             focused: app.tasks_ui.new_task_focused,
