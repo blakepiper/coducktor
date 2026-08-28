@@ -24,11 +24,8 @@ use crate::markdown::RenderCache;
 use crate::screens::thread::ThreadAction;
 use crate::theme::Theme;
 use crate::widgets::run_end::{self, RunOutcome};
+use crate::widgets::tool_card::{self, ToolTier};
 
-/// Finished tool output beyond this many lines clamps with a "+N more" note (mirrors
-/// The output clamp limit; the separate "Show all" toggle is
-/// left for the thread screen, which owns interactive interior state.
-const OUTPUT_CLAMP_LINES: u16 = 12;
 /// Every image item reserves at most this many rows, regardless of its own aspect
 /// ratio, so transcript height math never depends on what the image protocol decides
 /// to do at render time.
@@ -109,6 +106,10 @@ impl TranscriptItem {
                 bits = bits
                     .wrapping_mul(31)
                     .wrapping_add(u64::from(item.is_latest));
+                bits = bits
+                    .wrapping_mul(31)
+                    .wrapping_add(u64::from(item.duration_ms.is_some()));
+                bits = bits.wrapping_mul(31).wrapping_add(item.input_len as u64);
                 bits
             }
             Self::Note(item) => item.text.len() as u64,
@@ -192,7 +193,7 @@ impl TranscriptItem {
         match self {
             Self::Message(item) => paint_message(item, buf, content, ctx),
             Self::Reasoning(item) => paint_reasoning(item, buf, content, ctx),
-            Self::Tool(item) => paint_tool_card(item, buf, content, ctx),
+            Self::Tool(item) => tool_card::paint(item, buf, content, ctx, ToolTier::Full),
             Self::Note(item) => paint_note(item, buf, content, ctx),
             Self::Image(item) => paint_image(item, buf, content, ctx),
             Self::RunEnd(_) => {}
@@ -241,12 +242,20 @@ impl ReasoningItem {
 pub struct ToolItem {
     pub id: String,
     pub tool_kind: ToolKind,
+    pub name: String,
     pub title: String,
     pub subtitle: Option<String>,
     pub status: ToolStatus,
     pub output: Option<String>,
     pub error: Option<String>,
     pub exit_code: Option<i64>,
+    /// Finished wall time in milliseconds.
+    pub duration_ms: Option<u64>,
+    /// Epoch seconds when the call started; excluded from the height-cache revision.
+    pub started_epoch: Option<i64>,
+    /// Raw tool arguments retained for semantic body renderers.
+    pub input: Option<Value>,
+    input_len: usize,
     /// `None` follows the default-open policy (`tool_default_open`); `Some` is the
     /// user's explicit toggle, which always wins once they touch the card.
     pub user_expanded: Option<bool>,
@@ -264,6 +273,7 @@ impl ToolItem {
     ) -> Self {
         let display = tool_display(name, input);
         Self {
+            name: name.to_owned(),
             id: id.into(),
             tool_kind: display.tool_kind,
             title: display.title,
@@ -272,6 +282,10 @@ impl ToolItem {
             output: None,
             error: None,
             exit_code: None,
+            duration_ms: None,
+            started_epoch: None,
+            input: input.cloned(),
+            input_len: input.map_or(0, |value| value.to_string().len()),
             user_expanded: None,
             is_latest: false,
         }
@@ -282,7 +296,7 @@ impl ToolItem {
             || self.error.as_deref().is_some_and(|text| !text.is_empty())
     }
 
-    fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.has_detail()
             && self
                 .user_expanded
@@ -371,21 +385,7 @@ impl ImageItem {
 }
 
 fn tool_card_height(item: &ToolItem, width: u16) -> u16 {
-    let mut height = 1; // the collapsed header row is always shown
-    if item.open() {
-        if let Some(error) = item.error.as_deref().filter(|text| !text.is_empty()) {
-            height += wrapped_line_count(error, width).max(1);
-        }
-        if let Some(output) = item.output.as_deref().filter(|text| !text.is_empty()) {
-            let lines = output.lines().count().max(1) as u16;
-            let shown = lines.min(OUTPUT_CLAMP_LINES);
-            height += shown;
-            if lines > OUTPUT_CLAMP_LINES {
-                height += 1; // the "+N more lines" note
-            }
-        }
-    }
-    height
+    tool_card::card_height(item, width, ToolTier::Full)
 }
 
 fn image_height(item: &ImageItem, width: u16) -> u16 {
@@ -455,118 +455,6 @@ fn paint_note(item: &NoteItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) 
         .style(Style::default().fg(color))
         .wrap(Wrap { trim: false })
         .render(area, buf);
-}
-
-fn paint_tool_card(item: &ToolItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
-    let theme = ctx.theme;
-    let open = item.open();
-    let (verb, argument) = item.title.split_once(' ').unwrap_or((&item.title, ""));
-    let verb_color = match item.tool_kind {
-        ToolKind::Read | ToolKind::Fetch => theme.palette.accent,
-        ToolKind::Edit | ToolKind::Move => theme.palette.add,
-        ToolKind::Delete => theme.palette.del,
-        ToolKind::Search | ToolKind::Think => theme.palette.review,
-        ToolKind::Execute => theme.palette.running,
-        ToolKind::Task | ToolKind::Plan => theme.palette.waiting,
-        ToolKind::Other => theme.palette.soft_fg,
-    };
-    let mut header = vec![Span::styled(
-        verb.to_owned(),
-        Style::default().fg(verb_color),
-    )];
-    if !argument.is_empty() {
-        header.push(Span::styled(
-            format!(" {argument}"),
-            Style::default().fg(theme.palette.fg),
-        ));
-    }
-    if let Some(subtitle) = item.subtitle.as_deref().filter(|text| !text.is_empty()) {
-        header.push(Span::raw(" "));
-        header.push(Span::styled(
-            subtitle.to_owned(),
-            Style::default().fg(theme.palette.soft_fg),
-        ));
-    }
-    match item.status {
-        ToolStatus::Running | ToolStatus::Pending => {
-            header.push(Span::styled(
-                " running",
-                Style::default().fg(theme.palette.running),
-            ));
-        }
-        ToolStatus::Failed => {
-            header.push(Span::styled(
-                " failed",
-                Style::default().fg(theme.palette.failed),
-            ));
-        }
-        ToolStatus::Declined => {
-            header.push(Span::styled(
-                " declined",
-                Style::default().fg(theme.palette.soft_fg),
-            ));
-        }
-        ToolStatus::Completed => {}
-    }
-    if item.tool_kind == ToolKind::Execute
-        && let Some(exit_code) = item.exit_code
-    {
-        let color = if exit_code == 0 {
-            theme.palette.done
-        } else {
-            theme.palette.failed
-        };
-        header.push(Span::styled(
-            format!(" [{exit_code}]"),
-            Style::default().fg(color),
-        ));
-    }
-    let header_area = Rect::new(area.x, area.y, area.width, 1.min(area.height));
-    Line::from(header).render(header_area, buf);
-
-    if !open || area.height <= 1 {
-        return;
-    }
-    let mut y = area.y + 1;
-    let bottom = area.y + area.height;
-    let body_width = area.width;
-    if let Some(error) = item.error.as_deref().filter(|text| !text.is_empty())
-        && y < bottom
-    {
-        let error_lines = wrapped_line_count(error, body_width).max(1).min(bottom - y);
-        let rect = Rect::new(area.x, y, body_width, error_lines);
-        Paragraph::new(error.to_owned())
-            .style(Style::default().fg(theme.palette.failed))
-            .wrap(Wrap { trim: false })
-            .render(rect, buf);
-        y += error_lines;
-    }
-    if let Some(output) = item.output.as_deref().filter(|text| !text.is_empty())
-        && y < bottom
-    {
-        let total_lines = output.lines().count().max(1) as u16;
-        let shown = total_lines.min(OUTPUT_CLAMP_LINES).min(bottom - y);
-        let rect = Rect::new(area.x, y, body_width, shown);
-        let clamped: String = output
-            .lines()
-            .take(shown as usize)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Paragraph::new(clamped)
-            .style(Style::default().fg(theme.palette.soft_fg))
-            .render(rect, buf);
-        y += shown;
-        if total_lines > OUTPUT_CLAMP_LINES && y < bottom {
-            let more = total_lines - OUTPUT_CLAMP_LINES;
-            Line::from(Span::styled(
-                format!("+{more} more lines"),
-                Style::default()
-                    .fg(theme.palette.soft_fg)
-                    .add_modifier(Modifier::DIM),
-            ))
-            .render(Rect::new(area.x, y, body_width, 1), buf);
-        }
-    }
 }
 
 fn paint_image(item: &mut ImageItem, buf: &mut Buffer, area: Rect, ctx: FrameCtx<'_>) {
@@ -1259,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_verb_uses_kind_color_without_bold_and_argument_uses_foreground() {
+    fn tool_title_uses_kind_color_and_bold_argument_uses_foreground() {
         let mut transcript = Transcript::new();
         transcript.push(TranscriptItem::Tool(ToolItem::new(
             "t1",
@@ -1267,15 +1155,16 @@ mod tests {
             Some(&serde_json::json!({"path": "a.rs"})),
             ToolStatus::Completed,
         )));
-        let area = Rect::new(0, 0, 40, 3);
+        let area = Rect::new(0, 0, 40, 8);
         let mut buf = Buffer::empty(area);
         transcript.render(&mut buf, area, frame_ctx());
 
-        let verb = buf.cell((2, 0)).expect("tool verb painted");
+        let verb = buf.cell((9, 0)).expect("tool verb painted");
         assert_eq!(verb.fg, theme().palette.add);
-        assert!(!verb.modifier.contains(Modifier::BOLD));
-        let argument = buf.cell((7, 0)).expect("tool argument painted");
+        assert!(verb.modifier.contains(Modifier::BOLD));
+        let argument = buf.cell((14, 0)).expect("tool argument painted");
         assert_eq!(argument.fg, theme().palette.fg);
+        assert!(argument.modifier.contains(Modifier::BOLD));
     }
 
     #[test]

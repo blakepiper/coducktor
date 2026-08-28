@@ -883,11 +883,13 @@ fn reuse_tool(
     tool: &coducktor_protocol::UiToolItem,
 ) -> TranscriptItem {
     let id = tool.id.clone();
-    let candidate = ToolItem::new(id.clone(), &tool.name, tool.input.as_ref(), tool.status);
+    let display = coducktor_protocol::tool_display(&tool.name, tool.input.as_ref());
     if let Some(TranscriptItem::Tool(item)) = existing.remove(&id)
-        && item.tool_kind == candidate.tool_kind
-        && item.title == candidate.title
-        && item.subtitle == candidate.subtitle
+        && item.tool_kind == display.tool_kind
+        && item.title == display.title
+        && item.subtitle == display.subtitle
+        && item.name == tool.name
+        && item.input.as_ref() == tool.input.as_ref()
         && item.status == tool.status
         && item.output.as_deref() == tool.output.as_deref()
         && item.error.as_deref() == tool.error.as_deref()
@@ -895,7 +897,7 @@ fn reuse_tool(
     {
         return TranscriptItem::Tool(item);
     }
-    let mut candidate = candidate;
+    let mut candidate = ToolItem::new(id, &tool.name, tool.input.as_ref(), tool.status);
     candidate.output = tool.output.clone();
     candidate.error = tool.error.clone();
     candidate.exit_code = tool.exit_code.map(|value| value as i64);

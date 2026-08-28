@@ -168,10 +168,14 @@ impl<'a> Card<'a> {
         }
         let area = Rect { height: 1, ..area };
         self.fill(buf, area, theme);
-        let mut spans = vec![Span::styled(
-            format!("{icon} "),
-            Style::default().fg(self.state.border(theme)),
-        )];
+        let mut spans = if icon.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(
+                format!("{icon} "),
+                Style::default().fg(self.state.border(theme)),
+            )]
+        };
         spans.extend(self.header.iter().cloned());
         append_meta(&mut spans, &self.meta, theme, glyphs(), area.width, 2);
         paint_line(buf, area, Line::from(spans));

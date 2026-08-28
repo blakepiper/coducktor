@@ -25,6 +25,8 @@ pub struct Glyphs {
     pub expanded: &'static str,
     pub collapsed: &'static str,
     pub separator: &'static str,
+    pub bracket_left: &'static str,
+    pub bracket_right: &'static str,
 }
 
 const UNICODE: Glyphs = Glyphs {
@@ -45,6 +47,8 @@ const UNICODE: Glyphs = Glyphs {
     expanded: "▾",
     collapsed: "▸",
     separator: " · ",
+    bracket_left: "⟦",
+    bracket_right: "⟧",
 };
 
 const ASCII: Glyphs = Glyphs {
@@ -65,6 +69,8 @@ const ASCII: Glyphs = Glyphs {
     expanded: "v",
     collapsed: ">",
     separator: " - ",
+    bracket_left: "[",
+    bracket_right: "]",
 };
 
 static UNICODE_SUPPORTED: LazyLock<bool> = LazyLock::new(|| {
@@ -151,6 +157,8 @@ mod tests {
                 set.pending,
                 set.expanded,
                 set.collapsed,
+                set.bracket_left,
+                set.bracket_right,
             ] {
                 assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
             }
